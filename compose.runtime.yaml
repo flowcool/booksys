@@ -8,6 +8,12 @@ services:
     cpus: 2
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8191/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
   pyload:
     image: lscr.io/linuxserver/pyload-ng@sha256:222f1486954e052f61d3361ab2ad5e97e17f698d65c3a199e4689a3268a68a64
     restart: unless-stopped
