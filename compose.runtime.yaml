@@ -22,6 +22,12 @@ services:
       - /data/booksys/downloads:/downloads
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
   worker:
     build: .
     image: booksys-worker:local
@@ -41,8 +47,12 @@ services:
       - /data/booksys/state:/state
       - /data/booksys/secrets:/secrets:ro
     depends_on:
-      - byparr
-      - pyload
+      byparr:
+        condition: service_healthy
+      pyload:
+        condition: service_healthy
+    healthcheck:
+      disable: true
     security_opt:
       - no-new-privileges:true
     mem_limit: 256m
