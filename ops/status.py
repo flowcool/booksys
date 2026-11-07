@@ -13,14 +13,22 @@ credentials = json.loads((root / "secrets/pyload.json").read_text())
 api = Pyload("http://127.0.0.1:8000", credentials["api_key"])
 monitor = yaml.safe_load((root / "state/monitor.yaml").read_text())
 queue = api.call("get_queue_data")
+backfill_path = root / "state/backfill.yaml"
+backfill = yaml.safe_load(backfill_path.read_text()) if backfill_path.exists() else None
+backfill_summary = None if backfill is None else {
+    "status": backfill["status"], "pages_requested": backfill["pages_requested"],
+    "pages_captured": len(backfill["pages"]), "unique_items": len(backfill["items"]),
+    "submitted": backfill["submitted"],
+}
 result = {
     "server": api.call("status_server"),
     "categories": monitor["categories"],
     "submitted_items": len(monitor["submissions"]),
-    "backfill": yaml.safe_load((root / "state/backfill.yaml").read_text()) if (root / "state/backfill.yaml").exists() else None,
+    "backfill": backfill_summary,
+    "package_count": len(queue),
     "packages": [{"pid": p["pid"], "name": p["name"], "destination": p["dest"],
         "files": [{k: f[k] for k in ["fid", "name", "plugin", "status", "statusmsg", "error", "size"]}
-                  for f in p["links"]]} for p in queue],
+                  for f in p["links"]]} for p in queue[-10:]],
     "downloaded_files": [{"name": str(p.relative_to(root / "downloads")), "bytes": p.stat().st_size}
                          for p in sorted((root / "downloads").rglob("*")) if p.is_file()][:50],
 }
