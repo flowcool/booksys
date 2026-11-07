@@ -9,7 +9,8 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8191/health"]
+      # Upstream /health launches a browser against Google. Readiness only needs HTTP.
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8191/docs"]
       interval: 10s
       timeout: 3s
       retries: 6
