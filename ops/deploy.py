@@ -32,6 +32,9 @@ def main():
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 8001))
     baseline = json.loads((ROOT / "tmp/evidence/baseline.json").read_text())
+    # /data is root-owned. Create only our new directory; do not change its parent.
+    run("sudo", "-n", "install", "-d", "-m", "0700", "-o", str(os.getuid()),
+        "-g", str(os.getgid()), str(DATA))
     for part in ["state", "pyload", "downloads", "secrets"]:
         (DATA / part).mkdir(parents=True, mode=0o700)
     journal = {"version": 1, "categories": {baseline["category"]: {
