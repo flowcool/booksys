@@ -1,0 +1,12 @@
+[project]
+name = "booksys"
+version = "0.1.0"
+description = "Local Bookys category link collector using Byparr"
+requires-python = ">=3.11"
+dependencies = ["beautifulsoup4==4.14.3", "PyYAML==6.0.3"]
+
+[project.optional-dependencies]
+dev = ["mypy==1.19.1", "types-PyYAML", "types-beautifulsoup4"]
+
+[tool.mypy]
+strict = true
