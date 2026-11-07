@@ -1,0 +1,49 @@
+name: booksys
+services:
+  byparr:
+    image: ghcr.io/thephaseless/byparr@sha256:c66fa161187b8fa527bfad7eefa2647ea1c553f77df68cbffd6fe83366d1787b
+    restart: unless-stopped
+    shm_size: 512m
+    mem_limit: 1536m
+    cpus: 2
+    security_opt:
+      - no-new-privileges:true
+  pyload:
+    image: lscr.io/linuxserver/pyload-ng@sha256:222f1486954e052f61d3361ab2ad5e97e17f698d65c3a199e4689a3268a68a64
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Europe/Zurich
+    volumes:
+      - /data/booksys/pyload:/config
+      - /data/booksys/downloads:/downloads
+    security_opt:
+      - no-new-privileges:true
+  worker:
+    build: .
+    image: booksys-worker:local
+    restart: unless-stopped
+    command:
+      - --directory
+      - /state
+      - --byparr
+      - http://byparr:8191/v1
+      - --pyload
+      - http://pyload:8000
+      - --credentials
+      - /secrets/pyload.json
+      - --interval
+      - "900"
+    volumes:
+      - /data/booksys/state:/state
+      - /data/booksys/secrets:/secrets:ro
+    depends_on:
+      - byparr
+      - pyload
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 1

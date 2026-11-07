@@ -99,6 +99,41 @@ class CollectorTests(unittest.TestCase):
                 collect([DEFAULT_CATEGORY], fetch, Path(temporary), {"1fichier"})
         self.assertEqual(calls, [DEFAULT_CATEGORY])
 
+    def test_all_hosters_and_every_host_link_are_kept(self):
+        page = '<h1>Book</h1><table><tr><td><a href="/book/dl/99">NewHost</a></td></tr></table>'
+        outgoing = ('<h1>Download</h1><a class="bys-link bys-host" href="https://files.example/a">Part 1</a>'
+                    '<a class="bys-link bys-host" href="https://files.example/b">Part 2</a>'
+                    '<a href="https://advert.example/">Advertisement</a>')
+        def fetch(url):
+            if url == DEFAULT_CATEGORY:
+                return f'<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="{FIRST}">Book</a></div>'
+            return page if url == FIRST else outgoing
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            collect([DEFAULT_CATEGORY], fetch, directory)
+            self.assertEqual((directory / "all-links.txt").read_text(),
+                             "https://files.example/a\nhttps://files.example/b\n")
+            self.assertTrue((directory / "newhost.txt").exists())
+
+    def test_watermark_excludes_existing_catalogue_without_fetching_details(self):
+        calls = []
+        def fetch(url):
+            calls.append(url)
+            return captured(url)
+        with tempfile.TemporaryDirectory() as temporary:
+            counts = collect([DEFAULT_CATEGORY], fetch, Path(temporary), pages=0, after_id=358548)
+        self.assertEqual(counts["collected"], 0)
+        self.assertEqual(calls, [DEFAULT_CATEGORY])
+
+    def test_missing_pagination_before_watermark_stops_incremental_scan(self):
+        def fetch(url):
+            if url == DEFAULT_CATEGORY:
+                return f'<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="{FIRST}">Book</a></div>'
+            return captured(url)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CollectionError, "before reaching"):
+                collect([DEFAULT_CATEGORY], fetch, Path(temporary), {"1fichier"}, pages=0, after_id=358000)
+
 
 class ByparrTests(unittest.TestCase):
     def test_real_api_contract_and_error_handling(self):
