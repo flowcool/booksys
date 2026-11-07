@@ -10,9 +10,14 @@ Booksys submits collected link sets to pyLoad. The optional AllDebrid integratio
 
 - `/data/booksys/state/state.yaml`: completed items, keyed by source URL.
 - `/data/booksys/state/monitor.yaml`: category watermark and submission journal.
+- `/data/booksys/state/backfill.yaml`: durable ten-page batch manifest and progress.
 - `/data/booksys/state/all-links.txt`: every unique stored outgoing URL.
 - `/data/booksys/state/<hoster>.txt`: separate exports by normalized hoster label.
 - `/data/booksys/downloads/`: downloaded files, under one folder per package.
+
+During the one-time batch, the worker first records exactly ten catalogue pages.
+It then resolves and submits each item separately. A restart reuses saved pages and skips confirmed submissions.
+The novelty monitor resumes after the batch completes.
 
 The worker first creates a package in the pyLoad collector. It reads back every URL.
 It then moves the package into the download queue and confirms the destination.

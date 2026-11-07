@@ -10,13 +10,14 @@ from pipeline import Pyload
 
 root = Path("/data/booksys")
 credentials = json.loads((root / "secrets/pyload.json").read_text())
-api = Pyload("http://127.0.0.1:8001", credentials["api_key"])
+api = Pyload("http://127.0.0.1:8000", credentials["api_key"])
 monitor = yaml.safe_load((root / "state/monitor.yaml").read_text())
 queue = api.call("get_queue_data")
 result = {
     "server": api.call("status_server"),
     "categories": monitor["categories"],
     "submitted_items": len(monitor["submissions"]),
+    "backfill": yaml.safe_load((root / "state/backfill.yaml").read_text()) if (root / "state/backfill.yaml").exists() else None,
     "packages": [{"pid": p["pid"], "name": p["name"], "destination": p["dest"],
         "files": [{k: f[k] for k in ["fid", "name", "plugin", "status", "statusmsg", "error", "size"]}
                   for f in p["links"]]} for p in queue],

@@ -4,7 +4,8 @@
 
 The operator selected new entries in the Bookys **bandes dessinées / new** category.
 Collect all download rows and all outgoing download anchors, including multiple links per row.
-The automatic pipeline excludes entries at or below its saved starting ID.
+The automatic novelty pipeline excludes entries at or below its saved starting ID.
+A separate, operator-authorized batch includes all items from the ten newest catalogue pages.
 This uses numeric IDs and descending catalogue order. It does not filter by a publication timestamp.
 An older entry that is edited or promoted without a new ID is not a new entry for this pipeline.
 
@@ -19,12 +20,13 @@ The initial comparison and the decision to keep pyLoad-ng are in [README](../REA
 | `booksys.py` | Parse catalogues, visit item/intermediate pages, persist items and export URLs | Fetches Bookys pages through Byparr; never fetches hoster files |
 | `pipeline.py` | Initialize and advance the category watermark; submit packages to pyLoad | Downloads begin only after URL readback and queue transfer |
 | `Byparr` service | Run the browser and handle the site challenge | Pinned image in Compose |
-| `pyload` service | Resolve hoster links, queue and download files | Separate config and downloads from Lunii |
+| Shared `booksys-pyload` | Resolve hoster links, queue and download files | One downloader; preserve owned and unowned packages |
 | `worker` service | Run `pipeline.py` in a loop | Sleep 900 seconds after each cycle; this is not a cron schedule |
 | `ops/` | Bootstrap, deploy and inspect the installation | Host commands target booksys-host |
 
 `compose.yaml` provides a standalone browser for bounded manual collection.
-`compose.runtime.yaml` owns the permanent pipeline and its data mounts.
+`compose.runtime.yaml` owns the collector and browser.
+`compose.shared.yaml` owns the existing downloader and connects it to the collector network.
 The worker image reuses the pinned Byparr base. Only the `byparr` service starts its browser API.
 
 ## Collection and watermark
@@ -70,6 +72,7 @@ Do not delete or rename packages involved in an unfinished submission.
 | Git / Compose / pinned images | Code and desired service configuration |
 | `/data/booksys/state/state.yaml` | Completed collection records, keyed by source URL |
 | `/data/booksys/state/monitor.yaml` | Per-category watermark and submission journal |
+| `/data/booksys/state/backfill.yaml` | Ten-page capture and submission progress |
 | pyLoad config and database | Queue, accounts, plugin configuration and download progress |
 | Host filesystem | Downloaded bytes and free space |
 | Beads project `booksys` | Active work and delivery evidence |

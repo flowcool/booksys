@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 from booksys import CollectionError, DEFAULT_CATEGORY
-from pipeline import Pyload, run_once
+from pipeline import Pyload, run_once, run_backfill, save
 
 FIRST = "https://www7.bookys-ebooks.com/bandes-dessinees/10-old"
 NEW = "https://www7.bookys-ebooks.com/bandes-dessinees/11-new"
@@ -31,24 +31,93 @@ class MemoryDownloader(Pyload):
             return [p.copy() for p in self.packages if p["dest"] == dest]
         if method == "add_package":
             self.creates += 1
-            self.packages.append({"pid": 1, "name": parameters["name"], "dest": 0,
+            self.packages.append({"pid": self.creates, "name": parameters["name"], "dest": 0,
                                   "links": [{"url": u} for u in parameters["links"]]})
             if self.lose_response:
                 self.lose_response = False
                 raise OSError("Lost create response")
-            return 1
+            return self.creates
         if method == "get_package_data":
-            result = self.packages[0].copy()
+            result = next(p.copy() for p in self.packages if p["pid"] == parameters["package_id"])
             if self.modify_links:
                 result["links"] = [{"url": "https://wrong.example/file"}]
             return result
         if method == "move_package":
-            self.packages[0]["dest"] = parameters["destination"]
+            next(p for p in self.packages if p["pid"] == parameters["package_id"])["dest"] = parameters["destination"]
             return None
         raise AssertionError(method)
 
 
 class PipelineTests(unittest.TestCase):
+    def test_backfill_recovers_progress_counter_from_confirmed_submission(self):
+        downloader = MemoryDownloader()
+        def fetch(url):
+            self.fail("Confirmed item must not be fetched again")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            save(directory / "monitor.yaml", {"version": 1, "categories": {},
+                "submissions": {FIRST: {"status": "queued", "package_id": 42}}})
+            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 1, "next_page": None,
+                "pages": {DEFAULT_CATEGORY: [FIRST]}, "items": {FIRST: "Old"}, "status": "collecting", "submitted": 0})
+            result = run_backfill(directory, fetch, downloader, minimum_free=0)
+            self.assertEqual(result["queued"], 1)
+            self.assertEqual(yaml.safe_load((directory / "backfill.yaml").read_text())["submitted"], 1)
+            self.assertEqual(downloader.creates, 0)
+
+    def test_backfill_resumes_saved_pages_and_does_not_resubmit_first_item(self):
+        downloader = MemoryDownloader()
+        fail_second = [True]
+        catalogue_calls = []
+        def fetch(url):
+            if url in {DEFAULT_CATEGORY, DEFAULT_CATEGORY + "?page=2"}:
+                catalogue_calls.append(url)
+                source = FIRST if url == DEFAULT_CATEGORY else NEW
+                return f'<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="{source}">Item</a></div><a href="?page=2">Next</a>'
+            if url == NEW and fail_second[0]:
+                fail_second[0] = False
+                raise CollectionError("Transient page failure")
+            if "/dl/" in url:
+                return '<h1>Download</h1><a class="bys-link bys-host" href="https://host.example/a">Get</a>'
+            return '<h1>Item</h1><a href="/item/dl/1">Host</a>'
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            save(directory / "monitor.yaml", {"version": 1, "categories": {}, "submissions": {}})
+            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 2, "next_page": DEFAULT_CATEGORY,
+                "pages": {}, "items": {}, "status": "pending", "submitted": 0})
+            with self.assertRaises(CollectionError):
+                run_backfill(directory, fetch, downloader, minimum_free=0)
+            self.assertEqual(downloader.creates, 1)
+            result = run_backfill(directory, fetch, downloader, minimum_free=0)
+            self.assertEqual(result["queued"], 2)
+            self.assertEqual(downloader.creates, 2)
+            self.assertEqual(len(catalogue_calls), 2)
+
+    def test_ten_page_backfill_submits_all_links_and_keeps_watermark(self):
+        downloader = MemoryDownloader()
+        catalogue_calls = []
+        def fetch(url):
+            if "/dl/" in url:
+                return '<h1>Download</h1><a class="bys-link bys-host" href="https://host.example/a">Get</a><a class="bys-link bys-host" href="https://host.example/b">Get</a>'
+            if url == DEFAULT_CATEGORY or "?page=" in url:
+                catalogue_calls.append(url)
+                page = int(url.split("?page=")[1]) if "?page=" in url else 1
+                return f'<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="/bandes-dessinees/{20-page}-item">Item</a></div><a href="?page={page+1}">Next</a>'
+            return '<h1>Item</h1><a href="/item/dl/1">AnyHost</a>'
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            monitor = {"version": 1, "categories": {DEFAULT_CATEGORY: {"after_id": 999}}, "submissions": {}}
+            save(directory / "monitor.yaml", monitor)
+            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 10, "next_page": DEFAULT_CATEGORY,
+                "pages": {}, "items": {}, "status": "pending", "submitted": 0})
+            result = run_backfill(directory, fetch, downloader, minimum_free=0)
+            self.assertEqual(result, {"pages": 10, "items": 10, "queued": 10})
+            self.assertEqual(len(catalogue_calls), 10)
+            self.assertEqual(downloader.creates, 10)
+            self.assertTrue(all(p["dest"] == 1 and len(p["links"]) == 2 for p in downloader.packages))
+            self.assertEqual(yaml.safe_load((directory / "monitor.yaml").read_text())["categories"], monitor["categories"])
+            self.assertIsNone(run_backfill(directory, fetch, downloader, minimum_free=0))
+            self.assertEqual(downloader.creates, 10)
+
     def test_pyload_get_has_no_json_content_type_and_keeps_query_parameters(self):
         received = []
         class Handler(BaseHTTPRequestHandler):

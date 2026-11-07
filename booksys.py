@@ -149,6 +149,19 @@ def atomic_write(path: Path, content: str) -> None:
     temporary.replace(path)
 
 
+def export_links(records: dict[str, Any], directory: Path, hosters: set[str] | None = None) -> None:
+    available = {entry["hoster"] for item in records.values() for entry in item["downloads"].values()}
+    all_links = set()
+    for hoster in sorted(hosters if hosters is not None else available):
+        links = sorted({link for item in records.values()
+                        for entry in item["downloads"].values() if entry["hoster"] == hoster
+                        for link in entry["urls"]})
+        all_links.update(links)
+        slug = re.sub(r"[^a-z0-9-]+", "-", hoster.lower()).strip("-") or "unnamed"
+        atomic_write(directory / f"{slug}.txt", "".join(link + "\n" for link in links))
+    atomic_write(directory / "all-links.txt", "".join(link + "\n" for link in sorted(all_links)))
+
+
 def collect(categories: list[str], fetch: Callable[[str], str], directory: Path,
             hosters: set[str] | None = None, pages: int = 1, max_items: int = 0,
             refresh: bool = False, after_id: int | None = None) -> dict[str, int]:
@@ -226,16 +239,7 @@ def collect(categories: list[str], fetch: Callable[[str], str], directory: Path,
                     url = next_url
             return counts
         finally:
-            available = {entry["hoster"] for item in records.values() for entry in item["downloads"].values()}
-            all_links = set()
-            for hoster in sorted(hosters if hosters is not None else available):
-                links = sorted({link for item in records.values()
-                                for entry in item["downloads"].values() if entry["hoster"] == hoster
-                                for link in entry["urls"]})
-                all_links.update(links)
-                slug = re.sub(r"[^a-z0-9-]+", "-", hoster.lower()).strip("-") or "unnamed"
-                atomic_write(directory / f"{slug}.txt", "".join(link + "\n" for link in links))
-            atomic_write(directory / "all-links.txt", "".join(link + "\n" for link in sorted(all_links)))
+            export_links(records, directory, hosters)
 
 
 def main() -> int:

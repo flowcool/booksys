@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-from booksys import Byparr, CollectionError, DEFAULT_CATEGORY, atomic_write, catalogue, collect
+from booksys import Byparr, CollectionError, DEFAULT_CATEGORY, atomic_write, catalogue, collect, export_links, resolve
 
 
 def save(path: Path, data: dict[str, Any]) -> None:
@@ -141,12 +141,71 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
         return {**counts, "queued": queued}
 
 
+def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
+                 minimum_free: int = 20 * 1024**3) -> dict[str, int] | None:
+    """Run one durable, bounded backfill request. Submit each item as soon as it is resolved."""
+    path = directory / "backfill.yaml"
+    if not path.exists():
+        return None
+    with (directory / "pipeline.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise CollectionError("Another pipeline is running") from exc
+        job = yaml.safe_load(path.read_text())
+        if job.get("version") != 1 or not 1 <= job.get("pages_requested", 0) <= 10:
+            raise CollectionError("Invalid bounded backfill request")
+        if job["status"] == "complete":
+            return None
+        monitor_path = directory / "monitor.yaml"
+        journal = yaml.safe_load(monitor_path.read_text())
+        state_path = directory / "state.yaml"
+        state = yaml.safe_load(state_path.read_text()) if state_path.exists() else {"version": 1, "items": {}}
+        if state.get("version") != 1 or journal.get("version") != 1:
+            raise CollectionError("Unsupported collection or monitor state")
+        records = state["items"]
+        while len(job["pages"]) < job["pages_requested"]:
+            url = job["next_page"]
+            if not url or url in job["pages"]:
+                raise CollectionError("Backfill pagination ended or repeated before requested page count")
+            items, next_url = catalogue(fetch(url), url)
+            job["pages"][url] = list(items)
+            job["items"].update(items)
+            job["next_page"] = next_url
+            job["status"] = "collecting"
+            save(path, job)
+            logging.info("Backfill catalogue: %d/%d pages, %d unique items",
+                         len(job["pages"]), job["pages_requested"], len(job["items"]))
+        for source in job["items"]:
+            if shutil.disk_usage(directory).free < minimum_free:
+                raise CollectionError("Free disk reserve reached during backfill")
+            if journal["submissions"].get(source, {}).get("status") == "queued":
+                continue
+            status = downloader.call("status_server")
+            if status["pause"] or not status["download"]:
+                raise CollectionError("pyLoad downloads are paused or disabled")
+            if "*" not in records.get(source, {}).get("complete_hosters", []):
+                records[source] = resolve(fetch(source), source, None, fetch)
+                save(state_path, state)
+                export_links(records, directory)
+            package_id = downloader.submit(source, records[source], journal, monitor_path)
+            job["submitted"] = sum(journal["submissions"].get(u, {}).get("status") == "queued" for u in job["items"])
+            save(path, job)
+            logging.info("Backfill queued: %d/%d items; package %d", job["submitted"], len(job["items"]), package_id)
+        # A prior process may have confirmed the submission but not saved batch progress.
+        job["submitted"] = sum(journal["submissions"].get(u, {}).get("status") == "queued" for u in job["items"])
+        job["status"] = "complete"
+        job["completed_at"] = datetime.now(timezone.utc).isoformat()
+        save(path, job)
+        return {"pages": len(job["pages"]), "items": len(job["items"]), "queued": job["submitted"]}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=Path("data"))
     parser.add_argument("--category", default=DEFAULT_CATEGORY)
     parser.add_argument("--byparr", default="http://127.0.0.1:8191/v1")
-    parser.add_argument("--pyload", default="http://127.0.0.1:8001")
+    parser.add_argument("--pyload", default="http://127.0.0.1:8000")
     parser.add_argument("--credentials", type=Path, required=True)
     parser.add_argument("--interval", type=int, default=900)
     parser.add_argument("--once", action="store_true")
@@ -159,6 +218,9 @@ def main() -> int:
     downloader = Pyload(args.pyload, credentials["api_key"])
     while True:
         try:
+            backfill = run_backfill(args.directory, Byparr(args.byparr), downloader)
+            if backfill is not None:
+                logging.info("Backfill complete: %s", json.dumps(backfill))
             result = run_once(args.directory, Byparr(args.byparr), downloader, args.category)
             logging.info("Cycle complete: %s", json.dumps(result))
         except Exception as exc:

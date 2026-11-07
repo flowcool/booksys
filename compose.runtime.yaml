@@ -15,26 +15,6 @@ services:
       timeout: 3s
       retries: 6
       start_period: 20s
-  pyload:
-    image: lscr.io/linuxserver/pyload-ng@sha256:222f1486954e052f61d3361ab2ad5e97e17f698d65c3a199e4689a3268a68a64
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8001:8000"
-    environment:
-      PUID: "1000"
-      PGID: "1000"
-      TZ: Europe/Zurich
-    volumes:
-      - /data/booksys/pyload:/config
-      - /data/booksys/downloads:/downloads
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
-      start_period: 20s
   worker:
     build: .
     image: booksys-worker:local
@@ -55,8 +35,6 @@ services:
       - /data/booksys/secrets:/secrets:ro
     depends_on:
       byparr:
-        condition: service_healthy
-      pyload:
         condition: service_healthy
     healthcheck:
       disable: true
