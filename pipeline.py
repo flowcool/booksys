@@ -135,6 +135,7 @@ def export_catalogue(directory: Path, records: dict[str, Any], journal: dict[str
         page = record.get("page", {})
         items[source] = {"title": record.get("title"), "metadata": page,
                          "package_id": entry["package_id"],
+                         "retirement": package.get("retirement") if package else None,
                          "download_folder_relative": package["folder"] if package else None,
                          "fiche_status": progress["items"].get(source, {}).get("status", "pending"),
                          "fiche_relative": progress["items"].get(source, {}).get("fiche_relative"),

@@ -83,4 +83,7 @@ def logical_snapshot(client: Any, routing: Path | None = None) -> list[dict[str,
                 package['mirror_source'] = op['source']
                 package['mirror_original_pid'] = int(original_id)
         package['mirror_routing'] = operation.get('phase', 'unmanaged')
-    return result
+    if routing is not None:
+        from retirement_history import history_path, retained_snapshot
+        return retained_snapshot(result, history_path(routing))
+    return list(result)

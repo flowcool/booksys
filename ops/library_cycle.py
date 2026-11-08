@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from library.catalog import Catalog, LibraryError, atomic_yaml, lock, now
 from library.cli import parser as cli_parser, run
 from library.runtime import lab_preflight
+from booksys import CollectionError
 
 
 def main() -> int:
@@ -31,6 +32,8 @@ def main() -> int:
     parser.add_argument('--budget', type=int, default=2, help='Total provider request budget for this cycle')
     parser.add_argument('--auto', action='store_true', help='Bounded new-input processing; uncertain identities are not retried')
     parser.add_argument('--route-mirrors', action='store_true', help='Apply one journaled native mirror routing operation after intake')
+    parser.add_argument('--retire-packages', action='store_true', help='Retire one technically complete Booksys acquisition after a successful cycle')
+    parser.add_argument('--pyload-scripts', type=Path, help='Audited local pyLoad scripts directory; must contain no scripts')
     args = parser.parse_args()
     inputs = (args.captured, args.submissions, *(p for p in (args.queue, args.credentials) if p))
     try:
@@ -70,6 +73,11 @@ def cycle(args: argparse.Namespace) -> int:
         else:
             from pipeline import Pyload
             client = Pyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'])
+            from library.retirement import Retirement
+            from ops.retire_packages import configured_scripts
+            retirement = Retirement(client, Catalog(state), args.reception, args.submissions, args.captured,
+                                    scripts=getattr(args, 'pyload_scripts', None) or configured_scripts())
+            retirement.reconcile()
             from mirrors import logical_snapshot
             value = logical_snapshot(client, args.submissions.parent / 'mirror-routing.yaml')
             if not isinstance(value, list):
@@ -147,6 +155,19 @@ def cycle(args: argparse.Namespace) -> int:
         command('reconcile', *common)
         if not args.auto:
             command('report', '--output', evidence / 'review.yaml')
+        retirement_results = []
+        if getattr(args, 'retire_packages', False):
+            if not args.credentials or args.queue:
+                raise LibraryError('Retirement requires live controller credentials and fresh queue state')
+            retirement_results = retirement.run(apply=True)
+            atomic_yaml(evidence / 'retirement-cycle.yaml', {'created_at': now(), 'results': retirement_results})
+            from library.cli import load
+            from library.intake import receive
+            from mirrors import logical_snapshot
+            queue_value = logical_snapshot(client, args.submissions.parent / 'mirror-routing.yaml')
+            atomic_yaml(snapshots / 'queue.yaml', queue_value)
+            receive(Catalog(state), args.reception, load(snapshots / 'captured.yaml'),
+                    load(snapshots / 'submissions.yaml'), queue_value, incremental=True, inspection_limit=0)
         current = store.read()
         published = {edition['publication']['asset'] for edition in current['editions'].values()
                      if edition.get('publication')}
@@ -159,6 +180,7 @@ def cycle(args: argparse.Namespace) -> int:
         summary = {'status': 'lab', 'started_at': started_at, 'finished_at': now(),
                    'duration_seconds': round(time.monotonic() - started, 3), **automatic, 'mirror_outcomes': len(mirror_results),
                    'intake_backlog': intake_backlog, 'assets': len(current['assets']), 'origins': len(current['origins']),
+                   'retired_acquisitions': sum(r['outcome'] == 'retired' for r in retirement_results),
                    'published': len(published), 'pending_assets': len(set(current['assets']) - published),
                    'origin_counts': origin_counts, 'report': str(evidence / 'review.md'),
                    'concurrent_writer_reserve_guaranteed': False}
@@ -167,7 +189,7 @@ def cycle(args: argparse.Namespace) -> int:
         atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
         print(json.dumps(summary))
         return 0
-    except (LibraryError, OSError, ValueError, KeyError, TypeError) as exc:
+    except (LibraryError, CollectionError, OSError, ValueError, KeyError, TypeError) as exc:
         failure = {'status': 'blocked', 'reason': str(exc), 'started_at': started_at,
                    'finished_at': now(), 'duration_seconds': round(time.monotonic() - started, 3)}
         atomic_yaml(evidence / 'cycle.yaml', failure)
