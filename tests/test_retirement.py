@@ -78,6 +78,34 @@ def fixture(root):
 
 
 class RetirementTests(unittest.TestCase):
+    def test_stock_cli_waits_for_active_cycle_then_retires_without_service_stop(self):
+        import threading
+        import time
+        from library.catalog import lock
+        from ops.retire_packages import main
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store, reception, collector, original, client = fixture(root)
+            credentials = root / 'credentials.json'
+            credentials.write_text('{"api_key":"fixture"}')
+            args = ['retire_packages.py', '--root', str(root), '--reception', str(reception),
+                    '--submissions', str(collector / 'monitor.yaml'), '--captured', str(collector / 'state.yaml'),
+                    '--credentials', str(credentials), '--pyload-scripts', str(root), '--wait-for-lock', '--apply']
+            results = []
+            with patch('sys.argv', args), patch('ops.retire_packages.lab_preflight'), \
+                 patch('ops.retire_packages.PacedPyload', return_value=client):
+                with lock(root / 'state/library-cycle.lock'):
+                    worker = threading.Thread(target=lambda: results.append(main()))
+                    worker.start()
+                    time.sleep(.1)
+                    self.assertTrue(worker.is_alive())
+                    self.assertEqual(client.removed, [])
+                worker.join(10)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(results, [0])
+            self.assertEqual(client.removed, [1])
+            self.assertTrue(original.is_file())
+
     def test_stock_scan_skips_sources_without_technical_evidence_before_api_calls(self):
         with tempfile.TemporaryDirectory() as directory:
             store, reception, collector, original, client = fixture(Path(directory))

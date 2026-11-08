@@ -55,6 +55,7 @@ def main() -> int:
     parser.add_argument('--limit', type=int, default=1)
     parser.add_argument('--scan-limit', type=int, default=8)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--wait-for-lock', action='store_true', help='Wait for the active library cycle instead of skipping this batch')
     parser.add_argument('--api-interval', type=float, default=.7, help='Minimum seconds between native API requests')
     parser.add_argument('--reconcile-only', action='store_true', help='Confirm absent targets from pending intents; never resend')
     args = parser.parse_args()
@@ -66,7 +67,7 @@ def main() -> int:
         client = PacedPyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'], args.api_interval)
         service = Retirement(client, Catalog(args.root / 'state'), args.reception,
                              args.submissions, args.captured, scripts=args.pyload_scripts or configured_scripts())
-        with lock(args.root / 'state/library-cycle.lock', blocking=False):
+        with lock(args.root / 'state/library-cycle.lock', blocking=args.wait_for_lock):
             if args.reconcile_only:
                 service.reconcile()
                 results = [{'outcome': 'reconciled'}]
