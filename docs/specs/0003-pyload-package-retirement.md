@@ -3,8 +3,8 @@
 Accepted by the operator on 8 November 2026 after a design interview.
 Delivery owner: Bead `private-work-item`. Query Beads for execution state.
 This document defines the target. It does not describe an active feature.
-This session delivers the specification and tracking issue only.
-Implementation and runtime removal have not started under this work item.
+Implementation and runtime acceptance are tracked in the owning Bead.
+Use the retirement runbook for controls and recovery.
 
 ## Outcome and scope
 
