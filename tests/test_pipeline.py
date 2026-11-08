@@ -113,6 +113,12 @@ class PipelineTests(unittest.TestCase):
             save(directory / "monitor.yaml", monitor)
             save(directory / "backfill.yaml", {"version": 1, "pages_requested": 10, "next_page": DEFAULT_CATEGORY,
                 "pages": {}, "items": {}, "status": "pending", "submitted": 0})
+            result = run_backfill(directory, fetch, downloader, minimum_free=0, max_items=3)
+            self.assertEqual(result, {"pages": 10, "items": 10, "queued": 3, "pending": 1})
+            from library.catalog import lock
+            with lock(directory / "pipeline.lock", blocking=False):
+                pass  # Other processing can acquire the collector lock between batches.
+            self.assertEqual(downloader.creates, 3)
             result = run_backfill(directory, fetch, downloader, minimum_free=0)
             self.assertEqual(result, {"pages": 10, "items": 10, "queued": 10})
             self.assertEqual(len(catalogue_calls), 10)

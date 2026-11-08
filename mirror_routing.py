@@ -73,6 +73,15 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
         journal = yaml.safe_load(path.read_text()) if path.exists() else {'schema': 1, 'packages': {}}
         if journal.get('schema') != 1 or not isinstance(journal.get('packages'), dict):
             raise CollectionError('Invalid mirror routing journal')
+        from retirement_history import history_path, read_history
+        retired = read_history(history_path(path))['acquisitions'].get(source)
+        if retired and retired.get('phase') in ('deleting', 'retired'):
+            if (retired['submission']['package_id'] != entry['package_id']
+                    or retired['submission']['name'] != entry['name']):
+                raise CollectionError('Retirement submission ownership changed')
+            if retired['phase'] != 'retired':
+                raise CollectionError('Removal intent needs reconciliation before routing')
+            return {'outcome': 'retired', 'pid': entry['package_id']}
         package = owned_package(client, entry)
         pid = package['pid']; key = str(pid)
         operation = journal['packages'].get(key)

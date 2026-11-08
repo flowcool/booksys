@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument('--listen', default='192.0.2.10')
     parser.add_argument('--port', type=int, default=8768)
     parser.add_argument('--credentials', type=Path, required=True)
+    parser.add_argument('--retire-packages', action='store_true', help='Retire one proven acquisition per successful cycle')
     args = parser.parse_args()
     stop = threading.Event()
     failed = threading.Event()
@@ -48,9 +49,11 @@ def main() -> None:
             snapshot()
             started = time.monotonic()
             # The child holds the whole-cycle lock. This single thread never overlaps children.
-            result = subprocess.run([sys.executable, str(Path(__file__).with_name('library_cycle.py')),
-                '--root', str(args.root), '--credentials', str(args.credentials), '--auto', '--route-mirrors', '--budget', '50'],
-                capture_output=True, text=True)
+            command = [sys.executable, str(Path(__file__).with_name('library_cycle.py')),
+                '--root', str(args.root), '--credentials', str(args.credentials), '--auto', '--route-mirrors', '--budget', '50']
+            if args.retire_packages:
+                command.append('--retire-packages')
+            result = subprocess.run(command, capture_output=True, text=True)
             (evidence / 'automatic-cycle.stdout').write_text(result.stdout)
             (evidence / 'automatic-cycle.stderr').write_text(result.stderr)
             try:

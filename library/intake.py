@@ -21,6 +21,52 @@ def reception_path(root: Path, folder: str, name: str) -> Path:
     return path
 
 
+def _receive_retired(state: dict[str, Any], store: Catalog, root: Path,
+                     source: str, package: dict[str, Any]) -> None:
+    evidence = package.get('retirement_proof', {})
+    recorded = evidence.get('origins', {})
+    files = evidence.get('files', {})
+
+    def check_file(relative: str, scope: str) -> None:
+        proof = files.get(scope + '/' + relative)
+        if not proof or proof.get('path') != relative or proof.get('scope') != scope:
+            raise LibraryError('Retired input lacks retained technical proof')
+        base = root if scope == 'reception' else store.directory
+        path = reception_path(base, str(Path(relative).parent), Path(relative).name)
+        if list(fingerprint(path)) != proof['fingerprint']:
+            raise LibraryError('Retired input changed or disappeared')
+
+    def check_parent(origin: dict[str, Any]) -> None:
+        check_file(origin['path'], 'reception')
+        if origin.get('bundle'):
+            check_file('bundle-inputs/' + origin['sha256'] + '/manifest.yaml', 'state')
+        for part in origin.get('source_parts', []):
+            check_file(part['path'], 'reception')
+
+    for oid, origin in state['origins'].items():
+        if origin['source'] != source or origin['pid'] != package['pid']:
+            continue
+        origin['retirement'] = package['retirement']
+        try:
+            prior = recorded.get(oid, {})
+            fields = ('source', 'pid', 'fid', 'path', 'sha256', 'parent_origin',
+                      'parent_sha256', 'member', 'bundle', 'source_parts', 'multipart_parent')
+            if not prior or any(origin.get(k) != prior.get(k) for k in fields):
+                raise LibraryError('Retired origin differs from retained technical proof')
+            if origin.get('parent_origin'):
+                check_file(origin['path'], 'state')
+                parent = state['origins'][origin['parent_origin']]
+                check_parent(parent)
+            else:
+                # Failed or cancelled redundant links need not have a local file.
+                if 'reception/' + origin['path'] in files:
+                    check_parent(origin)
+                elif origin.get('availability') in ('validated', 'bundle', 'multipart_member'):
+                    raise LibraryError('Retired validated input lacks a retained file')
+        except (LibraryError, OSError, KeyError, TypeError) as exc:
+            origin.update(availability='rejected', reason=str(exc))
+
+
 def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[str, Any],
             queue: list[dict[str, Any]], *, stable_seconds: float = 2,
             incremental: bool = False, inspection_limit: int | None = None) -> dict[str, Any]:
@@ -59,6 +105,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             continue
         if package['name'] != submission['name']:
             raise LibraryError('Tracked pyLoad package identity changed')
+        if package.get('retirement'):
+            _receive_retired(state, store, root, source, package)
+            continue
         from library.multipart import is_multipart, receive_parts
         inspected += receive_parts(state, store.directory, root, source, package, captured['items'][source],
             max(0, (inspection_limit if inspection_limit is not None else 8) - inspected), stable_seconds)
@@ -217,5 +266,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                 if previous_hash:
                     origin['sha256'] = previous_hash
             state['origins'][oid] = origin
+    for origin in state['origins'].values():
+        package = packages.get(origin['pid'], {})
+        if package.get('retirement'):
+            origin['retirement'] = package['retirement']
     store.save(state, expected=state['revision'])
     return store.read()

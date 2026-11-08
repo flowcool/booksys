@@ -9,7 +9,9 @@ confirmation path remains valid for evidence that supports an exact edition.
 The separate portable-library component is described in
 library qualification and library tools.
 It reads captured state and known submission origins. It never writes the collector
-state, existing URL-keyed catalogue or downloader queue.
+state or existing URL-keyed catalogue. The optional retirement controller can
+remove proven completed Booksys packages after retaining terminal history.
+See package retirement for the whole-chain contract.
 
 ## Scope
 

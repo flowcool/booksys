@@ -1,4 +1,4 @@
-"""The cycle routes all queued sources against one catalogue snapshot."""
+"""The cycle routes a bounded fair batch against one catalogue snapshot."""
 import argparse
 import contextlib
 import importlib.util
@@ -22,7 +22,7 @@ class RoutingSnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _, reception, _, _ = setup_library(root)
-            sources = ['https://bookys.invalid/source-a', 'https://bookys.invalid/source-b']
+            sources = [f'https://bookys.invalid/source-{i:02}' for i in range(20)]
             atomic_yaml(root / 'captured.yaml', {'items': {s: {'title': 'Fixture'} for s in sources}})
             atomic_yaml(root / 'submissions.yaml', {'submissions': {s: {'status': 'queued', 'package_id': i}
                                                                    for i, s in enumerate(sources)}})
@@ -37,7 +37,7 @@ class RoutingSnapshotTests(unittest.TestCase):
                 seen.append((source, catalogue))
                 return {'outcome': 'nothing'}
             provisional = types.SimpleNamespace(process_provisional=lambda *a, **kw: {'processed': 0, 'ready_backlog': 0})
-            with patch.dict(sys.modules, {'library.provisional': provisional}), patch('library.automatic.ready_assets', return_value=0, create=True), patch('library.intake.receive'), patch('library.automatic.process_assets', return_value={}), \
+            with patch('library.admission.process_admissions', side_effect=provisional.process_provisional), patch('library.automatic.ready_assets', return_value=0, create=True), patch('library.intake.receive'), patch('library.automatic.process_assets', return_value={}), \
                  patch('mirrors.public_hosts', return_value={}), patch('mirror_routing.route_package', side_effect=route), \
                  patch('pipeline.Pyload'), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(module.cycle(args), 0)
@@ -61,7 +61,7 @@ class RoutingSnapshotTests(unittest.TestCase):
             def provisional(*args, **kwargs):
                 calls.append(kwargs['limit'])
                 return {'processed': 0, 'ready_backlog': 0}
-            with patch.dict(sys.modules, {'library.provisional': types.SimpleNamespace(process_provisional=provisional)}), \
+            with patch('library.admission.process_admissions', side_effect=provisional), \
                  patch('library.automatic.ready_assets', return_value=2, create=True), \
                  patch('library.automatic.process_assets') as metadata, patch('library.intake.receive'), \
                  contextlib.redirect_stdout(io.StringIO()):
@@ -87,7 +87,7 @@ class RoutingSnapshotTests(unittest.TestCase):
                 submissions=root/'submissions.yaml', queue=root/'queue.yaml', credentials=root/'credentials.json',
                 endpoint='http://127.0.0.1:1', auto=True, budget=0, asset=[], printed=False, route_mirrors=True)
             provisional = types.SimpleNamespace(process_provisional=lambda *a, **kw: {'processed': 0, 'ready_backlog': 0})
-            with patch.dict(sys.modules, {'library.provisional': provisional}), \
+            with patch('library.admission.process_admissions', side_effect=provisional.process_provisional), \
                  patch('library.automatic.ready_assets', return_value=0, create=True), \
                  patch('library.intake.receive'), patch('library.automatic.process_assets', return_value={}), \
                  patch.object(module, 'routing_candidates', return_value=[source]), \

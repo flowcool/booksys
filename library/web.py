@@ -138,6 +138,7 @@ def build_projection(root: Path) -> dict[str, Any]:
                'isbn': isbn, 'series': bounded(overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series')),
                'transfer': 'finished' if origin.get('transfer_status') == 0 else 'not finished (code ' + bounded(origin.get('transfer_status', 'unknown')) + ')',
                'intake': bounded(origin['availability']),
+               'retirement': bounded(origin.get('retirement', 'live')),
                'ocr': bounded(asset.get('printed', {}).get('status') or
                               (asset.get('printed_attempts') or [{}])[-1].get('status', 'not attempted')),
                'identity': 'contested' if asset.get('contested') else 'identified' if identity or work else 'pending' if asset else 'not attempted',
@@ -145,6 +146,8 @@ def build_projection(root: Path) -> dict[str, Any]:
                'publication': 'classified' if classified else 'À identifier' if holding else 'published' if published else 'available_edition_unknown' if provisional else 'pending', 'reason': operator_reason(reason),
                'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
                'fiche': '/fiche/' + oid}
+        if origin.get('retirement'):
+            row['transfer'] = 'Retiré de pyLoad · dernier état : ' + row['transfer']
         row['kind'] = 'bundle' if origin.get('bundle') else 'bundle_member' if origin.get('parent_origin') else 'file'
         row['parent'] = origin.get('parent_origin', '')
         if origin.get('bundle'):
@@ -189,7 +192,7 @@ def build_projection(root: Path) -> dict[str, Any]:
             'assertions': assertions, 'candidates': candidate_projection, 'cover': cover_url,
             'work_metadata': work_result, 'admission': admission,
             'cover_provenance': 'First page of the local file; not a publisher cover',
-            'pipeline': {key: row[key] for key in ('transfer', 'intake', 'ocr', 'identity', 'publication', 'reason', 'observed_at', 'attempt_at')},
+            'pipeline': {key: row[key] for key in ('transfer', 'intake', 'retirement', 'ocr', 'identity', 'publication', 'reason', 'observed_at', 'attempt_at')},
             'technical': {**fields(origin, ('pid', 'fid', 'path', 'sha256', 'parent_origin', 'parent_sha256', 'member', 'member_sha256')),
                           **fields(asset, ('format', 'size', 'pages', 'disposition', 'contested')),
                           **fields(automation, ('attempts', 'outcome', 'next_attempt', 'updated_at'))},
