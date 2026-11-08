@@ -140,7 +140,7 @@ class Providers:
     def get(self, url: str) -> dict[str, Any]:
         parts = urlsplit(url)
         if (parts.scheme != 'https' or parts.hostname not in
-                ('openlibrary.org', 'www.bdtheque.com', 'api.mangadex.org')
+                ('openlibrary.org', 'www.bdtheque.com', 'api.mangadex.org', 'catalogue.bnf.fr')
                 or parts.username or parts.password or parts.port):
             raise LibraryError('Unqualified provider URL')
         path = self.cache / (digest(url) + '.yaml')
@@ -256,6 +256,20 @@ class Providers:
             return {'status': 'unavailable', 'reason': str(exc), 'url': url}
 
     def source(self, provider: str, reference: str) -> dict[str, Any]:
+        if provider == 'bnf' and isbn13(reference):
+            from library.bnf import parse_bnf
+            url = 'https://catalogue.bnf.fr/api/SRU?' + urlencode({
+                'version': '1.2', 'operation': 'searchRetrieve',
+                'query': f'bib.fuzzyISBN all \"{reference}\"',
+                'recordSchema': 'unimarcxchange', 'maximumRecords': 2})
+            response = self.get(url)
+            if response['status'] != 'ok':
+                return response
+            try:
+                return {'status': 'ok', 'candidate': parse_bnf(response['body'], reference,
+                    url, response['retrieved_at'])}
+            except LibraryError as exc:
+                return {'status': 'unavailable', 'reason': str(exc), 'url': url}
         if provider == 'openlibrary':
             return self.edition(reference)
         if provider == 'bdtheque' and re.fullmatch(r'\d+/[a-z0-9-]+', reference):
@@ -315,7 +329,14 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
             if isinstance(hint, dict) and isinstance(hint.get('title'), str) and hint['title'].strip():
                 title, hint_source = hint['title'], source
                 break
-    if title:
+    printed = asset.get('printed')
+    printed_code = None
+    if printed:
+        from library.printed import printed_isbns
+        codes, invalid = printed_isbns(printed)
+        if printed.get('status') == 'ok' and len(codes) == 1 and not invalid:
+            printed_code = next(iter(codes))
+    if title and not printed_code:
         asset['discovery_hint'] = {'title': title, 'source': hint_source, 'validation': 'discovery_only'}
         asset['discovery'] = providers.discover(title)
         attempts = providers.resolve_discovery(asset['discovery'])
@@ -329,7 +350,22 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
             candidates.append(response['candidate'])
     candidates = list({(candidate['source'], candidate['edition_ref']): candidate
                        for candidate in candidates}.values())
-    result = identify(embedded, candidates)
+    printed = asset.get('printed')
+    if printed:
+        from library.printed import printed_isbns, identify_printed
+        if printed.get('asset') != asset_id:
+            raise LibraryError('Printed assertions are not bound to this asset')
+        codes, invalid = printed_isbns(printed)
+        if printed.get('status') == 'ok' and len(codes) == 1 and not invalid:
+            response = providers.source('bnf', next(iter(codes)))
+            add_assertions(asset, response)
+            if response['status'] == 'ok':
+                candidates.append(response['candidate'])
+        candidates = list({(candidate['source'], candidate['edition_ref']): candidate
+                           for candidate in candidates}.values())
+        result = identify_printed(printed, embedded, candidates)
+    else:
+        result = identify(embedded, candidates)
     asset['identity_result'] = result
     if result['status'] == 'identified':
         candidate = result['candidate']

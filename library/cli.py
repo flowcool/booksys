@@ -54,6 +54,12 @@ def parser() -> argparse.ArgumentParser:
     preview.add_argument('--submissions', type=Path, required=True)
     preview.add_argument('--queue', type=Path, required=True)
     preview.add_argument('--output', type=Path, required=True)
+    printed_cmd = commands.add_parser('printed')
+    printed_cmd.add_argument('--asset', required=True)
+    printed_cmd.add_argument('--reception', type=Path, required=True)
+    printed_cmd.add_argument('--isolated', action='store_true')
+    printed_cmd.add_argument('--policy', type=Path)
+    printed_cmd.add_argument('--library', type=Path)
     enrich_cmd = commands.add_parser('enrich')
     enrich_cmd.add_argument('--asset', required=True)
     enrich_cmd.add_argument('--source', action='append', default=[], help='provider:reference')
@@ -126,6 +132,16 @@ def run(args: argparse.Namespace) -> Any:
             raise LibraryError('Runtime intake requires --policy and --library')
         state = receive(store, args.reception, load(args.captured), load(args.submissions), load(args.queue))
         return {'status': 'received', 'assets': len(state['assets']), 'origins': len(state['origins'])}
+    if args.command == 'printed':
+        if args.isolated:
+            isolated_paths(args.state, args.reception)
+        elif args.policy and args.library:
+            preflight(args.reception, args.library, args.state, args.policy)
+        else:
+            raise LibraryError('Runtime printed evidence requires --policy and --library')
+        from library.printed import scan_printed
+        value = scan_printed(store, args.asset, args.reception)
+        return {key: value.get(key) for key in ('status', 'asset', 'window', 'tool', 'reason')}
     if args.command == 'enrich':
         refs = []
         for source in args.source:

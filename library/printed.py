@@ -1,0 +1,167 @@
+"""Printed evidence stays separate from embedded metadata and manual decisions."""
+from __future__ import annotations
+
+import re
+import unicodedata
+from typing import Any
+
+from library.metadata import isbn13, normalized
+from library.catalog import now
+
+
+def printed_isbns(printed: dict[str, Any]) -> tuple[set[str], bool]:
+    codes: set[str] = set()
+    invalid = False
+    for page in printed.get('pages', []):
+        for line in page.get('text', '').splitlines():
+            labelled = re.search(r'\bISBN(?:[- ]?13)?\s*[:：]?\s*([0-9][0-9\s\-\"\']+)', line, re.I)
+            raw = labelled.group(1) if labelled else line.strip()
+            if not labelled and not re.fullmatch(r'[0-9\s\-\"\'.]+', raw):
+                continue
+            digits = re.sub(r'[^0-9]', '', raw)
+            if not labelled and len(digits) != 13:
+                continue
+            code = isbn13(digits)
+            if code:
+                codes.add(code)
+            elif labelled or len(digits) == 13:
+                invalid = True
+    return codes, invalid
+
+
+def words(value: str) -> str:
+    text = ''.join(c for c in unicodedata.normalize('NFKD', value.casefold())
+                   if not unicodedata.combining(c))
+    return ' '.join(re.findall(r'[^\W_]+', text))
+
+
+def identify_printed(printed: dict[str, Any], embedded: dict[str, Any],
+                     candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    pending: dict[str, Any] = {'status': 'pending', 'reason': 'Printed edition evidence is incomplete',
+                               'candidates': candidates}
+    codes, invalid = printed_isbns(printed)
+    if printed.get('status') != 'ok' or invalid or len(codes) != 1:
+        return {**pending, 'reason': 'Printed ISBN is missing, invalid or contradictory in the bounded window'}
+    code = next(iter(codes))
+    matches = [c for c in candidates if c.get('isbn') == code and c.get('source') == 'bnf']
+    if len(matches) != 1:
+        return {**pending, 'reason': 'Printed ISBN requires one exact BnF edition'}
+    candidate = matches[0]
+    required = ('title', 'author', 'number', 'language', 'publisher', 'date', 'work_ref', 'edition_ref', 'url')
+    if candidate.get('medium') != 'print' or any(not candidate.get(k) for k in required):
+        return pending
+    front = printed['pages'][:4]
+    text = ' ' + words('\n'.join(p['text'] for p in front)) + ' '
+    authors = [candidate['author'], *candidate.get('author_forms', [])]
+    # Qualified route: ISBN and author on the first image (full jacket),
+    # then the album title and explicit volume in its first four images.
+    # End advertisements and isolated matching strings cannot provide this anchor.
+    first = ' ' + words(front[0]['text']) + ' ' if front else ''
+    first_codes, first_invalid = printed_isbns({'pages': front[:1]})
+    volumes = set(re.findall(r'\b(?:volume|vol|tome) (\d+)\b', text))
+    if (first_codes != {code} or first_invalid or
+            not any(' ' + words(author) + ' ' in first for author in authors) or
+            volumes != {str(candidate['number'])}):
+        return {**pending, 'reason': 'No consistent front-jacket ISBN/author and opening-volume anchor'}
+    concordance = {
+        'title': [p['name'] for p in front if ' ' + words(candidate['title']) + ' ' in ' ' + words(p['text']) + ' '],
+        'author': [p['name'] for p in front if any(' ' + words(a) + ' ' in ' ' + words(p['text']) + ' ' for a in authors)],
+        'number': [p['name'] for p in front if re.search(r'\b(?:volume|vol|tome) ' + re.escape(str(candidate['number'])) + r'\b', words(p['text']))]}
+    if not all(concordance.values()):
+        return {**pending, 'reason': 'Printed title, author or volume does not agree with exact edition'}
+    # Unknown fields stay unknown. Present structured contradictions still block.
+    for source_field, field in [('Title', 'title'), ('Writer', 'author'), ('Number', 'number'),
+                                ('LanguageISO', 'language'), ('Publisher', 'publisher'),
+                                ('EditionDate', 'date'), ('EditionRevision', 'revision')]:
+        if embedded.get(source_field) and normalized(embedded[source_field]) != normalized(candidate.get(field, '')):
+            return {**pending, 'reason': f'Embedded {field} contradicts printed edition'}
+    embedded_code = embedded.get('ISBN', embedded.get('GTIN'))
+    if embedded_code and isbn13(str(embedded_code)) != code:
+        return {**pending, 'reason': 'Embedded ISBN contradicts printed edition'}
+    if re.search(r'\b(?:revue|revisee|revised|augmentee|abridged)\b', text):
+        return {**pending, 'reason': 'Printed revision requires manual review'}
+    return {'status': 'identified', 'reason': 'Exact printed ISBN and consistent title, author and volume',
+            'candidates': candidates, 'candidate': candidate,
+            'evidence': {'isbn': code, 'url': candidate['url'], 'source': 'bnf',
+                         'representation': 'scan_of_print_edition', 'anchor': 'first_image_isbn_author_and_opening_title_volume', 'printed': printed,
+                         'fields': concordance, 'isbn_scope': 'all eight sampled pages; not the complete archive', 'retrieved_at': now()}}
+
+
+def read_printed(path: Any, inspection: dict[str, Any]) -> dict[str, Any]:
+    """Read eight validated archive pages in a separate networkless worker."""
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from library.catalog import LibraryError
+    from library.readers import fingerprint, sha256
+    path = Path(path).absolute()
+    if (any(p.is_symlink() for p in (path, *path.parents)) or
+            inspection.get('status') != 'validated' or inspection.get('format') not in ('cbz', 'cbr')):
+        raise LibraryError('Printed evidence requires a validated archive')
+    before = fingerprint(path)
+    expected = inspection['sha256']
+    if sha256(path) != expected:
+        raise LibraryError('Printed evidence source changed')
+    manifest = inspection.get('page_manifest', [])
+    selected = list({p['name']: p for p in [*manifest[:4], *manifest[-4:]]}.values())
+    if not selected:
+        raise LibraryError('Printed evidence requires a validated page manifest')
+    command = ['bwrap', '--unshare-all', '--die-with-parent', '--new-session',
+               '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+               '--clearenv', '--setenv', 'PYTHONPATH', str(Path(__file__).resolve().parent.parent)]
+    for name, target in [('BOOKSYS_UNRAR', 'BOOKSYS_UNRAR'), ('BOOKSYS_TESSERACT', 'BOOKSYS_TESSERACT'),
+                         ('BOOKSYS_TESSDATA', 'TESSDATA_PREFIX'), ('BOOKSYS_OCR_LIBDIR', 'LD_LIBRARY_PATH')]:
+        if os.environ.get(name):
+            command += ['--setenv', target, os.environ[name]]
+    command += ['--ro-bind', str(path), '/tmp/input', sys.executable,
+                '-m', 'library.printed_worker', '/tmp/input', '.' + inspection['format']]
+    image = os.environ.get('BOOKSYS_READER_IMAGE')
+    if image:
+        if not re.fullmatch(r'[a-z0-9./:_@-]+', image) or ',' in str(path) or '\n' in str(path):
+            raise LibraryError('Invalid printed reader image/bind')
+        command = ['docker', 'run', '--rm', '-i', '--network', 'none', '--read-only',
+            '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+            '--user', f'{os.getuid()}:{os.getgid()}', '--memory', '1536m', '--cpus', '1',
+            '--pids-limit', '32', '--mount', f'type=bind,src={path},dst=/input,readonly',
+            '--entrypoint', '/app/.venv/bin/python', image, '-m', 'library.printed_worker',
+            '/input', '.' + inspection['format']]
+    try:
+        process = subprocess.run(command, input=json.dumps({'pages': selected}).encode(),
+                                 capture_output=True, timeout=180, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise LibraryError('Printed reader exceeded wall time') from exc
+    if fingerprint(path) != before or sha256(path) != expected:
+        raise LibraryError('Printed evidence source changed during OCR')
+    if process.returncode or len(process.stdout) > 1024**2:
+        raise LibraryError('Printed reader failed or exceeded resource limits')
+    result: dict[str, Any] = json.loads(process.stdout)
+    if result.pop('input_sha256', None) != expected:
+        raise LibraryError('Printed reader inspected another source')
+    if result.get('status') == 'ok' and [(p['name'], p['sha256']) for p in result['pages']] != [
+            (p['name'], p['sha256']) for p in selected]:
+        raise LibraryError('Printed reader page evidence changed')
+    result['asset'] = expected
+    return result
+
+
+def scan_printed(store: Any, asset_id: str, reception: Any) -> dict[str, Any]:
+    from library.catalog import LibraryError
+    from library.intake import reception_path
+    from pathlib import Path
+    state = store.read()
+    asset = state['assets'][asset_id]
+    origins = [state['origins'][oid] for oid in asset['origins']
+               if state['origins'][oid].get('availability') == 'validated']
+    if not origins:
+        raise LibraryError('No validated origin for printed evidence')
+    origin = origins[0]
+    relative = Path(origin['path'])
+    result = read_printed(reception_path(Path(reception), str(relative.parent), relative.name), asset)
+    asset.setdefault('printed_attempts', []).append({k: v for k, v in result.items() if k != 'pages'})
+    asset['printed_attempts'] = asset['printed_attempts'][-10:]
+    if result['status'] == 'ok':
+        asset['printed'] = result
+    store.save(state, expected=state['revision'])
+    return result
