@@ -78,6 +78,8 @@ class Byparr:
 
     def __call__(self, url: str) -> str:
         time.sleep(max(0, self.delay - (time.monotonic() - self.last_request)))
+        from activity import report
+        report('byparr', 'working', 'Bookys request; Cloudflare solving unknown', item=url)
         payload = {"cmd": "request.get", "url": url,
                    "maxTimeout": self.timeout * 1000, "blockMedia": False}
         request = Request(self.endpoint, json.dumps(payload).encode(),
@@ -95,8 +97,10 @@ class Byparr:
                 raise CollectionError("Byparr returned no HTML")
             document(html)
             self.session = {k: solution.get(k) for k in ["url", "cookies", "userAgent"]}
+            report('byparr', 'sleeping', 'Request complete', item=url, progressed=True)
             return html
         except (OSError, ValueError, CollectionError) as exc:
+            report('byparr', 'blocked', 'Browser failure', reason='Browser request or Cloudflare validation failed')
             raise BrowserError(str(exc)) from exc
         finally:
             self.last_request = time.monotonic()

@@ -168,6 +168,8 @@ def scan_printed(store: Any, asset_id: str, reception: Any) -> dict[str, Any]:
     from library.catalog import LibraryError
     from pathlib import Path
     from library.origins import resolve_asset
+    from activity import report
+    report('local', 'working', 'OCR', item=asset_id)
     state = store.read()
     asset = state['assets'][asset_id]
     result = read_printed(resolve_asset(store, Path(reception), state, asset_id), asset)
@@ -176,6 +178,7 @@ def scan_printed(store: Any, asset_id: str, reception: Any) -> dict[str, Any]:
     if result['status'] == 'ok':
         asset['printed'] = result
     store.save(state, expected=state['revision'])
+    report('local', 'sleeping', 'OCR complete', item=asset_id, progressed=True)
     return result
 
 

@@ -47,6 +47,11 @@ def save_attempt(store: Catalog, asset: str, attempt: dict[str, Any]) -> None:
     current = store.read()
     current['assets'][asset]['automation'] = attempt
     store.save(current, expected=current['revision'])
+    from activity import report
+    if attempt.get('outcome') != 'running':
+        report('identity', 'waiting' if attempt.get('outcome') in ('pending', 'retry', 'deferred') else 'sleeping',
+               'Metadata result', item=asset, reason='Metadata ' + str(attempt.get('outcome')),
+               next_attempt=attempt.get('next_attempt'), progressed=True)
 
 
 def process_assets(store: Catalog, reception: Path, library: Path, providers: Providers,
@@ -70,6 +75,8 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
             continue
         if completed >= limit or providers.budget <= 0:
             break
+        from activity import report
+        report('identity', 'working', 'Metadata', item=key, title=next((h.get('title', '') for h in asset.get('captured_hints', {}).values()), ''))
         completed += 1
         reused_identity = attempt.get('outcome') == 'identified'
         attempts = int(attempt.get('attempts', 0)) + (0 if reused_identity else 1)

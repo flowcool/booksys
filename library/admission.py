@@ -183,6 +183,8 @@ class AdmissionPublisher(Publisher):
         return operations
 
     def publish_asset(self, key: str) -> dict[str, Any]:
+        from activity import report
+        report('identity', 'working', 'Conversion and classification', item=key)
         with lock(self.store.directory/'library-copy.lock', blocking=False):
             Publisher(self.store, self.reception, self.root, exclusive=True,
                       capacity=self.capacity).reconcile(locked=True, provisional=False)

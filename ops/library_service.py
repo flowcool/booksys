@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument('--port', type=int, default=8768)
     parser.add_argument('--credentials', type=Path, required=True)
     parser.add_argument('--retire-packages', action='store_true', help='Retire one proven acquisition per successful cycle')
+    parser.add_argument('--activity', action='store_true', help='Shared read-only activity observer')
     args = parser.parse_args()
     stop = threading.Event()
     failed = threading.Event()
@@ -92,12 +93,35 @@ def main() -> None:
 
     worker = threading.Thread(target=supervised_cycles, name='library-cycle')
     worker.start()
+    observer_thread = None
+    if args.activity:
+        from library.activity import Observer
+        from pipeline import Pyload
+        def observations() -> None:
+            observer = Observer(args.root, Path('/data/booksys/state'))
+            while not stop.is_set():
+                try:
+                    # Two shared GETs per 30 s, regardless of viewer count.
+                    client = Pyload('http://127.0.0.1:8000', json.loads(args.credentials.read_text())['api_key'])
+                    observer.sample_downloads(client)
+                except Exception:
+                    observer.downloads_unavailable()
+                try:
+                    observer.sample_resources()
+                    observer.save()
+                except Exception:
+                    pass  # Last observation ages explicitly. Processing continues.
+                stop.wait(30)
+        observer_thread = threading.Thread(target=observations, name='activity-observer')
+        observer_thread.start()
     try:
         while not stop.is_set():
             server.handle_request()
     finally:
         server.server_close()
         worker.join()
+        if observer_thread is not None:
+            observer_thread.join()
     if failed.is_set():
         raise RuntimeError('Library cycle thread failed')
 

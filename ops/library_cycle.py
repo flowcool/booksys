@@ -38,6 +38,8 @@ def main() -> int:
     parser.add_argument('--retire-packages', action='store_true', help='Retire one technically complete Booksys acquisition after a successful cycle')
     parser.add_argument('--pyload-scripts', type=Path, help='Audited local pyLoad scripts directory; must contain no scripts')
     args = parser.parse_args()
+    from activity import bind, report
+    bind(args.root / 'evidence/activity', 'local', 'identity', 'retirement')
     inputs = (args.captured, args.submissions, *(p for p in (args.queue, args.credentials) if p))
     try:
         lab_preflight(args.reception, args.root / 'library', args.root / 'state', inputs)
@@ -46,6 +48,8 @@ def main() -> int:
     except LibraryError as exc:
         value = {'status': 'skipped' if str(exc) == 'Another library operation is active' else 'blocked',
                  'reason': str(exc)}
+        report('local', 'waiting' if value['status'] == 'skipped' else 'blocked', 'Cycle gate',
+               reason='Processing lock occupied' if value['status'] == 'skipped' else 'Cycle preflight failed')
         print(json.dumps(value))
         return 0 if value['status'] == 'skipped' else 2
 
@@ -60,6 +64,12 @@ def cycle(args: argparse.Namespace) -> int:
     def progress(name: str) -> None:
         nonlocal stage
         stage = name
+        from activity import report
+        target = 'local' if name in ('intake', 'recovery', 'queue_snapshot') else 'retirement' if name == 'retirement' else 'identity'
+        for other in ('local', 'identity', 'retirement'):
+            if other != target:
+                report(other, 'waiting', 'Sequential cycle', reason='Waiting for ' + name)
+        report(target, 'working', name)
         atomic_yaml(evidence / 'cycle.yaml', {'status': 'running', 'started_at': started_at,
             'stage': stage, 'stage_started_at': now(), 'heavy_turn': turn})
     try:
@@ -218,6 +228,7 @@ def cycle(args: argparse.Namespace) -> int:
         if getattr(args, 'retire_packages', False):
             if not args.credentials or args.queue:
                 raise LibraryError('Retirement requires live controller credentials and fresh queue state')
+            progress('retirement')
             retirement_results = retirement.run(apply=True)
             atomic_yaml(evidence / 'retirement-cycle.yaml', {'created_at': now(), 'results': retirement_results})
             from library.cli import load
@@ -249,6 +260,9 @@ def cycle(args: argparse.Namespace) -> int:
         atomic_yaml(evidence / 'cycle.yaml', summary)
         from library.web import build_projection
         atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
+        from activity import report
+        for activity_stage in ('local', 'identity', 'retirement'):
+            report(activity_stage, 'sleeping', 'Cycle complete')
         print(json.dumps(summary))
         return 0
     except (LibraryError, CollectionError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -261,6 +275,9 @@ def cycle(args: argparse.Namespace) -> int:
         atomic_yaml(evidence / 'cycle.yaml', failure)
         from library.web import build_projection
         atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
+        from activity import report
+        for activity_stage in ('local', 'identity', 'retirement'):
+            report(activity_stage, 'blocked', 'Cycle error', reason='Cycle failed during ' + stage)
         print(json.dumps(failure))
         return 2
 

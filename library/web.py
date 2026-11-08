@@ -271,7 +271,7 @@ PAGE = r'''<!doctype html><meta charset="utf-8"><meta name="viewport" content="w
 input,select,button{padding:.5em;margin:.3em;background:#233546;color:inherit;border:1px solid #657888}
 table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:.5em;border-bottom:1px solid #456;text-align:left}
 a{color:#81caff}.muted{color:#a6b6c5}td:last-child{max-width:30em}</style>
-<h1>Booksys library lab</h1><p>Read-only snapshots. Original downloads stay intact. No web actions.</p>
+<h1>Booksys library lab</h1><nav aria-label="Views"><button id="library-tab" aria-selected="true">Bibliothèque</button><button id="activity-tab" aria-selected="false">Activité</button></nav><section id="library-pane"><p>Read-only snapshots. Original downloads stay intact. No web actions.</p>
 <p id="clock" class="muted"></p><p id="cycle"></p><input id="query" placeholder="Search title, author, ISBN, series or reason">
 <label>Status <select id="status"></select></label><label>Transfer <select id="transfer"></select></label>
 <label>Intake <select id="intake"></select></label><label>Identity <select id="identity"></select></label>
@@ -291,8 +291,11 @@ const options=JSON.stringify(filters.map(k=>[...new Set(data.rows.map(r=>r[k]))]
 $('clock').textContent='Snapshot: '+data.generated_at+' | '+data.source;const c=data.cycle;$('cycle').textContent='Cycle: '+c.status+' | Stage: '+(c.stage||'idle')+' | Started: '+(c.started_at||'unknown')+' | Last finish: '+(c.finished_at||'none')+' | Duration: '+(c.duration_seconds??'?')+' s | Next: '+(c.next_cycle_at||'after completion')+' | Waiting intake: '+(c.intake_backlog??'?')+' | Waiting metadata: '+(c.backlog??'?')+(c.reason?' | '+c.reason:'');render()}
 catch(e){$('clock').textContent='Refresh failed; last displayed snapshot may be stale: '+e}}
 function reset(){page=1;render()}$('query').oninput=reset;for(const key of filters)$(key).onchange=reset;for(const th of document.querySelectorAll('th[data-key]')){th.onclick=()=>{if(sortKey===th.dataset.key)ascending=!ascending;else{sortKey=th.dataset.key;ascending=true}reset()};th.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();th.onclick()}}}$('previous').onclick=()=>{page--;render()};$('next').onclick=()=>{page++;render()};$('refresh').onclick=refresh;refresh();setInterval(refresh,30000);
-</script>'''
+</script></section>'''
 
+
+from library.activity_ui import ACTIVITY_PANE
+PAGE += ACTIVITY_PANE
 
 def handler(root: Path, *, resolution: Any = None) -> type[BaseHTTPRequestHandler]:
     import secrets
@@ -333,6 +336,10 @@ def handler(root: Path, *, resolution: Any = None) -> type[BaseHTTPRequestHandle
                 return
             if self.path == '/':
                 self.respond(200, PAGE.encode(), 'text/html; charset=utf-8')
+                return
+            if self.path == '/api/activity':
+                from library.activity import load_public
+                self.respond(200, json.dumps(load_public(root)).encode(), 'application/json; charset=utf-8')
                 return
             projection = read_yaml(root / 'evidence/dashboard.yaml')
             if self.path == '/api/status':

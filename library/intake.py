@@ -220,6 +220,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         state['origins'][oid] = origin
                         continue
                     inspected += 1
+                    from activity import report
+                    report('local', 'working', 'Validate file', item=oid, title=captured['items'][source].get('title', ''))
                     result = inspect_file(path, stable_seconds=stable_seconds)
                     if result['status'] == 'pending' and 'Nested container' in result.get('reason', ''):
                         from library.bundles import receive_bundle
@@ -271,4 +273,6 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
         if package.get('retirement'):
             origin['retirement'] = package['retirement']
     store.save(state, expected=state['revision'])
+    from activity import report
+    report('local', 'sleeping', 'Intake committed', progressed=bool(inspected))
     return store.read()

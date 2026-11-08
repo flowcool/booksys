@@ -250,6 +250,8 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
             match = re.search(r"/(\d+)-", urlsplit(source).path)
             if match is None or int(match.group(1)) <= checkpoint["after_id"]:
                 continue
+            from activity import report
+            report('collection', 'working', 'New source', item=source, title=record.get('title', ''))
             prior = journal["submissions"].get(source, {}).get("status")
             if downloader.downloads is not None and "page" not in record:
                 record["page"] = extract_page(fetch(source), source)
@@ -310,6 +312,8 @@ def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyloa
             status = downloader.call("status_server")
             if status["pause"] or not status["download"]:
                 raise CollectionError("pyLoad downloads are paused or disabled")
+            from activity import report
+            report('collection', 'working', 'Backfill source', item=source, title=job['items'].get(source, ''))
             if "*" not in records.get(source, {}).get("complete_hosters", []):
                 records[source] = resolve(fetch(source), source, None, fetch)
                 save(state_path, state)
@@ -317,7 +321,10 @@ def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyloa
             if downloader.downloads is not None and "page" not in records[source]:
                 records[source]["page"] = extract_page(fetch(source), source)
                 save(state_path, state)
+            from activity import report
+            report('collection', 'working', 'Backfill submission', item=source, title=records[source].get('title', ''))
             package_id = downloader.submit(source, records[source], journal, monitor_path)
+            report('collection', 'working', 'Backfill submitted', item=source, title=records[source].get('title', ''), progressed=True)
             job["submitted"] = sum(journal["submissions"].get(u, {}).get("status") == "queued" for u in job["items"])
             save(path, job)
             logging.info("Backfill queued: %d/%d items; package %d", job["submitted"], len(job["items"]), package_id)
@@ -347,23 +354,31 @@ def main() -> int:
     os.umask(0o077)
     credentials = json.loads(args.credentials.read_text())
     downloader = Pyload(args.pyload, credentials["api_key"])
+    from activity import bind, report
+    bind(args.directory / 'activity', 'collection', 'byparr')
     browser = Byparr(args.byparr)
     downloader.downloads, downloader.fetch_image = args.downloads, browser.cover
     while True:
+        report('collection', 'working', 'Collection cycle')
         cycle_ok = False
         try:
             backfill = run_backfill(args.directory, browser, downloader,
                                     max_items=None if args.once else 8)
             if backfill is not None and backfill.get("pending"):
                 logging.info("Backfill progress; collector lock released for 60 seconds: %s", json.dumps(backfill))
+                report('collection', 'sleeping', 'Between backfill batches', next_attempt=time.time() + 60)
                 time.sleep(60)
                 continue
             if backfill is not None:
                 logging.info("Backfill complete: %s", json.dumps(backfill))
             result = run_once(args.directory, browser, downloader, args.category)
             logging.info("Cycle complete: %s", json.dumps(result))
+            report('collection', 'sleeping', 'Novelty interval', next_attempt=time.time() + args.interval, progressed=bool(result.get('queued')))
             cycle_ok = True
         except Exception as exc:
+            report('collection', 'waiting' if 'Another pipeline' in str(exc) else 'blocked', 'Collection stopped',
+                   reason='Processing lock occupied' if 'Another pipeline' in str(exc) else 'Collection error; inspect worker evidence',
+                   next_attempt=time.time() + args.interval)
             logging.error("Cycle stopped: %s: %s", type(exc).__name__, exc)
             if args.once:
                 return 1
