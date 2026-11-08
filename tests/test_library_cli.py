@@ -104,6 +104,41 @@ class CLITests(unittest.TestCase):
             self.assertEqual(original.read_bytes(), before)
             self.assertTrue((root / 'evidence/review.yaml').exists())
 
+    def test_automatic_entrypoint_and_nonoverlapping_cycle(self):
+        import importlib.util
+        import contextlib
+        import io
+        from unittest.mock import patch
+        from library.catalog import lock
+        from test_library_intake import SOURCE
+        spec = importlib.util.spec_from_file_location('cycle_test', 'ops/library_cycle.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder);store, reception, original, asset = setup_library(root)
+            state = store.read();state['assets'][asset]['identity_result'] = {'status': 'identified', 'reason': 'Fixture proved edition'}
+            store.save(state, expected=state['revision'])
+            atomic_yaml(root / 'captured.yaml', {'items': {SOURCE: {'title': 'Album'}}})
+            atomic_yaml(root / 'submissions.yaml', {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}})
+            atomic_yaml(root / 'queue.yaml', [{'pid': 1, 'name': 'tracked', 'folder': 'package', 'links': [
+                {'fid': 1, 'name': original.name, 'status': 0, 'size': original.stat().st_size},
+                {'fid': 2, 'name': 'not-finished.cbz', 'status': 2, 'size': 10}]}])
+            argv = ['cycle', '--auto', '--root', str(root), '--reception', str(reception),
+                '--captured', str(root / 'captured.yaml'), '--submissions', str(root / 'submissions.yaml'),
+                '--queue', str(root / 'queue.yaml'), '--budget', '50']
+            with patch('sys.argv', argv), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(module.main(), 0)
+                self.assertEqual(json.loads(output.getvalue())['published'], 1)
+                operation = store.read()['editions']['edition']['publication']['operation']
+                with patch('library.intake.inspect_file', side_effect=AssertionError('repeated validation')):
+                    self.assertEqual(module.main(), 0)
+                self.assertEqual(store.read()['editions']['edition']['publication']['operation'], operation)
+                with lock(store.directory / 'library-cycle.lock'):
+                    with contextlib.redirect_stdout(io.StringIO()) as skipped:
+                        self.assertEqual(module.main(), 0)
+                    self.assertEqual(json.loads(skipped.getvalue())['status'], 'skipped')
+            self.assertEqual(len(store.read()['assets']), 1)
+            self.assertTrue((root / 'evidence/dashboard.yaml').exists())
+
     def test_snapshot_command_only_uses_queue_read(self):
         calls = []
         class Handler(BaseHTTPRequestHandler):

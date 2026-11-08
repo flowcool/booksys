@@ -136,8 +136,14 @@ class Providers:
                  budget: int = 12):
         self.cache, self.fetch, self.interval, self.budget = cache, fetch, interval, budget
         self.last_request = 0.0
+        self.events: list[dict[str, Any]] = []
 
     def get(self, url: str) -> dict[str, Any]:
+        result = self._get(url)
+        self.events.append({key: result[key] for key in ('status', 'http_status', 'reason') if key in result})
+        return result
+
+    def _get(self, url: str) -> dict[str, Any]:
         parts = urlsplit(url)
         if (parts.scheme != 'https' or parts.hostname not in
                 ('openlibrary.org', 'www.bdtheque.com', 'api.mangadex.org', 'catalogue.bnf.fr')

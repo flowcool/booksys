@@ -358,3 +358,32 @@ L'activation sur les fichiers existants exige un plan d'opération avec inventai
 estimation de capacité, sauvegarde, commandes versionnées, preuves et retour arrière.
 Le rattrapage historique n'est pas lancé par la livraison de cette spec.
 Le futur lecteur aura sa propre validation de rangement et d'import des métadonnées.
+
+## Accepted BETA/LAB operation amendment — 8 November 2026
+
+the operator confirmed a five-minute automatic library cycle and a read-only LAN page.
+The cycle selects new finished tracked Booksys inputs without manual asset lists.
+It reuses unchanged validated origins and all existing identity/publication gates.
+One nonblocking lock prevents overlap and duplicates. Each cycle validates at
+most eight new/changed inputs, processes at most eight assets and shares at most
+50 provider requests. Unfinished inputs and Lunii are excluded from processing.
+Temporary failures allow three attempts with 300/900-second delays. Successful
+uncertain identity is terminal pending; budget deferral spends no attempt.
+Save progress and expose backlog and interrupted/failed outcomes. Preserve sources.
+
+Expose an escaped compact read-only LAN table with filters, refresh, status,
+transfer, intake, OCR, identity, publication, reason and fiche links. Show snapshot
+age, cycle start/end/duration and next run. The page is saved state, not live
+pyLoad. GET/HEAD only; no raw private evidence or hoster links and no write routes.
+Use the existing YAML sources and stdlib tools, without another database/framework.
+
+The table supports per-stage filters, title/author/ISBN/series/reason search and
+column sorting. Every origin has a bounded fiche, including pending inputs.
+Expose collected bibliography, summary, genres/audience, candidates and source
+assertions with dates and qualified bibliographic links. Show unknowns and
+blockers. Label a local cover as the first file page, not a publisher image.
+Collapse technical details. Do not query new providers to render a fiche.
+
+Descriptions preserve manual corrections, then use the matching captured Bookys
+page, then available bibliographic text. Show the selected provenance. Strip
+source HTML to bounded text and show explicit absence when no description exists.

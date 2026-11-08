@@ -59,3 +59,24 @@ La classification par LLM reste exclue. Les connecteurs restent à qualifier.
 Références : [Kavita metadata](https://wiki.kavitareader.com/guides/metadata/general/),
 [Kavita comics](https://wiki.kavitareader.com/guides/metadata/comics/),
 [ComicTagger](https://github.com/comictagger/comictagger).
+
+## Accepted lab operation amendment — 8 November 2026
+
+the operator confirmed automatic new-input processing and a read-only LAN page after
+scope review. Reuse the existing catalogue and commands. One user service owns a
+sequential cycle thread and a responsive stdlib HTTP server. Start each cycle
+five minutes after completion; use one cycle lock, incremental validation and
+bounded per-cycle work. Keep successful uncertain identities pending; retry only
+temporary failures, three attempts with 300/900-second delays. Request-budget
+deferral is scheduling, not a failed attempt. Preserve all identity gates.
+
+The page is a compact derived product snapshot, not live pyLoad and not another
+source of truth. It exposes transfer/intake/OCR/identity/publication status, reasons,
+fiche links and age. Serve no actions, raw evidence, hoster links or filesystem
+browser. This keeps the lab usable without a framework or another database.
+
+Each origin has a detailed derived fiche, including pending inputs. Explicit
+bounded fields preserve the distinction between confirmed identity, candidates,
+assertions and overrides. Missing data stays unknown. Bibliographic links use a
+source allowlist; local first-page images have explicit provenance. Vanilla JS
+implements per-stage filters, search and column sorting without a framework.

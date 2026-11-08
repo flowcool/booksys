@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
 from library.catalog import Catalog, LibraryError, digest, now
-from library.readers import inspect_file
+from library.readers import inspect_file, fingerprint, sha256
 
 
 def reception_path(root: Path, folder: str, name: str) -> Path:
@@ -20,12 +21,24 @@ def reception_path(root: Path, folder: str, name: str) -> Path:
 
 
 def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[str, Any],
-            queue: list[dict[str, Any]], *, stable_seconds: float = 2) -> dict[str, Any]:
+            queue: list[dict[str, Any]], *, stable_seconds: float = 2,
+            incremental: bool = False, inspection_limit: int | None = None) -> dict[str, Any]:
     # The caller obtains immutable snapshots without holding a collector lock.
     # Parsing and hashing happen before the short catalogue compare-and-save.
     state = store.read()
     packages = {int(p['pid']): p for p in queue}
-    for source, submission in journal.get('submissions', {}).items():
+    inspected = 0
+    submissions = list(journal.get('submissions', {}).items())
+    if incremental:
+        def priority(entry: tuple[str, Any]) -> tuple[bool, int]:
+            source, submission = entry
+            files = packages.get(submission.get('package_id'), {}).get('links', [])
+            fresh = [item['fid'] for item in files if item.get('status') == 0 and
+                     not state['origins'].get(digest({'source': source, 'pid': submission.get('package_id'),
+                                                     'fid': item['fid']}), {}).get('sha256')]
+            return bool(fresh), max(fresh, default=0)
+        submissions.sort(key=priority, reverse=True)
+    for source, submission in submissions:
         host = urlsplit(source).hostname or ''
         if (source not in captured.get('items', {}) or submission.get('status') != 'queued'
                 or not (host == 'bookys-ebooks.com' or host.endswith('.bookys-ebooks.com'))):
@@ -46,8 +59,11 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             if name == 'fiche.md' or name.startswith('couverture.'):
                 continue
             origin = {'source': source, 'pid': pid, 'fid': fid,
-                      'path': str(Path(package['folder']) / name), 'sha256': None,
-                      'observed_at': now(), 'availability': 'pending'}
+                      'path': str(Path(package['folder']) / name),
+                      'sha256': state['origins'].get(oid, {}).get('sha256'),
+                      'observed_at': now(), 'availability': 'pending',
+                      'transfer_status': item.get('status'),
+                      'transfer_error': bool(item.get('error'))}
             try:
                 path = reception_path(root, package['folder'], name)
                 # Exact pinned pyLoad status: core/datatypes/pyfile.py: finished = 0.
@@ -58,12 +74,62 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                 elif path.stat().st_size != item.get('size'):
                     origin['reason'] = 'pyLoad size and reception size differ'
                 else:
+                    stamp = list(fingerprint(path))
+                    previous = state['origins'].get(oid, {})
+                    # Recover only the unique canonical reverse link lost by an older budget deferral.
+                    if (incremental and not previous.get('sha256')
+                            and previous.get('path') == origin['path']
+                            and previous.get('reason') in ('Intake budget deferred', 'Ambiguous canonical origin references')):
+                        inverse = [key for key, asset in state['assets'].items()
+                                   if oid in asset.get('origins', [])]
+                        if len(inverse) > 1:
+                            origin['reason'] = 'Ambiguous canonical origin references'
+                            state['origins'][oid] = origin
+                            continue
+                        if len(inverse) == 1:
+                            previous = {**previous, 'sha256': inverse[0]}
+                            origin['sha256'] = inverse[0]
+                    known = state['assets'].get(previous.get('sha256'), {})
+                    if (incremental and 'fingerprint' not in previous
+                            and (previous.get('availability') == 'validated' or
+                                 previous.get('reason') == 'Intake budget deferred')
+                            and previous.get('path') == origin['path']
+                            and known.get('status') == 'validated' and known.get('size') == stamp[2]
+                            and known.get('format') == path.suffix.lower().lstrip('.')
+                            and sha256(path) == previous['sha256']
+                            and sha256(path) == previous['sha256'] and list(fingerprint(path)) == stamp):
+                        state['origins'][oid] = {**previous, 'fingerprint': stamp,
+                            'availability': 'validated', 'reason': '',
+                            'observed_at': origin['observed_at'], 'transfer_status': 0,
+                            'transfer_error': bool(item.get('error'))}
+                        continue
+                    temporary = any(text in previous.get('reason', '').lower() for text in
+                        ('isolated reader failed', 'resource limit exceeded', 'timed out'))
+                    retry_due = (temporary and int(previous.get('intake_attempts', 1)) < 3
+                                 and previous.get('intake_next_attempt', 0) <= time.time())
+                    if (incremental and not retry_due and previous.get('fingerprint') == stamp
+                            and previous.get('path') == origin['path']
+                            and previous.get('availability') in ('validated', 'rejected', 'pending')):
+                        if previous.get('availability') == 'validated' and previous.get('sha256') not in state['assets']:
+                            raise LibraryError('Cached origin references missing asset')
+                        state['origins'][oid] = {**previous, 'observed_at': origin['observed_at'], 'transfer_status': 0, 'transfer_error': bool(item.get('error'))}
+                        continue
+                    if inspection_limit is not None and inspected >= inspection_limit:
+                        origin['reason'] = 'Intake budget deferred'
+                        state['origins'][oid] = origin
+                        continue
+                    inspected += 1
                     result = inspect_file(path, stable_seconds=stable_seconds)
-                    origin.update(availability=result['status'], reason=result.get('reason', ''),
-                                  sha256=result.get('sha256'))
+                    count = int(previous.get('intake_attempts', 0)) + 1 if previous.get('fingerprint') == stamp else 1
+                    origin.update(intake_attempts=count, intake_next_attempt=time.time() + (300 if count == 1 else 900))
+                    if list(fingerprint(path)) == stamp:
+                        origin['fingerprint'] = stamp
+                    origin.update(availability=result['status'], reason=result.get('reason', ''))
+                    if not origin['sha256']:
+                        origin['sha256'] = result.get('sha256')
                     if result['status'] == 'validated':
                         key = result['sha256']
-                        old_origin = state['origins'].get(oid)
+                        old_origin = previous
                         if old_origin and old_origin['sha256'] and old_origin['sha256'] != key:
                             raise LibraryError('Origin bytes changed after identification')
                         asset = state['assets'].setdefault(key, {**result, 'origins': [], 'assertions': [],
@@ -81,6 +147,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         asset['captured_hints'][source] = captured['items'][source]
             except (LibraryError, OSError) as exc:
                 origin.update(availability='rejected', reason=str(exc))
+                previous_hash = state['origins'].get(oid, {}).get('sha256')
+                if previous_hash:
+                    origin['sha256'] = previous_hash
             state['origins'][oid] = origin
     store.save(state, expected=state['revision'])
     return store.read()

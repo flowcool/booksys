@@ -6,11 +6,12 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import time
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from library.catalog import Catalog, LibraryError, atomic_yaml
+from library.catalog import Catalog, LibraryError, atomic_yaml, lock, now
 from library.cli import parser as cli_parser, run
 from library.runtime import lab_preflight
 
@@ -28,7 +29,22 @@ def main() -> int:
     parser.add_argument('--asset', action='append', default=[], help='Selected SHA-256; others stay pending')
     parser.add_argument('--printed', action='store_true', help='Bounded OCR on selected assets only')
     parser.add_argument('--budget', type=int, default=2, help='Total provider request budget for this cycle')
+    parser.add_argument('--auto', action='store_true', help='Bounded new-input processing; uncertain identities are not retried')
     args = parser.parse_args()
+    inputs = (args.captured, args.submissions, *(p for p in (args.queue, args.credentials) if p))
+    try:
+        lab_preflight(args.reception, args.root / 'library', args.root / 'state', inputs)
+        with lock(args.root / 'state/library-cycle.lock', blocking=False):
+            return cycle(args)
+    except LibraryError as exc:
+        value = {'status': 'skipped' if str(exc) == 'Another library operation is active' else 'blocked',
+                 'reason': str(exc)}
+        print(json.dumps(value))
+        return 0 if value['status'] == 'skipped' else 2
+
+
+def cycle(args: argparse.Namespace) -> int:
+    started_at, started = now(), time.monotonic()
     state, library = args.root / 'state', args.root / 'library'
     snapshots, evidence = args.root / 'snapshots', args.root / 'evidence'
     try:
@@ -62,14 +78,25 @@ def main() -> int:
             return run(cli_parser().parse_args(['--state', str(state), *map(str, arguments)]))
 
         common = ['--lab', '--reception', args.reception, '--library', library]
-        command('intake', *common, '--captured', snapshots / 'captured.yaml',
-                '--submissions', snapshots / 'submissions.yaml', '--queue', snapshots / 'queue.yaml')
+        if args.auto:
+            from library.intake import receive
+            from library.cli import load
+            receive(Catalog(state), args.reception, load(snapshots / 'captured.yaml'),
+                    load(snapshots / 'submissions.yaml'), load(snapshots / 'queue.yaml'),
+                    incremental=True, inspection_limit=8)
+        else:
+            command('intake', *common, '--captured', snapshots / 'captured.yaml',
+                    '--submissions', snapshots / 'submissions.yaml', '--queue', snapshots / 'queue.yaml')
         command('activate', *common)
         command('reconcile', *common)
         from library.metadata import Providers, enrich
         providers = Providers(state / 'library-provider-cache', budget=min(50, max(0, args.budget)))
         store = Catalog(state)
-        for asset in dict.fromkeys(args.asset):
+        automatic = {}
+        if args.auto:
+            from library.automatic import process_assets
+            automatic = process_assets(store, args.reception, library, providers)
+        for asset in dict.fromkeys(args.asset if not args.auto else []):
             if asset not in store.read()['assets']:
                 raise LibraryError('Selected asset is absent from tracked intake')
             if args.printed:
@@ -87,7 +114,8 @@ def main() -> int:
                     and {v['edition'] for v in enriched['variants'].values() if v['asset'] == asset} == {identity['edition']}):
                 command('publish', '--asset', asset, *common)
         command('reconcile', *common)
-        command('report', '--output', evidence / 'review.yaml')
+        if not args.auto:
+            command('report', '--output', evidence / 'review.yaml')
         current = store.read()
         published = {edition['publication']['asset'] for edition in current['editions'].values()
                      if edition.get('publication')}
@@ -96,15 +124,25 @@ def main() -> int:
             kind = ('rejected' if origin['availability'] == 'rejected' else
                     'published' if origin['availability'] == 'validated' and origin['sha256'] in published else 'pending')
             origin_counts[kind] += 1
-        summary = {'status': 'lab', 'assets': len(current['assets']), 'origins': len(current['origins']),
+        intake_backlog = sum(o.get('reason') == 'Intake budget deferred' for o in current['origins'].values())
+        summary = {'status': 'lab', 'started_at': started_at, 'finished_at': now(),
+                   'duration_seconds': round(time.monotonic() - started, 3), **automatic,
+                   'intake_backlog': intake_backlog, 'assets': len(current['assets']), 'origins': len(current['origins']),
                    'published': len(published), 'pending_assets': len(set(current['assets']) - published),
                    'origin_counts': origin_counts, 'report': str(evidence / 'review.md'),
                    'concurrent_writer_reserve_guaranteed': False}
         atomic_yaml(evidence / 'cycle.yaml', summary)
+        from library.web import build_projection
+        atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
         print(json.dumps(summary))
         return 0
     except (LibraryError, OSError, ValueError, KeyError, TypeError) as exc:
-        print(json.dumps({'status': 'blocked', 'reason': str(exc)}))
+        failure = {'status': 'blocked', 'reason': str(exc), 'started_at': started_at,
+                   'finished_at': now(), 'duration_seconds': round(time.monotonic() - started, 3)}
+        atomic_yaml(evidence / 'cycle.yaml', failure)
+        from library.web import build_projection
+        atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
+        print(json.dumps(failure))
         return 2
 
 
