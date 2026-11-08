@@ -39,7 +39,7 @@ class PrintedIdentityTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertEqual(identify_printed(printed, {}, [{**candidate, field: wrong}])['status'], 'pending')
         conflicting = copy.deepcopy(printed)
-        conflicting['pages'][0]['text'] += '\nISBN 9782373494730'
+        conflicting['pages'][0]['text'] = 'ISBN 9782871297833 / ISBN 9782373494730\nTakeshi Konomi'
         self.assertEqual(identify_printed(conflicting, {}, [candidate])['status'], 'pending')
         for embedded in [{'LanguageISO': 'en'}, {'Publisher': 'Other'}, {'Number': '3'},
                          {'ISBN': '9782373494730'}, {'EditionRevision': 'Revised'}]:
@@ -93,6 +93,18 @@ class PrintedIdentityTests(unittest.TestCase):
                     missing = read_printed(path, inspection)
                 self.assertEqual(missing['status'], 'unavailable')
                 self.assertNotIn('pages', missing)
+            from unittest.mock import patch
+            import subprocess
+            failures = [subprocess.TimeoutExpired('docker', 180),
+                        subprocess.CompletedProcess([], 0, b'stopped', b''),
+                        subprocess.CompletedProcess([], 1, b'', b'No such container')]
+            with patch.dict(os.environ, {'BOOKSYS_READER_IMAGE': 'owned-fixture'}), \
+                 patch('library.printed.bounded_run', side_effect=failures) as engine:
+                with self.assertRaisesRegex(LibraryError, 'wall time'):
+                    read_printed(path, inspection)
+            name = engine.call_args_list[0].args[0][engine.call_args_list[0].args[0].index('--name') + 1]
+            self.assertEqual(engine.call_args_list[1].args[0], ['docker', 'stop', '--time', '1', name])
+            self.assertEqual(engine.call_args_list[2].args[0][-1], name)
             path.write_bytes(b'changed')
             with self.assertRaises(LibraryError):
                 read_printed(path, inspection)
@@ -132,3 +144,36 @@ class PrintedIdentityTests(unittest.TestCase):
             with self.subTest(case=content[:40]), tempfile.TemporaryDirectory() as folder:
                 result = Providers(Path(folder), fetch=lambda url: (200, content), interval=0).source('bnf', '9782871297833')
                 self.assertEqual(result['status'], 'unavailable', result)
+
+    def test_bounded_process_rejects_stdout_stderr_and_timeout(self):
+        import subprocess
+        import sys
+        from library.process import bounded_run
+        from library.catalog import LibraryError
+        for stream in ['stdout', 'stderr']:
+            with self.subTest(stream=stream), self.assertRaises(LibraryError):
+                bounded_run([sys.executable, '-c', f'import sys; sys.{stream}.write("x"*10000)'],
+                            timeout=5, stdout_limit=128, stderr_limit=128)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            bounded_run([sys.executable, '-c', 'import time; time.sleep(10)'], timeout=.05)
+
+    def test_empty_ocr_does_not_replace_valid_comicinfo_identity(self):
+        from library.metadata import enrich
+        from test_library_metadata import EMBEDDED, CANDIDATE
+        from test_library_publish import setup_library
+        import json
+        with tempfile.TemporaryDirectory() as folder:
+            store, _, _, asset = setup_library(Path(folder))
+            state = store.read()
+            state['works'], state['editions'], state['variants'] = {}, {}, {}
+            state['assets'][asset].pop('identity')
+            state['assets'][asset]['embedded'] = EMBEDDED
+            state['assets'][asset]['printed'] = {'status': 'ok', 'asset': asset, 'pages': [{'text': 'unreadable'}]}
+            state['assets'][asset]['captured_hints'] = {}
+            store.save(state, expected=state['revision'])
+            class FixtureProvider:
+                def discover(self, title): return {'status': 'ok', 'candidates': []}
+                def resolve_discovery(self, discovery): return []
+                def edition(self, code): return {'status': 'ok', 'candidate': CANDIDATE}
+            result = enrich(store, asset, FixtureProvider(), [])
+            self.assertEqual(result['assets'][asset]['identity_result']['status'], 'identified')

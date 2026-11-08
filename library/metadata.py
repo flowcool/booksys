@@ -363,7 +363,13 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
                 candidates.append(response['candidate'])
         candidates = list({(candidate['source'], candidate['edition_ref']): candidate
                            for candidate in candidates}.values())
-        result = identify_printed(printed, embedded, candidates)
+        printed_result = identify_printed(printed, embedded, candidates)
+        # Absence of OCR facts must not disable the existing ComicInfo route.
+        # A visible ISBN or malformed ISBN can block it.
+        if codes or invalid:
+            result = printed_result
+        else:
+            result = identify(embedded, candidates)
     else:
         result = identify(embedded, candidates)
     asset['identity_result'] = result

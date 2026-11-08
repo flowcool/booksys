@@ -13,6 +13,7 @@ from typing import Any
 from library.catalog import LibraryError
 from library.reader_worker import inspect_archive
 from library.readers import sha256
+from library.process import bounded_run
 
 
 def main() -> None:
@@ -42,12 +43,16 @@ def main() -> None:
         if actual != selected or set(images) != set(wanted):
             raise LibraryError('OCR window differs from validated manifest')
         tool = os.environ.get('BOOKSYS_TESSERACT', '/usr/bin/tesseract')
-        version = subprocess.run([tool, '--version'], capture_output=True, timeout=5, check=True)
+        version = bounded_run([tool, '--version'], timeout=5, stdout_limit=8192)
+        if version.returncode:
+            raise LibraryError('OCR version probe failed')
         pages = []
         for page in selected:
-            result = subprocess.run([tool, 'stdin', 'stdout', '-l', 'eng+fra', '--psm', '3'],
-                input=images[page['name']], capture_output=True, timeout=30, check=True,
+            result = bounded_run([tool, 'stdin', 'stdout', '-l', 'eng+fra', '--psm', '3'],
+                input=images[page['name']], timeout=30, stdout_limit=65536,
                 env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
+            if result.returncode:
+                raise LibraryError('OCR engine failed')
             if len(result.stdout) > 65536:
                 raise LibraryError('OCR text output limit')
             pages.append({**page, 'text': result.stdout.decode('utf-8')})
