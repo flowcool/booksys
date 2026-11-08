@@ -5,6 +5,8 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import time
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -15,6 +17,20 @@ from library.catalog import Catalog, LibraryError, lock
 from library.retirement import Retirement
 from library.runtime import lab_preflight
 from pipeline import Pyload
+
+
+class PacedPyload(Pyload):
+    """Keep a bulk controller below the pinned per-client API rate limit."""
+
+    def __init__(self, endpoint: str, key: str, interval: float):
+        super().__init__(endpoint, key)
+        self.interval = interval
+        self.next_call = 0.0
+
+    def call(self, method: str, *, write: bool = False, **parameters: Any) -> Any:
+        time.sleep(max(0.0, self.next_call - time.monotonic()))
+        self.next_call = time.monotonic() + self.interval
+        return super().call(method, write=write, **parameters)
 
 
 def configured_scripts() -> Path:
@@ -39,12 +55,15 @@ def main() -> int:
     parser.add_argument('--limit', type=int, default=1)
     parser.add_argument('--scan-limit', type=int, default=8)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--api-interval', type=float, default=.7, help='Minimum seconds between native API requests')
     parser.add_argument('--reconcile-only', action='store_true', help='Confirm absent targets from pending intents; never resend')
     args = parser.parse_args()
     try:
         lab_preflight(args.reception, args.root / 'library', args.root / 'state',
                       (args.captured, args.submissions, args.credentials))
-        client = Pyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'])
+        if not .7 <= args.api_interval <= 60:
+            raise LibraryError('API interval must be between 0.7 and 60 seconds')
+        client = PacedPyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'], args.api_interval)
         service = Retirement(client, Catalog(args.root / 'state'), args.reception,
                              args.submissions, args.captured, scripts=args.pyload_scripts or configured_scripts())
         with lock(args.root / 'state/library-cycle.lock', blocking=False):

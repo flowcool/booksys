@@ -78,6 +78,28 @@ def fixture(root):
 
 
 class RetirementTests(unittest.TestCase):
+    def test_bulk_native_calls_are_spaced_and_failed_writes_are_not_retried(self):
+        from ops.retire_packages import PacedPyload
+        clock, starts = [10.0], []
+        def sleep(seconds):
+            clock[0] += seconds
+        def call(method, **values):
+            starts.append(clock[0])
+            if method == 'delete_packages':
+                raise OSError('Uncertain response')
+            return []
+        client = PacedPyload('http://127.0.0.1:8000', 'fixture', .7)
+        with patch('ops.retire_packages.time.monotonic', side_effect=lambda: clock[0]), \
+             patch('ops.retire_packages.time.sleep', side_effect=sleep), \
+             patch('pipeline.Pyload.call', side_effect=call) as native:
+            client.call('get_queue_data')
+            client.call('get_collector_data')
+            with self.assertRaisesRegex(OSError, 'Uncertain'):
+                client.call('delete_packages', write=True, package_ids=[1])
+        self.assertEqual(native.call_count, 3)
+        self.assertAlmostEqual(starts[1] - starts[0], .7)
+        self.assertAlmostEqual(starts[2] - starts[1], .7)
+
     def test_multipart_history_requires_every_part_and_container_end_proof(self):
         from library.readers import sha256, fingerprint
         from library.catalog import digest
