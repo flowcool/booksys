@@ -240,7 +240,7 @@ class RetirementTests(unittest.TestCase):
             self.assertTrue((original.parent / 'fiche.md').is_file())
 
     def test_active_processing_hooks_and_unexpected_missing_packages_block_removal(self):
-        for case in ('active', 'extract', 'scripts', 'missing', 'changed-url', 'changed-bytes'):
+        for case in ('active', 'extract', 'scripts', 'missing', 'changed-url', 'changed-bytes', 'unknown-state', 'changed-fid'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 store, reception, collector, original, client = fixture(Path(directory))
                 if case == 'active': client.active = [{'fid': 10, 'package_id': 1}]
@@ -249,6 +249,8 @@ class RetirementTests(unittest.TestCase):
                 if case == 'missing': client.packages.clear()
                 if case == 'changed-url': client.packages[1]['links'][0]['url'] = 'https://other.example/unowned'
                 if case == 'changed-bytes': original.write_bytes(b'changed')
+                if case == 'unknown-state': client.packages[1]['links'][0]['status'] = 99
+                if case == 'changed-fid': client.packages[1]['links'][0]['fid'] = 999
                 service = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml')
                 self.assertEqual(service.process(SOURCE, apply=True)['outcome'], 'blocked')
                 self.assertEqual(client.removed, [])
@@ -276,9 +278,17 @@ class RetirementTests(unittest.TestCase):
             atomic_yaml(collector / 'mirror-routing.yaml', {'schema': 1, 'packages': {'1': {
                 'source': SOURCE, 'phase': 'active', 'kind': 'fallback', 'attempt_pid': 2,
                 'attempt_name': attempt['name'], 'attempt_folder': 'fallback',
+                'original_files': [[10, client.packages[1]['links'][0]['url']]],
+                'attempt_files': [[20, 'https://other.example/album']],
                 'fallback_links': ['https://other.example/album']}}})
             receive(store, reception, captured, journal, [attempt], stable_seconds=.001, incremental=True)
             service = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml')
+            client.packages[1]['links'][0]['status'] = 99
+            self.assertEqual(service.process(SOURCE, apply=True)['outcome'], 'blocked')
+            client.packages[1]['links'][0]['status'] = 0
+            client.packages[1]['links'][0]['fid'] = 999
+            self.assertEqual(service.process(SOURCE, apply=True)['outcome'], 'blocked')
+            client.packages[1]['links'][0]['fid'] = 10
             result = service.process(SOURCE, apply=True)
             self.assertEqual(result['outcome'], 'retired', result)
             self.assertEqual(sorted(client.removed), [1, 2])

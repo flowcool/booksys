@@ -192,6 +192,9 @@ class Retirement:
         route = routing['packages'].get(str(package['pid']), {})
         if route and route.get('phase') not in ('stopped', 'active', 'restored'):
             return {'outcome': 'blocked', 'reason': 'Mirror routing is not settled'}
+        from mirror_routing import package_signature
+        if route and route.get('original_files') != package_signature(package):
+            return {'outcome': 'blocked', 'reason': 'Original routing file IDs changed'}
         owned = [package]
         winner = package
         sets = list(host_sets(record).values())
@@ -201,6 +204,7 @@ class Retirement:
             attempt = next((p for p in packages if p['pid'] == route['attempt_pid']), None)
             if (route.get('phase') != 'active' or route.get('source') != source or attempt is None
                     or attempt['name'] != route['attempt_name'] or attempt['folder'] != route['attempt_folder']
+                    or route.get('attempt_files') != package_signature(attempt)
                     or sorted(link_identity(f['url']) for f in attempt['links']) !=
                        sorted(link_identity(u) for u in route['fallback_links'])):
                 return {'outcome': 'blocked', 'reason': 'Fallback ownership or completion state changed'}
@@ -211,6 +215,11 @@ class Retirement:
             if str(item['fid']) in route.get('input_folders', {}):
                 item['input_folder'] = route['input_folders'][str(item['fid'])]
         state = self.store.read()
+        if not route:
+            original_fids = {o['fid'] for o in state['origins'].values()
+                             if o['source'] == source and o['pid'] == package['pid'] and not o.get('parent_origin')}
+            if {f['fid'] for f in package['links']} != original_fids:
+                return {'outcome': 'blocked', 'reason': 'Original file IDs differ from intake evidence'}
         origins = {o['fid']: oid for oid, o in state['origins'].items()
                    if o['source'] == source and o['pid'] == winner['pid'] and not o.get('parent_origin')}
         by_url = {link_identity(f['url']): f for f in winner['links']}
@@ -238,7 +247,8 @@ class Retirement:
             return {'outcome': 'blocked', 'reason': 'Extraction or deletion hooks are not qualified'}
         if any(d['package_id'] in ids for d in self.client.call('status_downloads')):
             return {'outcome': 'blocked', 'reason': 'Target processing is active'}
-        if any(f['status'] in (7, 10, 12, 13, 14) for p in owned for f in p['links']):
+        if any(type(f.get('status')) is not int or f['status'] not in (0, 1, 2, 3, 4, 5, 6, 8, 9)
+               for p in owned for f in p['links']):
             return {'outcome': 'blocked', 'reason': 'Target link processing is active or unknown'}
         for p in owned:
             for item in p['links']:
