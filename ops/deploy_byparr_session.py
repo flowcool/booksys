@@ -66,6 +66,8 @@ def main() -> None:
     compose = json.loads(run("docker", "compose", "-p", "booksys", "--project-directory",
                             str(args.runtime_root.resolve()), "-f", str(args.runtime_root / "compose.runtime.yaml"),
                             "config", "--format", "json"))
+    if compose["services"]["byparr"]["image"] != "booksys-byparr:local":
+        raise RuntimeError("Integrate the session runtime configuration before deployment")
     old_image = browser["Image"]
     run("docker", "image", "inspect", old_image)
     print(json.dumps({"worker": worker["Id"], "previous_browser": browser["Id"],
@@ -110,6 +112,7 @@ def main() -> None:
         after = inspect()
         if after[0]["Id"] != worker["Id"] or after[2]["Id"] != downloader["Id"]:
             raise RuntimeError("Worker or downloader changed; inspect before resuming")
+        run("docker", "image", "tag", candidate, "booksys-byparr:local")
         run("docker", "start", worker["Id"])
         proof = {"worker_preserved": worker["Id"], "downloader_preserved": downloader["Id"],
                  "candidate_image": candidate, "browser": after[1]["Id"], "journals_unchanged_before_resume": True,
