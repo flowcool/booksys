@@ -1,5 +1,9 @@
 # French comic metadata tooling reuse
 
+Current accepted reuse direction: [spec 0003](../specs/0003-work-identification-and-metadata.md).
+The research shortlist below precedes the grilling. The accepted choice is to
+qualify reusable components, rather than adopt a complete catalogue application.
+
 Owner: `private-work-item`. Operator research-first direction: 8 November 2026.
 
 ## Goal and boundary

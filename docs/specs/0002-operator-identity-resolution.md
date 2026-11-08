@@ -1,5 +1,10 @@
 # Résoudre une identité depuis la page opérateur
 
+Current work-level confirmation and admission rules are in
+[spec 0003](0003-work-identification-and-metadata.md). This earlier specification
+still describes exact-edition decisions, corrections and their recovery.
+
+
 Document de revue, en français. Date : 8 novembre 2026.
 Statut : **périmètre et arbitrages validés par the operator le 8 novembre 2026 ; implémentation différée**.
 the operator a validé la résolution depuis la page, avec preuves et choix de variante.

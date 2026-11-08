@@ -1,5 +1,10 @@
 # Bibliothèque enrichie indépendante du lecteur
 
+The work-before-edition decision is superseded in part by
+[ADR 0003](0003-work-identification-before-edition.md). Keep this record for the
+earlier edition-confirmation model and its integrity/recovery rationale.
+
+
 Current operating scope: BETA/LAB.
 The lab uses retained originals and journaled recovery, without an external
 backup or extra account/deployment/GO. Production prerequisites are separate.

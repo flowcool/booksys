@@ -27,7 +27,7 @@ _Avoid_: File format, scan
 
 **Variant**:
 A distinct digital representation of the same edition, such as another scan or file format.
-V1 admits only a complete representation in one file; multipart representations remain pending.
+Use this term when the common edition is established.
 _Avoid_: Edition, identical mirror
 
 **Asset**:
@@ -39,11 +39,11 @@ The original bytes received by the shared downloader, including Booksys and Luni
 Generated fiches and covers stored beside those files are not reception assets.
 
 **Library**:
-The selected, validated CBZ copies prepared for a future reader.
+Managed, validated CBZ copies prepared for a future reader. A copy can have an identified work and an unknown edition, or remain unidentified.
 _Avoid_: Reception, pyLoad queue
 
 **Promotion**:
-Admission of a validated asset to the library as the selected variant of an edition.
+Admission of a validated asset as the selected variant of a confirmed edition.
 
 **Assertion**:
 A metadata value with its source and retrieval date. An assertion can disagree with another source.
@@ -69,3 +69,28 @@ _Avoid_: Published integral, multipart representation
 **Bundle member**:
 One complete file retained from a download bundle. Each member has its own asset identity and keeps its relationship to the bundle and source record.
 _Avoid_: Automatically identified edition
+
+**Work identification**:
+Recognition of an album by a reliable title, with series and issue when they exist.
+It does not assert an exact edition.
+_Avoid_: Edition confirmation, filename guess
+
+**Edition confirmation**:
+Recognition of the exact published version using evidence that supports its distinguishing details.
+_Avoid_: Work identification, highest-ranked candidate
+
+**File version**:
+A distinct file representing a work. Its edition can remain unknown.
+_Avoid_: Exact duplicate, proven same-edition variant
+
+**Classification**:
+Organization of an identified work by supported family, series and issue, with genres as tags.
+_Avoid_: Exact-edition confirmation, one physical copy per genre
+
+**Library admission**:
+Retention of a validated CBZ in the managed collection, including an unidentified holding area.
+_Avoid_: Exact-edition confirmation
+
+**Unidentified copy**:
+A technically valid managed comic whose work identity is not established.
+_Avoid_: Corrupt file, missing download

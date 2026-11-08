@@ -1,5 +1,11 @@
 # Architecture
 
+For the accepted work-level identification and classification change, read
+[spec 0003](specs/0003-work-identification-and-metadata.md) and
+[ADR 0003](adr/0003-work-identification-before-edition.md). The earlier edition
+confirmation path remains valid for evidence that supports an exact edition.
+
+
 The separate portable-library component is described in
 library qualification and library tools.
 It reads captured state and known submission origins. It never writes the collector

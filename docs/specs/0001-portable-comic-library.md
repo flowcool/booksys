@@ -1,5 +1,10 @@
 # Bibliothèque BD locale et enrichissement — spec V1
 
+Current accepted identification/classification policy: [spec 0003](0003-work-identification-and-metadata.md).
+It supersedes the exact-edition admission requirement below. Earlier integrity and
+recovery rules remain. This document also records the earlier delivery scope.
+
+
 Current operating scope: BETA/LAB.
 The lab uses retained originals and journaled recovery, without an external
 backup or extra account/deployment/GO. Production prerequisites are separate.
