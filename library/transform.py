@@ -42,14 +42,9 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
             '--entrypoint', '/app/.venv/bin/python', image, '-m', 'library.reader_worker',
             '/input', source.suffix.lower(), '--transform', '/output/book.cbz']
     else:
-        command = ['bwrap', '--unshare-all', '--die-with-parent', '--new-session', '--ro-bind', '/', '/',
-            '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--clearenv',
-            '--setenv', 'PYTHONPATH', str(Path(__file__).resolve().parent.parent),
-            '--ro-bind', str(source), '/tmp/input', '--bind', str(destination), '/tmp/output']
-        if os.environ.get('BOOKSYS_UNRAR'):
-            command += ['--setenv', 'BOOKSYS_UNRAR', os.environ['BOOKSYS_UNRAR']]
-        command += [sys.executable, '-m', 'library.reader_worker', '/tmp/input',
-                    source.suffix.lower(), '--transform', '/tmp/output/book.cbz']
+        from library.sandbox import native_prefix, PYTHON
+        command = native_prefix(source, output=destination) + [PYTHON, '-m', 'library.reader_worker',
+            '/tmp/input', source.suffix.lower(), '--transform', '/tmp/output/book.cbz']
     request = json.dumps({'comicinfo': base64.b64encode(xml).decode()}).encode()
     import time
     started = time.monotonic()

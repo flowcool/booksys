@@ -110,15 +110,9 @@ def read_printed(path: Any, inspection: dict[str, Any]) -> dict[str, Any]:
     selected = list({p['name']: p for p in [*manifest[:4], *manifest[-4:]]}.values())
     if not selected:
         raise LibraryError('Printed evidence requires a validated page manifest')
-    command = ['bwrap', '--unshare-all', '--die-with-parent', '--new-session',
-               '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
-               '--clearenv', '--setenv', 'PYTHONPATH', str(Path(__file__).resolve().parent.parent)]
-    for name, target in [('BOOKSYS_UNRAR', 'BOOKSYS_UNRAR'), ('BOOKSYS_TESSERACT', 'BOOKSYS_TESSERACT'),
-                         ('BOOKSYS_TESSDATA', 'TESSDATA_PREFIX'), ('BOOKSYS_OCR_LIBDIR', 'LD_LIBRARY_PATH')]:
-        if os.environ.get(name):
-            command += ['--setenv', target, os.environ[name]]
-    command += ['--ro-bind', str(path), '/tmp/input', sys.executable,
-                '-m', 'library.printed_worker', '/tmp/input', '.' + inspection['format']]
+    from library.sandbox import native_prefix, PYTHON
+    command = native_prefix(path, ocr=True) + [PYTHON, '-m', 'library.printed_worker',
+                                             '/tmp/input', '.' + inspection['format']]
     image = os.environ.get('BOOKSYS_READER_IMAGE')
     container_name = None
     if image:

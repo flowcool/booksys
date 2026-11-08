@@ -1,5 +1,9 @@
 # Bibliothèque BD locale et enrichissement — spec V1
 
+Current operating scope: BETA/LAB.
+The lab uses retained originals and journaled recovery, without an external
+backup or extra account/deployment/GO. Production prerequisites are separate.
+
 Document personnel de revue, en français. Date : 8 novembre 2026.
 Statut : validé par the operator le 8 novembre 2026 après revue critique Claude.
 Les choix ci-dessous proviennent du grilling. Ce document décrit une cible,

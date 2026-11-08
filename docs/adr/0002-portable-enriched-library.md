@@ -1,5 +1,9 @@
 # Bibliothèque enrichie indépendante du lecteur
 
+Current operating scope: BETA/LAB.
+The lab uses retained originals and journaled recovery, without an external
+backup or extra account/deployment/GO. Production prerequisites are separate.
+
 Document personnel de revue, en français. Date : 8 novembre 2026.
 Statut : accepté par the operator le 8 novembre 2026 après revue critique Claude.
 La [spec V1](../specs/0001-portable-comic-library.md) décrit la cible. Rien n'est déployé.

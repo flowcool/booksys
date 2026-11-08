@@ -49,15 +49,8 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
         if fingerprint(path) != first:
             raise LibraryError('Reception bytes are not stable')
         asset_hash = sha256(path)
-        command = ['bwrap', '--unshare-all', '--die-with-parent', '--new-session',
-                   '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev',
-                   '--tmpfs', '/tmp', '--clearenv', '--setenv', 'PYTHONPATH',
-                   str(Path(__file__).resolve().parent.parent)]
-        # The qualified unpacked native reader can be used without a host install.
-        if os.environ.get('BOOKSYS_UNRAR'):
-            command += ['--setenv', 'BOOKSYS_UNRAR', os.environ['BOOKSYS_UNRAR']]
-        command += ['--ro-bind', str(path), '/tmp/input', sys.executable,
-                    '-m', 'library.reader_worker', '/tmp/input', path.suffix.lower()]
+        from library.sandbox import native_prefix, PYTHON
+        command = native_prefix(path) + [PYTHON, '-m', 'library.reader_worker', '/tmp/input', path.suffix.lower()]
         image = os.environ.get('BOOKSYS_READER_IMAGE')
         if image:
             if not re.fullmatch(r'[a-z0-9./:_@-]+', image):
