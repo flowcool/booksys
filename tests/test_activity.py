@@ -187,3 +187,21 @@ class ActivityTests(unittest.TestCase):
             stage = observer.snapshot()['stages']['retirement']
             self.assertEqual(stage['counts']['retained acquisitions (last inspection)'], 1)
             self.assertEqual(stage['queue_freshness'], 'unavailable')
+
+    def test_native_fallback_ownership_and_status_enum(self):
+        from library.activity import Observer
+        from activity import write_yaml
+        class Client:
+            def call(self, method):
+                return [] if method == 'status_downloads' else [
+                    {'pid': 99, 'links': [{'fid': 13, 'status': 13}, {'fid': 8, 'status': 8}, {'fid': 9, 'status': 9}]}]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_yaml(root/'collector/monitor.yaml', {'submissions': {'source': {'package_id': 1}}})
+            write_yaml(root/'collector/state.yaml', {'items': {'source': {'title': 'Album'}}})
+            write_yaml(root/'collector/mirror-routing.yaml', {'packages': {'1': {'source': 'source', 'pid': 1, 'attempt_pid': 99}}})
+            observer = Observer(root, root/'collector', clock=lambda: 1000)
+            observer.sample_downloads(Client())
+            counts = observer.snapshot()['stages']['downloads']['counts']
+            self.assertEqual(counts['active links'], 1)
+            self.assertEqual(counts['failed links'], 2)

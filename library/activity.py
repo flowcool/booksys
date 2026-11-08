@@ -125,8 +125,10 @@ class Observer:
         tracked = {v.get('package_id'): source for source, v in submissions.items()}
         routing = read_yaml(self.collector / 'mirror-routing.yaml').get('packages', {})
         for operation in routing.values():
-            if operation.get('source') in submissions and isinstance(operation.get('fallback'), dict):
-                tracked[operation['fallback'].get('package_id')] = operation['source']
+            source = operation.get('source')
+            if (source in submissions and submissions[source].get('package_id') == operation.get('pid')
+                    and type(operation.get('attempt_pid')) is int):
+                tracked[operation['attempt_pid']] = source
         previous = {v['id']: v for v in self.downloads.get('items', [])}
         items: list[dict[str, Any]] = []
         counts = {'active links': 0, 'waiting links': 0, 'finished links': 0, 'failed links': 0}
