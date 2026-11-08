@@ -11,9 +11,11 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 UNIT = Path.home() / '.config/systemd/user/booksys-library.service'
 
 
@@ -43,6 +45,10 @@ def main() -> None:
         raise RuntimeError('Worker target drift')
     worker_image = json.loads(run('docker', 'image', 'inspect', args.worker_image))[0]['Id']
     reader_image = json.loads(run('docker', 'image', 'inspect', args.reader_image))[0]['Id']
+    # Validate the existing library controller's prerequisites before any worker write.
+    run(str(ROOT / '.venv/bin/python'), str(ROOT / 'ops/activate_library.py'),
+        '--image', reader_image, '--expected-unit-sha256', args.expected_unit_sha256,
+        '--evidence', str(args.evidence / 'library'))
     from activity import read_yaml
     history = read_yaml(Path('/data/booksys/state/package-retirement.yaml'))
     if not isinstance(history.get('acquisitions'), dict):
