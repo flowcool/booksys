@@ -80,3 +80,41 @@ bounded fields preserve the distinction between confirmed identity, candidates,
 assertions and overrides. Missing data stays unknown. Bibliographic links use a
 source allowlist; local first-page images have explicit provenance. Vanilla JS
 implements per-stage filters, search and column sorting without a framework.
+
+## Proposed operator-resolution amendment — 8 November 2026
+
+Status: scope and lab trade-offs accepted by the operator on 8 November 2026;
+implementation deferred. Later internal documentary corrections have not received
+an external approval. See
+[spec 0002](../specs/0002-operator-identity-resolution.md).
+
+Extend the existing LAN fiche with bounded identity decisions. Keep the local
+catalogue and immutable decision ledger as the authority. Keep the normal cycle
+as the only application path for publication. A confirmation records evidence,
+identity and explicit variant selection; it is not a publication command.
+
+Require a versioned effect preview before confirmation. Bind a published-copy
+correction to its exact target, prior manifest and recovery operation. Preserve
+prior decisions and recovery revisions. Never infer permission to replace from
+a changed export. This adds write semantics to the accepted read-only page;
+keeping conversation-only decisions would leave routine resolution outside the
+operator view. A second database or general administration interface would add
+state and maintenance without improving the existing lab boundary.
+
+After the first Claude review, keep the cycle as the sole catalogue writer.
+HTTP appends evidence and canonical decisions; views project pending decisions
+in memory. Claim evidence belongs to the asset's assignment. Attaching another
+variant does not rewrite shared edition or work metadata. Replay reduces the
+decision history before checking the final active ownership.
+
+Proposed lab trade-offs for the operator: transfer an exposed copy through the existing
+withdrawal journal followed by normal creation, with a possible absence until
+creation succeeds; stop all copies on managed-file drift or uncertain journals;
+refuse transfer into an already published edition. Preserve recovery and show
+these limits before confirmation. This avoids a new transaction coordinator.
+Reconcile before every catalogue write after restart. A pending or blocked
+decision gates ordinary publication too. A verified return uses the cycle's
+explicit restoration role and the exact retained revision/source; returning to
+this asset's own conforming published copy is a no-change exception. Evict only
+unreferenced temporary previews when their quota is full. Check deterministic
+creation prerequisites before withdrawal.
