@@ -1,4 +1,4 @@
-"""The cycle routes all queued sources against one catalogue snapshot."""
+"""The cycle routes a bounded fair batch against one catalogue snapshot."""
 import argparse
 import contextlib
 import importlib.util
@@ -19,7 +19,7 @@ class RoutingSnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _, reception, _, _ = setup_library(root)
-            sources = ['https://bookys.invalid/source-a', 'https://bookys.invalid/source-b']
+            sources = [f'https://bookys.invalid/source-{i:02}' for i in range(20)]
             atomic_yaml(root / 'captured.yaml', {'items': {s: {'title': 'Fixture'} for s in sources}})
             atomic_yaml(root / 'submissions.yaml', {'submissions': {s: {'status': 'queued', 'package_id': i}
                                                                    for i, s in enumerate(sources)}})
@@ -37,6 +37,14 @@ class RoutingSnapshotTests(unittest.TestCase):
                  patch('mirrors.public_hosts', return_value={}), patch('mirror_routing.route_package', side_effect=route), \
                  patch('pipeline.Pyload'), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(module.cycle(args), 0)
-            self.assertEqual([entry[0] for entry in seen], sources)
+            self.assertEqual([entry[0] for entry in seen], sources[:8])
+            first_catalogue = seen[0][1]
+            with patch('library.intake.receive'), patch('library.automatic.process_assets', return_value={}), \
+                 patch('mirrors.public_hosts', return_value={}), patch('mirror_routing.route_package', side_effect=route), \
+                 patch('pipeline.Pyload'), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(module.cycle(args), 0)
+                self.assertEqual(module.cycle(args), 0)
+            self.assertEqual([entry[0] for entry in seen], sources + sources[:4])
+            self.assertIs(first_catalogue, seen[7][1])
             self.assertIs(seen[0][1], seen[1][1])
             self.assertIn('assets', seen[0][1])

@@ -135,6 +135,7 @@ def export_catalogue(directory: Path, records: dict[str, Any], journal: dict[str
         page = record.get("page", {})
         items[source] = {"title": record.get("title"), "metadata": page,
                          "package_id": entry["package_id"],
+                         "retirement": package.get("retirement") if package else None,
                          "download_folder_relative": package["folder"] if package else None,
                          "fiche_status": progress["items"].get(source, {}).get("status", "pending"),
                          "fiche_relative": progress["items"].get(source, {}).get("fiche_relative"),
@@ -262,8 +263,8 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
 
 
 def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
-                 minimum_free: int = 20 * 1024**3) -> dict[str, int] | None:
-    """Run one durable, bounded backfill request. Submit each item as soon as it is resolved."""
+                 minimum_free: int = 20 * 1024**3, *, max_items: int | None = None) -> dict[str, int] | None:
+    """Run a durable backfill batch. Release the collector lock between batches."""
     path = directory / "backfill.yaml"
     if not path.exists():
         return None
@@ -297,11 +298,15 @@ def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyloa
             save(path, job)
             logging.info("Backfill catalogue: %d/%d pages, %d unique items",
                          len(job["pages"]), job["pages_requested"], len(job["items"]))
+        processed = 0
         for source in job["items"]:
-            if shutil.disk_usage(directory).free < minimum_free:
-                raise CollectionError("Free disk reserve reached during backfill")
             if journal["submissions"].get(source, {}).get("status") == "queued":
                 continue
+            if max_items is not None and processed >= max(1, max_items):
+                return {"pages": len(job["pages"]), "items": len(job["items"]),
+                        "queued": job["submitted"], "pending": 1}
+            if shutil.disk_usage(directory).free < minimum_free:
+                raise CollectionError("Free disk reserve reached during backfill")
             status = downloader.call("status_server")
             if status["pause"] or not status["download"]:
                 raise CollectionError("pyLoad downloads are paused or disabled")
@@ -316,6 +321,7 @@ def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyloa
             job["submitted"] = sum(journal["submissions"].get(u, {}).get("status") == "queued" for u in job["items"])
             save(path, job)
             logging.info("Backfill queued: %d/%d items; package %d", job["submitted"], len(job["items"]), package_id)
+            processed += 1
         # A prior process may have confirmed the submission but not saved batch progress.
         job["submitted"] = sum(journal["submissions"].get(u, {}).get("status") == "queued" for u in job["items"])
         job["status"] = "complete"
@@ -346,7 +352,12 @@ def main() -> int:
     while True:
         cycle_ok = False
         try:
-            backfill = run_backfill(args.directory, browser, downloader)
+            backfill = run_backfill(args.directory, browser, downloader,
+                                    max_items=None if args.once else 8)
+            if backfill is not None and backfill.get("pending"):
+                logging.info("Backfill progress; collector lock released for 60 seconds: %s", json.dumps(backfill))
+                time.sleep(60)
+                continue
             if backfill is not None:
                 logging.info("Backfill complete: %s", json.dumps(backfill))
             result = run_once(args.directory, browser, downloader, args.category)
