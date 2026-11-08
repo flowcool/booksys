@@ -236,3 +236,14 @@ class ActivityTests(unittest.TestCase):
             before = read_activity(Path(folder), 'collection')['events']
             subprocess.run([sys.executable, '-c', script, folder], check=True)
             self.assertEqual(before, read_activity(Path(folder), 'collection')['events'])
+
+    def test_large_canonical_catalogue_has_an_independent_read_bound(self):
+        from library.activity import Observer
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root/'state').mkdir()
+            (root/'state/library.yaml').write_text('origins: {one: {availability: pending}}\nassets: {}\ncover: '+('a'*(33*1024*1024)))
+            observer = Observer(root, root/'collector', clock=lambda: 1000)
+            stage = observer.snapshot()['stages']['local']
+            self.assertEqual(stage['queue_freshness'], 'current')
+            self.assertEqual(stage['counts']['waiting files'], 1)
