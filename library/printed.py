@@ -178,7 +178,7 @@ def scan_printed(store: Any, asset_id: str, reception: Any) -> dict[str, Any]:
     if result['status'] == 'ok':
         asset['printed'] = result
     store.save(state, expected=state['revision'])
-    report('local', 'sleeping', 'OCR complete', item=asset_id, progressed=True)
+    report('local', 'sleeping' if result['status'] == 'ok' else 'waiting', 'OCR result', item=asset_id, progressed=result['status'] == 'ok')
     return result
 
 

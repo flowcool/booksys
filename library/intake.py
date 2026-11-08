@@ -73,6 +73,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
     # The caller obtains immutable snapshots without holding a collector lock.
     # Parsing and hashing happen before the short catalogue compare-and-save.
     state = store.read()
+    completed_before = {(oid, o.get('sha256'), o.get('availability')) for oid, o in state['origins'].items()
+                        if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
     packages = {int(p['pid']): p for p in queue}
     inspected = 0
     bundle_preparations = 0
@@ -274,5 +276,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             origin['retirement'] = package['retirement']
     store.save(state, expected=state['revision'])
     from activity import report
-    report('local', 'sleeping', 'Intake committed', progressed=bool(inspected))
+    completed_after = {(oid, o.get('sha256'), o.get('availability')) for oid, o in state['origins'].items()
+                       if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
+    report('local', 'sleeping', 'Intake committed', progressed=bool(completed_after - completed_before))
     return store.read()

@@ -38,6 +38,10 @@ def main() -> None:
     evidence = args.root / 'evidence'
     evidence.mkdir(parents=True, exist_ok=True)
 
+    if args.activity:
+        from activity import bind
+        bind(evidence / 'activity', 'local', 'identity', 'retirement')
+
     def snapshot() -> None:
         atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
 
@@ -67,6 +71,15 @@ def main() -> None:
                      'duration_seconds': round(time.monotonic() - started, 3),
                      'next_cycle_at': datetime.fromtimestamp(finished + delay, timezone.utc).isoformat()}
             atomic_yaml(evidence / 'cycle.yaml', value)
+            if args.activity:
+                from activity import report
+                for stage in ('local', 'identity', 'retirement'):
+                    report(stage, 'blocked' if outcome.get('status') == 'blocked' else
+                           'waiting' if outcome.get('status') == 'skipped' else 'sleeping',
+                           'Cycle error' if outcome.get('status') == 'blocked' else 'Between cycles',
+                           reason='Cycle failed; inspect service evidence' if outcome.get('status') == 'blocked' else
+                           'Processing lock occupied' if outcome.get('status') == 'skipped' else '',
+                           next_attempt=finished + delay)
             snapshot()
             stop.wait(delay)  # No overlap. Idle waits; eligible work continues immediately.
 

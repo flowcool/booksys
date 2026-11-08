@@ -18,7 +18,7 @@ import yaml
 STAGES = ('collection', 'byparr', 'downloads', 'local', 'identity', 'retirement')
 STATES = ('working', 'waiting', 'sleeping', 'stopped', 'blocked', 'unknown')
 WINDOW = 86400
-MAX_EVENTS = 512
+MAX_EVENTS = 8192
 
 
 def read_activity(root: Path, stage: str) -> dict[str, Any]:
@@ -95,6 +95,8 @@ class Activity:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 saved = read_activity(self.root, self.stage)
                 current = saved.get('current', {})
+                if not isinstance(current, dict) or not isinstance(saved.get('events', {}), dict):
+                    return
                 stamp = self.clock()
                 if value is None and current.get('session') != self.session:
                     return
@@ -108,7 +110,7 @@ class Activity:
                         value['since'] = current.get('since', stamp)
                     progressed = value.pop('progressed', False)
                     value['last_progress_at'] = stamp if progressed else current.get('last_progress_at')
-                    if changed or progressed:
+                    if changed:
                         event = {**value, 'at': stamp}
                         eid = reference(self.session + ':' + str(stamp) + ':' + json.dumps(event, sort_keys=True))
                         events[eid] = event
@@ -120,7 +122,7 @@ class Activity:
                 current['observed_at'] = stamp
                 write_yaml(self.root / (self.stage + '.yaml'), {'schema': 1, 'current': current,
                     'events': dict(sorted(events.items(), key=lambda x: x[1]['at'])[-MAX_EVENTS:])})
-        except (OSError, ValueError, TypeError):
+        except Exception:
             pass  # Observability cannot stop work or expose source exceptions.
 
     def report(self, state: str, operation: str, *, item: str = '', title: str = '',

@@ -20,7 +20,7 @@ el('activity-resources').textContent='/data libre : '+gib(space.free_bytes)+' ['
 const host=el('activity-stages'),open=new Set(Array.from(host.children).filter(e=>e.open).map(e=>e.dataset.stage));host.replaceChildren();
 for(const [key,s] of Object.entries(data.stages||{})){const d=node('details');d.dataset.stage=key;d.open=open.has(key);
 d.append(node('summary',s.label+' · '+(labels[s.state]||'Inconnu')+' · '+Object.entries(s.counts||{}).map(([unit,n])=>n+' '+unit).join(' | ')));
-d.append(node('p','Source : '+s.freshness+' · Observée : '+date(s.observed_at)+' · Âge : '+duration(s.age_seconds)));
+d.append(node('p','Source : '+s.freshness+' · Observée : '+date(s.observed_at)+' · Âge : '+duration(s.age_seconds)+' · File : '+s.queue_freshness+' · Observée : '+date(s.queue_observed_at)));
 d.append(node('p','Opération : '+(s.operation||'inconnue')+' · Élément : '+(s.title||s.item||'inconnu')+' · Motif : '+(s.reason||'inconnu')));
 d.append(node('p',s.no_progress_seconds===null?'Progression jamais observée.':'Aucune progression depuis '+duration(s.no_progress_seconds)+'.'));
 d.append(node('p','Attente observée : '+duration(s.waiting_seconds)+' · Prochaine tentative : '+date(s.next_attempt)));

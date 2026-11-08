@@ -135,3 +135,41 @@ class ActivityTests(unittest.TestCase):
             self.assertEqual(after['current']['observed_at'], before)
             bad = root/'not-a-directory';bad.write_text('fixture')
             Activity(bad, 'local').report('working', 'Validation')
+
+    def test_missing_canonical_sources_preserve_counts_and_bundle_is_complete(self):
+        from library.activity import Observer
+        from activity import write_yaml
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_yaml(root/'state/library.yaml', {'origins': {
+                'bundle': {'availability': 'bundle'}, 'part': {'availability': 'multipart_member'},
+                'retry': {'availability': 'pending', 'reason': 'Intake budget deferred', 'intake_next_attempt': 1400}}, 'assets': {}})
+            observer = Observer(root, root/'collector', clock=lambda: 1000)
+            observer.save()
+            local = observer.snapshot()['stages']['local']
+            self.assertEqual(local['counts']['waiting files'], 1)
+            self.assertEqual(local['items'][0]['next_attempt'], 1400)
+            (root/'state/library.yaml').write_text('unreadable: [')
+            observer.clock = lambda: 1100
+            local = observer.snapshot()['stages']['local']
+            self.assertEqual(local['counts']['waiting files'], 1)
+            self.assertEqual(local['queue_freshness'], 'unavailable')
+            self.assertEqual(local['queue_observed_at'], 1000)
+
+    def test_broken_activity_nested_data_cannot_abort_business(self):
+        from activity import write_yaml
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_yaml(root/'local.yaml', {'current': [], 'events': []})
+            Activity(root, 'local').report('working', 'Validation')
+
+    def test_byte_progress_does_not_create_significant_events(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            a = Activity(root, 'downloads', clock=lambda: 100000)
+            a.report('working', 'Downloading')
+            for _ in range(600):
+                a.report('working', 'Downloading', progressed=True)
+            value = read_activity(root, 'downloads')
+            self.assertEqual(len(value['events']), 1)
+            self.assertEqual(value['current']['last_progress_at'], 100000)

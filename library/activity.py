@@ -14,11 +14,16 @@ LABELS = dict(zip(STAGES, ('Collecte Bookys', 'Byparr', 'Téléchargements pyLoa
     'Traitement local', 'Identification, classement et publication', 'Retrait des paquets')))
 # Only pinned pyLoad enum labels, never arbitrary plugin error strings.
 DOWNLOAD_STATUS = {0: 'Finished', 1: 'Offline', 2: 'Online', 3: 'Queued', 4: 'Skipped',
-    5: 'Hoster wait', 6: 'Temporary failure', 7: 'Starting', 8: 'Aborted', 9: 'Decrypting',
-    10: 'Processing', 11: 'Unknown', 12: 'Downloading', 13: 'Failed', 14: 'Missing', 15: 'Password', 16: 'Checking'}
+    5: 'Hoster wait', 6: 'Temporary failure', 7: 'Starting', 8: 'Failed', 9: 'Aborted',
+    10: 'Decrypting', 11: 'Custom', 12: 'Downloading', 13: 'Processing', 14: 'Unknown'}
+LOCAL_REASONS = ('Intake budget deferred', 'Transfer is not confirmed finished',
+    'Finished origin is missing or renamed', 'Ambiguous canonical origin references',
+    'Unsupported or ambiguous suffix', 'Multipart representation',
+    'Multiple image groups: possible multi-work archive', 'Reader policy differs from controller')
+
 ITEM_FIELDS = ('id', 'title', 'state', 'reason', 'operation', 'observed_at', 'since',
                'waiting_seconds', 'next_attempt', 'fiche')
-CURRENT_FIELDS = ('queue_observed_at', 'state', 'operation', 'item', 'title', 'reason', 'observed_at', 'since',
+CURRENT_FIELDS = ('queue_observed_at', 'scope', 'state', 'operation', 'item', 'title', 'reason', 'observed_at', 'since',
                   'last_progress_at', 'next_attempt')
 
 
@@ -54,7 +59,11 @@ def project(snapshot: dict[str, Any], *, timestamp: float | None = None) -> dict
         if state not in STATES or freshness != 'current' or raw.get('orphaned'):
             state = 'unknown'
         last = number(raw.get('last_progress_at'))
-        stage.update(label=LABELS[name], state=state, freshness=freshness, age_seconds=age,
+        queue_at = number(raw.get('queue_observed_at'))
+        queue_freshness = raw.get('queue_freshness')
+        if queue_freshness != 'unavailable':
+            queue_freshness = 'missing' if queue_at is None else 'stale' if stamp - queue_at > 90 else 'current'
+        stage.update(label=LABELS[name], state=state, freshness=freshness, age_seconds=age, queue_freshness=queue_freshness,
             no_progress_seconds=max(0, stamp - last) if last is not None else None,
             waiting_seconds=max(0, stamp - stage['since']) if state in ('waiting', 'blocked') and stage['since'] is not None else None,
             counts={text(k): v for k, v in raw.get('counts', {}).items() if type(v) is int and v >= 0},
@@ -108,15 +117,18 @@ class Observer:
         if not isinstance(queue, list):
             raise ValueError('Invalid queue observation')
         stamp = self.clock()
-        submissions = read_yaml(self.collector / 'monitor.yaml').get('submissions', {})
-        captured = read_yaml(self.collector / 'state.yaml').get('items', {})
+        monitor = read_yaml(self.collector / 'monitor.yaml')
+        records = read_yaml(self.collector / 'state.yaml')
+        if not isinstance(monitor.get('submissions'), dict) or not isinstance(records.get('items'), dict):
+            raise ValueError('Booksys ownership observation unavailable')
+        submissions, captured = monitor['submissions'], records['items']
         tracked = {v.get('package_id'): source for source, v in submissions.items()}
         routing = read_yaml(self.collector / 'mirror-routing.yaml').get('packages', {})
         for operation in routing.values():
             if operation.get('source') in submissions and isinstance(operation.get('fallback'), dict):
                 tracked[operation['fallback'].get('package_id')] = operation['source']
         previous = {v['id']: v for v in self.downloads.get('items', [])}
-        items = []
+        items: list[dict[str, Any]] = []
         counts = {'active links': 0, 'waiting links': 0, 'finished links': 0, 'failed links': 0}
         for package in queue:
             source = tracked.get(package.get('pid'))
@@ -124,8 +136,8 @@ class Observer:
                 continue
             for link in package.get('links', []):
                 status = link.get('status')
-                kind = ('finished' if status == 0 else 'failed' if status in (1, 6, 8, 13, 14, 15)
-                        else 'active' if status in (7, 9, 10, 12, 16) else 'waiting')
+                kind = ('finished' if status == 0 else 'failed' if status in (1, 6, 8, 9)
+                        else 'active' if status in (7, 10, 12, 13) else 'waiting')
                 counts[kind + ' links'] += 1
                 ident = str(link['fid'])
                 prior = previous.get(ident, {})
@@ -136,18 +148,24 @@ class Observer:
                     'next_attempt': number(active.get(link['fid'], {}).get('wait_until')) or None,
                     'waiting_seconds': max(0, stamp - since) if prior and kind == 'waiting' and since is not None else None}
                 items.append(item)
-        # Progress means bytes or a completed link changed; polling is not progress.
-        token = reference([(p.get('pid'), [(v.get('fid'), v.get('status') == 0,
-                     active.get(v.get('fid'), {}).get('bleft') if v.get('status') == 12 else None)
-                     for v in p.get('links', []) if v.get('status') == 0 or v.get('fid') in active])
-                     for p in queue if p.get('pid') in tracked and any(v.get('status') == 0 or v.get('fid') in active for v in p.get('links', []))])
-        old_token = self.downloads.get('progress_token')
-        progressed = old_token is not None and token != old_token
+        # Progress requires a newly completed link or fewer bytes left on the same transfer.
+        previous_finished = {k for k, v in previous.items() if v.get('reason') == 'Finished'}
+        finished = {v['id'] for v in items if v['reason'] == 'Finished'}
+        byte_counts = {str(k): number(v.get('bleft')) for k, v in active.items() if str(k) in {i['id'] for i in items}}
+        prior_bytes = self.downloads.get('_bytes_left', {})
+        progressed = bool(previous and finished - previous_finished) or any(
+            count is not None and number(prior_bytes.get(k)) is not None and count < prior_bytes[k]
+            for k, count in byte_counts.items())
         recorder = Activity(self.directory, 'downloads', clock=self.clock)
-        recorder.report('working' if counts['active links'] else 'blocked' if counts['failed links'] else 'waiting',
+        for item in items:
+            prior = previous.get(item['id'])
+            if prior and prior.get('reason') != item['reason']:
+                recorder.report(item['state'], 'Link state changed', item=item['id'], title=item['title'],
+                                reason=item['reason'], progressed=item['reason'] == 'Finished')
+        recorder.report('working' if counts['active links'] else 'blocked' if counts['failed links'] else 'waiting' if counts['waiting links'] else 'sleeping',
                         'queue observation', progressed=progressed)
         self.downloads = {**read_activity(self.directory, 'downloads').get('current', {}), 'items': items[:2000],
-                          'details_truncated': len(items) > 2000, 'counts': counts, 'progress_token': token}
+                          'details_truncated': len(items) > 2000, 'counts': counts, '_bytes_left': byte_counts}
 
     def downloads_unavailable(self) -> None:
         self.downloads = {**self.downloads, 'unavailable': True}
@@ -244,6 +262,8 @@ class Observer:
                 stages[name]['title'] = title(matched, 'Bookys source')
         backfill = read_yaml(self.collector / 'backfill.yaml')
         transmitted = sum(v.get('status') == 'queued' for v in submissions.values())
+        collection_valid = all(isinstance(read_yaml(self.collector / file).get(key), dict) for file, key in (('monitor.yaml', 'submissions'), ('state.yaml', 'items')))
+        stages['collection']['scope'] = 'backfill' if backfill and backfill.get('status') != 'complete' else 'new entries'
         stages['collection']['counts'] = {'captured source entries': len(captured), 'transmitted source entries': transmitted}
         if backfill:
             pending = sum(submissions.get(s, {}).get('status') != 'queued' for s in backfill.get('items', {}))
@@ -253,26 +273,34 @@ class Observer:
                 for s, v in backfill.get('items', {}).items() if submissions.get(s, {}).get('status') != 'queued'][:2000]
         state = read_yaml(self.root / 'state/library.yaml')
         origins, assets = state.get('origins', {}), state.get('assets', {})
+        for stage_name in ('local', 'identity'):
+            for key, asset in assets.items():
+                if reference(key) == stages[stage_name].get('item'):
+                    hints = list(asset.get('captured_hints', {}).values())
+                    stages[stage_name]['title'] = title(hints[0] if hints else {}, key)
+                    break
         local, identity = [], []
         for oid, origin in origins.items():
             asset = assets.get(origin.get('sha256'), {})
             automation = asset.get('automation', {})
             label = title(captured.get(origin.get('source'), {}), Path(origin.get('path', 'Unknown file')).name)
             base = {'id': oid, 'title': label, 'fiche': '/fiche/' + oid, 'observed_at': stamp}
-            if origin.get('availability') != 'validated':
+            if origin.get('availability') not in ('validated', 'bundle', 'multipart_member'):
                 local.append({**base, 'state': 'blocked' if origin.get('availability') == 'rejected' else 'waiting',
-                    'reason': 'Local validation rejected' if origin.get('availability') == 'rejected' else
-                        'Intake budget deferred' if origin.get('reason') == 'Intake budget deferred' else 'Waiting for complete validated inputs'})
+                    'reason': origin['reason'] if origin.get('reason') in LOCAL_REASONS else
+                        'Missing multipart input' if str(origin.get('reason', '')).startswith(('Awaiting part', 'Missing part')) else
+                        'Local validation rejected' if origin.get('availability') == 'rejected' else 'Waiting for complete validated inputs',
+                    'next_attempt': origin.get('intake_next_attempt') or origin.get('bundle_next_attempt')})
             if asset:
                 admission = asset.get('admission', {})
-                identity.append({**base, 'id': asset['sha256'], 'state': 'sleeping' if admission else 'waiting',
-                    'reason': 'Copy ' + text(admission.get('status')) if admission else
+                identity.append({**base, 'id': asset['sha256'], 'state': 'sleeping' if admission.get('status') == 'classified' else 'waiting',
+                    'reason': 'Copy classified' if admission.get('status') == 'classified' else 'Copy retained; work identification pending' if admission else
                         'Operator decision pending' if asset.get('resolution') else
                         'Metadata retry scheduled' if automation.get('next_attempt') else 'Identification pending',
                     'next_attempt': automation.get('next_attempt')})
         stages['local']['queue_observed_at'] = stamp if state else None
         stages['identity']['queue_observed_at'] = stamp if state else None
-        stages['local'].update(counts={'waiting files': len(local), 'validated files': sum(o.get('availability') == 'validated' for o in origins.values())}, items=local[:2000])
+        stages['local'].update(counts={'waiting files': sum(v['state'] == 'waiting' for v in local), 'blocked files': sum(v['state'] == 'blocked' for v in local), 'validated files': sum(o.get('availability') == 'validated' for o in origins.values())}, items=local[:2000])
         unique = {v['id']: v for v in identity}
         stages['identity'].update(counts={'assets': len(assets), 'waiting assets': sum(v['state'] == 'waiting' for v in unique.values()),
             'resulting copies': sum(bool(a.get('admission')) for a in assets.values())}, items=list(unique.values())[:2000])
@@ -293,8 +321,29 @@ class Observer:
             'eligible acquisitions (last inspection)': sum(v.get('outcome') == 'eligible' for v in outcomes),
             'retained acquisitions (last inspection)': sum(v.get('outcome') == 'blocked' for v in outcomes)}, items=list(items.values())[:2000])
 
+        validity = {'collection': collection_valid,
+            'local': isinstance(state.get('origins'), dict) and isinstance(state.get('assets'), dict),
+            'identity': isinstance(state.get('origins'), dict) and isinstance(state.get('assets'), dict),
+            'retirement': isinstance(read_yaml(self.collector / 'package-retirement.yaml').get('acquisitions'), dict)}
+        for name, valid in validity.items():
+            stage = stages[name]
+            previous = self.saved.get('stages', {}).get(name, {})
+            if not valid:
+                for field in ('counts', 'items', 'queue_observed_at', 'details_truncated'):
+                    stage[field] = previous.get(field, {} if field == 'counts' else [] if field == 'items' else None)
+                stage['queue_freshness'] = 'unavailable'
+                continue
+            stage['queue_observed_at'] = stamp
+            prior_items = {v['id']: v for v in previous.get('items', [])}
+            for item in stage.get('items', []):
+                prior = prior_items.get(item['id'], {})
+                same = prior.get('reason') == item.get('reason') and prior.get('state') == item.get('state')
+                item['since'] = prior.get('since', stamp) if same else stamp
+                item['waiting_seconds'] = max(0, stamp - item['since']) if same and item.get('state') in ('waiting', 'blocked') else None
+
     def save(self) -> None:
         value = self.snapshot()
-        # Keep the progress token private but persistent across observer restarts.
-        value['stages']['downloads']['progress_token'] = self.downloads.get('progress_token')
+        # Keep byte counters private but persistent across observer restarts.
+        value['stages']['downloads']['_bytes_left'] = self.downloads.get('_bytes_left', {})
         write_yaml(self.root / 'evidence/activity-dashboard.yaml', value)
+        self.saved = value
