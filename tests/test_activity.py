@@ -205,3 +205,34 @@ class ActivityTests(unittest.TestCase):
             counts = observer.snapshot()['stages']['downloads']['counts']
             self.assertEqual(counts['active links'], 1)
             self.assertEqual(counts['failed links'], 2)
+
+    def test_long_phase_changes_before_cycle_end_and_manual_decision_is_visible(self):
+        from library.activity import Observer
+        from activity import write_yaml
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_yaml(root/'state/library.yaml', {'origins': {'o': {'source': 's', 'sha256': 'asset', 'availability': 'validated'}},
+                'assets': {'asset': {'sha256': 'asset', 'resolution': {'status': 'pending'}}}})
+            a = Activity(root/'evidence/activity', 'identity', clock=lambda: 1000)
+            a.report('working', 'Metadata request', item='asset')
+            observer = Observer(root, root/'collector', clock=lambda: 1000)
+            first = observer.snapshot()['stages']['identity']
+            self.assertEqual(first['operation'], 'Metadata request')
+            self.assertEqual(first['items'][0]['reason'], 'Operator decision pending')
+            a.clock = lambda: 1010
+            a.report('working', 'Publication', item='asset')
+            observer.clock = lambda: 1010
+            second = observer.snapshot()['stages']['identity']
+            self.assertEqual(second['operation'], 'Publication')
+            self.assertFalse((root/'evidence/cycle.yaml').exists())
+            self.assertIsNone(second['last_progress_at'])
+
+    def test_events_survive_a_real_process_restart(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as folder:
+            script = "from pathlib import Path; from activity import Activity; import sys; Activity(Path(sys.argv[1]), 'collection', clock=lambda: 100000).report('waiting', 'Lock', reason='Processing lock occupied')"
+            subprocess.run([sys.executable, '-c', script, folder], check=True)
+            before = read_activity(Path(folder), 'collection')['events']
+            subprocess.run([sys.executable, '-c', script, folder], check=True)
+            self.assertEqual(before, read_activity(Path(folder), 'collection')['events'])
