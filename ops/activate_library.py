@@ -72,8 +72,8 @@ def main() -> None:
     pending.replace(UNIT)
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'start', 'booksys-library.service')
-    after = json.loads(run('docker', 'inspect', *[c['Id'] for c in containers]))
-    if [c['Id'] for c in after] != [c['Id'] for c in containers]:
+    after = json.loads(run('docker', 'inspect', 'booksys-pyload', 'booksys-worker-1', 'booksys-byparr-1'))
+    if {c['Name']: c['Id'] for c in after} != proof['containers']:
         raise RuntimeError('Shared container drift; preserve evidence')
     if run('systemctl', '--user', 'is-active', 'booksys-library.service') != 'active':
         raise RuntimeError('Library did not start; inspect retained unit and journal')

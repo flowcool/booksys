@@ -26,7 +26,8 @@ class AdmissionTests(unittest.TestCase):
             with patch('library.admission.rename_atomic', side_effect=interrupted_move):
                 with self.assertRaises(RuntimeError):
                     writer.publish_asset(key)
-            writer.reconcile()
+            Publisher(store, reception, root/'library', isolated=True,
+                      capacity=Capacity(reserve=0)).reconcile()
             self.assertEqual(store.read()['assets'][key]['admission']['status'], 'classified')
             self.assertFalse((root/'library/bd'/old['target']).exists())
             self.assertEqual(sha256(source), key)

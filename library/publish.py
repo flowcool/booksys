@@ -461,6 +461,13 @@ class Publisher:
             with lock(self.store.directory / 'library-copy.lock', blocking=False):
                 return self.reconcile(locked=True, provisional=provisional)
         results = []
+        if provisional:
+            # An admission can have moved a committed legacy folder to recovery
+            # before its catalogue save. Finish that journal before checking the
+            # preceding edition exposure. Admission's own preflight passes False.
+            from library.admission import AdmissionPublisher
+            AdmissionPublisher(self.store, self.reception, self.root, exclusive=True,
+                               capacity=self.capacity).reconcile(locked=True)
         for operation_id in self.store.read()['operations']:
             if not (self.journals / (operation_id + '.yaml')).exists():
                 raise LibraryError('Catalogue operation journal is missing')
@@ -521,6 +528,4 @@ class Publisher:
                     verify(self.root / 'bd' / edition['publication']['target'], edition['publication']['manifest'])
                     retire_provisional(self.store, self.root, edition['publication']['asset'])
             ProvisionalPublisher(self.store, self.reception, self.root, exclusive=True, capacity=self.capacity).reconcile(locked=True)
-            from library.admission import AdmissionPublisher
-            AdmissionPublisher(self.store, self.reception, self.root, exclusive=True, capacity=self.capacity).reconcile(locked=True)
         return results
