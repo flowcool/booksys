@@ -54,23 +54,31 @@ class AutomaticTests(unittest.TestCase):
                 self.assertEqual(inspect.call_count, 1)
             self.assertEqual(next(iter(store.read()['origins'].values()))['reader_policy'], READER_POLICY)
 
-    def test_uncertain_identity_is_attempted_once_and_prior_evidence_is_reused(self):
+    def test_old_pending_retries_once_per_method_and_changed_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
             store, reception, original, asset = setup_library(Path(folder))
             state = store.read(); state['assets'][asset].pop('identity'); state['assets'][asset]['identity_result'] = {'status': 'pending', 'reason': 'Unknown edition'}
             store.save(state, expected=state['revision'])
-            providers = Providers(Path(folder) / 'cache', budget=50)
-            with patch('library.automatic.enrich') as enrich, patch('library.automatic.scan_printed') as printed:
+            providers = Providers(Path(folder) / 'cache', fetch=lambda url: (404, ''), interval=0, budget=50)
+            state=store.read();state['assets'][asset]['printed']={'status':'ok','asset':asset,'pages':[]}
+            store.save(state,expected=state['revision'])
+            with patch('library.automatic.enrich',side_effect=lambda *args:store.read()) as enrich, patch('library.automatic.scan_printed') as printed:
                 for _ in range(2):
                     result = process_assets(store, reception, Path(folder) / 'library', providers)
-                enrich.assert_not_called(); printed.assert_not_called()
+                self.assertEqual(enrich.call_count,1); printed.assert_not_called()
+                state=store.read();state['assets'][asset]['embedded']={'Title':'New source evidence'}
+                store.save(state,expected=state['revision'])
+                for _ in range(2):
+                    result=process_assets(store,reception,Path(folder)/'library',providers)
+                self.assertEqual(enrich.call_count,2)
             self.assertEqual(result['backlog'], 0)
             self.assertEqual(store.read()['assets'][asset]['automation']['outcome'], 'pending')
 
     def test_temporary_failure_retries_are_capped_and_budget_deferral_does_not_spend_attempt(self):
         with tempfile.TemporaryDirectory() as folder:
             store, reception, original, asset = setup_library(Path(folder))
-            providers = Providers(Path(folder) / 'cache', budget=0)
+            state = store.read(); state['assets'][asset].pop('identity'); store.save(state, expected=state['revision'])
+            providers = Providers(Path(folder) / 'cache', fetch=lambda url: (404, ''), interval=0, budget=0)
             result = process_assets(store, reception, Path(folder) / 'library', providers, clock=lambda: 0)
             self.assertEqual(result['backlog'], 1)
             self.assertEqual(store.read()['assets'][asset].get('automation', {}).get('attempts', 0), 0)
@@ -105,7 +113,7 @@ class AutomaticTests(unittest.TestCase):
                 state = store.read();state['assets'][asset].pop('identity')
                 state['assets'][asset]['printed'] = {'status': 'ok'}
                 store.save(state, expected=state['revision'])
-                providers = Providers(Path(folder) / 'cache', budget=50)
+                providers = Providers(Path(folder) / 'cache', fetch=lambda url: (404, ''), interval=0, budget=50)
                 def metadata(*args):
                     providers.events.append({'status': 'unavailable', 'http_status': status})
                     current = store.read();current['assets'][asset]['identity_result'] = {'status': 'pending', 'reason': 'Unknown edition'}
@@ -119,7 +127,8 @@ class AutomaticTests(unittest.TestCase):
                                 (LibraryError('Printed evidence source changed'), 'pending')):
             with self.subTest(error=str(error)), tempfile.TemporaryDirectory() as folder:
                 store, reception, original, asset = setup_library(Path(folder))
-                providers = Providers(Path(folder) / 'cache', budget=50)
+                state = store.read(); state['assets'][asset].pop('identity'); store.save(state, expected=state['revision'])
+                providers = Providers(Path(folder) / 'cache', fetch=lambda url: (404, ''), interval=0, budget=50)
                 with patch('library.automatic.scan_printed', side_effect=error):
                     process_assets(store, reception, Path(folder) / 'library', providers, clock=lambda: 0)
                 record = store.read()['assets'][asset]['automation']
@@ -197,3 +206,12 @@ class AutomaticTests(unittest.TestCase):
             self.assertEqual(set(store.read()['assets']), {asset})
             self.assertEqual(next(iter(store.read()['origins'].values()))['sha256'], asset)
             self.assertEqual(next(iter(store.read()['origins'].values()))['availability'], 'rejected')
+
+    def test_failed_publication_is_recovery_work_even_after_method_change(self):
+        from library.automatic import ready_assets
+        with tempfile.TemporaryDirectory() as folder:
+            store,_,_,asset=setup_library(Path(folder))
+            state=store.read();state['assets'][asset]['automation']={'outcome':'unavailable',
+                'method':'old-method','reason':'Publication failed; inspect journal before retry'}
+            store.save(state,expected=state['revision'])
+            self.assertEqual(ready_assets(store),0)

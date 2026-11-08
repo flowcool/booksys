@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import html
 import json
 import re
@@ -9,7 +10,7 @@ from typing import Any
 
 from library.catalog import Catalog, LibraryError, apply_effect, digest, lock, now, validate
 
-ACTIONS = {'identify', 'override', 'select', 'exclude', 'defer', 'merge_work', 'separate_edition'}
+ACTIONS = {'identify', 'identify_work', 'override', 'select', 'exclude', 'defer', 'merge_work', 'separate_edition'}
 
 
 def cases_for(state: dict[str, Any]) -> dict[str, Any]:
@@ -25,7 +26,7 @@ def cases_for(state: dict[str, Any]) -> dict[str, Any]:
         inputs['works'] = state['works']
         inputs['edition_ownership'] = {key: value['work'] for key, value in state['editions'].items()}
         cases[cid] = {'id': cid, 'asset': key, 'version': digest(inputs), 'reason': reason,
-                      'evidence': inputs, 'candidates': asset.get('identity_result', {}).get('candidates', [])}
+                      'evidence': inputs, 'candidates': asset.get('work_result', asset.get('identity_result', {})).get('candidates', [])}
     for oid, origin in state['origins'].items():
         if origin['availability'] != 'validated':
             cid = digest({'origin': oid, 'kind': 'file_review'})
@@ -70,6 +71,16 @@ def validate_request(request: Any, author: str) -> None:
     if request['action'] not in ACTIONS or not isinstance(request['values'], dict):
         raise LibraryError('Unsupported action or values')
     action, values = request['action'], request['values']
+    if action == 'identify_work':
+        if (set(values) != {'work', 'evidence'} or not isinstance(values['work'], dict)
+                or not isinstance(values['evidence'], dict) or not values['evidence']
+                or not isinstance(values['work'].get('title'), str) or not values['work']['title'].strip()
+                or set(values['work']) - {'title', 'series', 'number', 'author', 'summary', 'family'}
+                or any(not isinstance(v, str) or len(v) > 4000 for v in values['work'].values())
+                or len(json.dumps(values)) > 16384):
+            raise LibraryError('Work confirmation requires bounded work fields and explicit evidence')
+        if values['work'].get('family') not in (None, 'BD', 'Manga', 'Comics'):
+            raise LibraryError('Unsupported work family')
     if action in ('select', 'exclude', 'defer') and values:
         raise LibraryError('Action takes no values')
     if action == 'override':
@@ -109,10 +120,10 @@ def validate_request(request: Any, author: str) -> None:
             raise LibraryError('Invalid merge or separation decision')
 
 
-def decide(store: Catalog, requests: list[dict[str, Any]], *, author: str) -> list[dict[str, Any]]:
+def decide(store: Catalog, requests: list[dict[str, Any]], *, author: str, locked: bool = False) -> list[dict[str, Any]]:
     results = []
     # Serializes batch decisions, not hashing, copies, network or the collector.
-    with lock(store.directory / 'decisions.lock'):
+    with nullcontext() if locked else lock(store.directory / 'decisions.lock'):
         for request in requests:
             result = {'request_id': request.get('request_id') if isinstance(request, dict) else None, 'status': 'rejected'}
             try:

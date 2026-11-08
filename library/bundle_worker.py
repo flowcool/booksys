@@ -20,15 +20,15 @@ import zipfile
 
 from library.catalog import LibraryError
 
-POLICY = 'comic-bundle-1'
-MAX_SOURCE = 1024**3
+POLICY = 'comic-bundle-2'
+MAX_SOURCE = 4 * 1024**3
 MAX_CHILD = 1024**3
 MAX_TOTAL = 4 * 1024**3
 MAX_COMICS = 64
 MAX_ENTRIES = 256
 
 
-def extract(source: Path, output: Path) -> dict[str, Any]:
+def extract(source: Path, output: Path, parts: list[Path] | None = None) -> dict[str, Any]:
     with source.open('rb') as handle:
         magic = handle.read(8)
     seen: set[str] = set()
@@ -96,6 +96,8 @@ def extract(source: Path, output: Path) -> dict[str, Any]:
             if not valid:
                 raise LibraryError('Bundle member signature differs from suffix')
 
+    if parts and not magic.startswith((b'Rar!\x1a\x07\x00', b'Rar!\x1a\x07\x01\x00')):
+        raise LibraryError('Unsupported multipart container; numbered RAR volumes only')
     if magic.startswith(b'PK\x03\x04'):
         with source.open('rb') as handle:
             handle.seek(max(0, source.stat().st_size - 65557))
@@ -127,13 +129,25 @@ def extract(source: Path, output: Path) -> dict[str, Any]:
     elif magic.startswith((b'Rar!\x1a\x07\x00', b'Rar!\x1a\x07\x01\x00')):
         import rarfile  # type: ignore[import-untyped]
         tool = os.environ.get('BOOKSYS_UNRAR', 'unrar')
-        with rarfile.RarFile(source) as archive:
+        endings: dict[Path, int] = {}
+        def record_header(header: Any) -> None:
+            if header.type == rarfile.RAR_BLOCK_ENDARC:
+                endings[Path(header.volume_file)] = header.flags
+        with rarfile.RarFile(source, info_callback=record_header if parts else None,
+                             errors='strict' if parts else 'stop') as archive:
             members = archive.infolist()
-            if archive.needs_password() or len(archive.volumelist()) != 1:
+            if archive.needs_password() or (not parts and len(archive.volumelist()) != 1):
                 raise LibraryError('Encrypted or multipart bundle RAR')
+            if parts:
+                if set(endings) != set(parts) or any(
+                        bool(endings[part] & rarfile.RAR_ENDARC_NEXT_VOLUME) != (index < len(parts)-1)
+                        for index,part in enumerate(parts)):
+                    raise LibraryError('Missing part or missing final RAR container end')
+                if {Path(name) for name in archive.volumelist()} != set(parts):
+                    raise LibraryError('Missing part or untracked RAR volume')
             rar_entries: list[dict[str, Any]] = []
             for member in members:
-                if member.flags & (rarfile.RAR_FILE_SPLIT_BEFORE | rarfile.RAR_FILE_SPLIT_AFTER):
+                if not parts and member.flags & (rarfile.RAR_FILE_SPLIT_BEFORE | rarfile.RAR_FILE_SPLIT_AFTER):
                     raise LibraryError('Multipart bundle RAR')
                 item = entry(member.filename, member.file_size, member.is_dir(),
                              bool(member.is_symlink() or member.file_redir or
@@ -142,6 +156,12 @@ def extract(source: Path, output: Path) -> dict[str, Any]:
                     rar_entries.append(item)
             if not comics:
                 raise LibraryError('Bundle has no complete comic members')
+            if parts:
+                # Native integrity check proves CRCs and final volume termination.
+                integrity = subprocess.run([tool, 't', '-inul', '-p-', '--', str(source)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+                if integrity.returncode:
+                    raise LibraryError('Missing part or RAR volume CRC/end validation failed')
             process = subprocess.Popen([tool, 'p', '-inul', '-p-', '--', str(source)],
                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             try:
@@ -156,7 +176,10 @@ def extract(source: Path, output: Path) -> dict[str, Any]:
                     process.wait()
     else:
         raise LibraryError('Unrecognized bundle container signature')
-    return {'schema': 1, 'policy': POLICY, 'members': entries, 'expanded_size': total}
+    result = {'schema': 1, 'policy': POLICY, 'members': entries, 'expanded_size': total}
+    if parts:
+        result['volume_end_verified'] = True
+    return result
 
 
 def main() -> None:
@@ -166,9 +189,10 @@ def main() -> None:
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     try:
         source, output = Path(sys.argv[1]), Path(sys.argv[2])
-        if not 0 < source.stat().st_size <= MAX_SOURCE:
+        parts = [Path(value) for value in sys.argv[3:]] or None
+        if not 0 < sum(path.stat().st_size for path in (parts or [source])) <= MAX_SOURCE:
             raise LibraryError('Bundle source size limit')
-        result = extract(source, output)
+        result = extract(source, output, parts)
         from library.readers import sha256
         result['parent_sha256'] = sha256(source)
         print(json.dumps({'status': 'extracted', **result}))

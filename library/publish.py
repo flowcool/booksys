@@ -379,6 +379,9 @@ class Publisher:
                                                'decision': operation.get('decision'), 'role': operation.get('role')}
         self.store.save(state, expected=state['revision'])
         self.transition(operation, 'committed')
+        if operation['kind'] != 'withdraw':
+            from library.provisional import retire_provisional
+            retire_provisional(self.store, self.root, operation['asset'])
 
     def withdraw(self, edition_id: str, *, expected: int, decision: str | None = None, role: str | None = None) -> dict[str, Any]:
         with lock(self.store.directory / 'library-copy.lock', blocking=False):
@@ -453,10 +456,10 @@ class Publisher:
             self.commit(operation)
             return operation
 
-    def reconcile(self, *, locked: bool = False) -> list[dict[str, Any]]:
+    def reconcile(self, *, locked: bool = False, provisional: bool = True) -> list[dict[str, Any]]:
         if not locked:
             with lock(self.store.directory / 'library-copy.lock', blocking=False):
-                return self.reconcile(locked=True)
+                return self.reconcile(locked=True, provisional=provisional)
         results = []
         for operation_id in self.store.read()['operations']:
             if not (self.journals / (operation_id + '.yaml')).exists():
@@ -511,4 +514,13 @@ class Publisher:
             else:
                 raise LibraryError('Unexplained publication divergence; preserve all evidence')
             results.append(operation)
+        if provisional:
+            from library.provisional import ProvisionalPublisher, retire_provisional
+            for edition in self.store.read()['editions'].values():
+                if edition.get('publication'):
+                    verify(self.root / 'bd' / edition['publication']['target'], edition['publication']['manifest'])
+                    retire_provisional(self.store, self.root, edition['publication']['asset'])
+            ProvisionalPublisher(self.store, self.reception, self.root, exclusive=True, capacity=self.capacity).reconcile(locked=True)
+            from library.admission import AdmissionPublisher
+            AdmissionPublisher(self.store, self.reception, self.root, exclusive=True, capacity=self.capacity).reconcile(locked=True)
         return results

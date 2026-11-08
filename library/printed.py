@@ -45,30 +45,40 @@ def identify_printed(printed: dict[str, Any], embedded: dict[str, Any],
     if printed.get('status') != 'ok' or invalid or len(codes) != 1:
         return {**pending, 'reason': 'Printed ISBN is missing, invalid or contradictory in the bounded window'}
     code = next(iter(codes))
-    matches = [c for c in candidates if c.get('isbn') == code and c.get('source') == 'bnf']
-    if len(matches) != 1:
-        return {**pending, 'reason': 'Printed ISBN requires one exact BnF edition'}
-    candidate = matches[0]
-    required = ('title', 'author', 'number', 'language', 'publisher', 'date', 'work_ref', 'edition_ref', 'url')
+    matches = [c for c in candidates if c.get('isbn') == code and c.get('medium') == 'print']
+    if not matches:
+        return {**pending, 'reason': 'No exact printed edition candidate found', 'reason_code': 'no_candidate'}
+    signatures = {(words(c.get('title', '')), words(c.get('author', '')), str(c.get('number', '')),
+                   words(c.get('publisher', '')), words(c.get('language', '')), words(c.get('date', '')),
+                   words(c.get('revision', ''))) for c in matches}
+    if len(signatures) != 1 or any(len({c['edition_ref'] for c in matches if c['source'] == source}) > 1
+                                    for source in {c['source'] for c in matches}):
+        conflict = any(len({row[index] for row in signatures if row[index]}) > 1 for index in range(7))
+        duplicate = any(len({c['edition_ref'] for c in matches if c['source'] == source}) > 1
+                        for source in {c['source'] for c in matches})
+        return {**pending, 'reason': 'Conflicting exact printed edition candidates' if conflict or duplicate else
+                'Printed edition evidence is incomplete', 'reason_code': 'conflict' if conflict or duplicate else 'missing_evidence'}
+    candidate = next((c for c in matches if c['source'] == 'bnf'), matches[0])
+    required: tuple[str, ...] = ('title', 'author', 'language', 'publisher', 'date', 'work_ref', 'edition_ref', 'url')
+    if not candidate.get('unnumbered'):
+        required += ('number',)
     if candidate.get('medium') != 'print' or any(not candidate.get(k) for k in required):
         return pending
     front = printed['pages'][:4]
     text = ' ' + words('\n'.join(p['text'] for p in front)) + ' '
     authors = [candidate['author'], *candidate.get('author_forms', [])]
-    # Qualified route: ISBN and author on the first image (full jacket),
-    # then the album title and explicit volume in its first four images.
-    # End advertisements and isolated matching strings cannot provide this anchor.
-    first = ' ' + words(front[0]['text']) + ' ' if front else ''
-    first_codes, first_invalid = printed_isbns({'pages': front[:1]})
+    # Cover/title pages anchor the work. The exact ISBN may be on a sampled
+    # copyright page. A rear advertisement cannot supply the title/author anchor.
     volumes = set(re.findall(r'\b(?:volume|vol|tome) (\d+)\b', text))
-    if (first_codes != {code} or first_invalid or
-            not any(' ' + words(author) + ' ' in first for author in authors) or
-            volumes != {str(candidate['number'])}):
-        return {**pending, 'reason': 'No consistent front-jacket ISBN/author and opening-volume anchor'}
+    expected_volumes = {str(candidate['number'])} if candidate.get('number') else set()
+    if volumes != expected_volumes:
+        return {**pending, 'reason': 'Missing or conflicting opening-volume anchor', 'reason_code': 'missing_evidence'}
     concordance = {
         'title': [p['name'] for p in front if ' ' + words(candidate['title']) + ' ' in ' ' + words(p['text']) + ' '],
         'author': [p['name'] for p in front if any(' ' + words(a) + ' ' in ' ' + words(p['text']) + ' ' for a in authors)],
         'number': [p['name'] for p in front if re.search(r'\b(?:volume|vol|tome) ' + re.escape(str(candidate['number'])) + r'\b', words(p['text']))]}
+    if candidate.get('unnumbered'):
+        concordance.pop('number')
     if not all(concordance.values()):
         return {**pending, 'reason': 'Printed title, author or volume does not agree with exact edition'}
     # Unknown fields stay unknown. Present structured contradictions still block.
@@ -84,8 +94,8 @@ def identify_printed(printed: dict[str, Any], embedded: dict[str, Any],
         return {**pending, 'reason': 'Printed revision requires manual review'}
     return {'status': 'identified', 'reason': 'Exact printed ISBN and consistent title, author and volume',
             'candidates': candidates, 'candidate': candidate,
-            'evidence': {'isbn': code, 'url': candidate['url'], 'source': 'bnf',
-                         'representation': 'scan_of_print_edition', 'anchor': 'first_image_isbn_author_and_opening_title_volume', 'printed': printed,
+            'evidence': {'isbn': code, 'url': candidate['url'], 'source': candidate['source'],
+                         'representation': 'scan_of_print_edition', 'anchor': 'sampled_isbn_and_opening_title_author_volume', 'printed': printed,
                          'fields': concordance, 'isbn_scope': 'all eight sampled pages; not the complete archive', 'retrieved_at': now()}}
 
 

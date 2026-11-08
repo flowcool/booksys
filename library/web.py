@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from library.catalog import Catalog, now
+from library.catalog import Catalog, digest, now
 
 
 def read_yaml(path: Path) -> dict[str, Any]:
@@ -74,7 +74,7 @@ def description_text(value: Any) -> str:
 def operator_reason(value: Any) -> str:
     reason = bounded(value)
     messages = {
-        'Intake budget deferred': 'En attente du prochain cycle : limite de fichiers à vérifier atteinte (8 par cycle, prochain cycle 5 minutes après la fin du précédent).',
+        'Intake budget deferred': 'En attente du prochain cycle : les fichiers terminés sont vérifiés avant les travaux lourds.',
         'Transfer is not confirmed finished': 'Téléchargement non terminé : le fichier sera examiné après sa fin.',
         'Downloader reports an error; inspect pyLoad': 'Le téléchargement signale une erreur. Consulter pyLoad.',
         'Printed ISBN is missing, invalid or contradictory in the bounded window': 'ISBN absent, invalide ou contradictoire dans les pages examinées.',
@@ -108,16 +108,19 @@ def build_projection(root: Path) -> dict[str, Any]:
         identity = asset.get('identity', {})
         edition = state['editions'].get(identity.get('edition'), {})
         work = state['works'].get(identity.get('work'), {})
+        work_result = asset.get('work_result', {})
+        if work_result.get('status') == 'identified' and not identity:
+            work = work_result['work']
         overrides = asset.get('overrides', {})
         publication = edition.get('publication', {})
         published = bool(publication and publication.get('asset') == origin.get('sha256'))
         hints = list(asset.get('captured_hints', {}).values()) or [captured.get(origin['source'], {})]
         title = overrides.get('title') or work.get('title') or next((hint.get('title') for hint in hints
             if isinstance(hint, dict) and hint.get('title')), Path(origin['path']).name)
-        if origin.get('parent_origin') and not identity:
+        if origin.get('parent_origin') and not identity and not work:
             title = origin.get('member', title)
         automation = asset.get('automation', {})
-        result = asset.get('identity_result', {})
+        result = asset.get('work_result', asset.get('identity_result', {}))
         reason = origin.get('reason') if origin.get('availability') != 'validated' else (
             automation.get('reason') or result.get('reason', 'Metadata not attempted'))
         if origin.get('transfer_error'):
@@ -127,14 +130,19 @@ def build_projection(root: Path) -> dict[str, Any]:
         from library.printed import printed_isbns
         codes = sorted(printed_isbns(asset.get('printed', {}))[0])
         isbn = ', '.join(codes) or bounded(edition.get('isbn') or asset.get('embedded', {}).get('ISBN'))
-        row = {'id': oid, 'title': bounded(title), 'author': bounded(overrides.get('author') or work.get('author')),
+        provisional = asset.get('provisional', {}).get('status') == 'published'
+        admission = asset.get('admission', {})
+        classified = admission.get('status') == 'classified'
+        holding = admission.get('status') == 'holding'
+        row = {'id': oid, 'source_id': digest(origin['source']), 'title': bounded(title), 'author': bounded(overrides.get('author') or work.get('author')),
                'isbn': isbn, 'series': bounded(overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series')),
                'transfer': 'finished' if origin.get('transfer_status') == 0 else 'not finished (code ' + bounded(origin.get('transfer_status', 'unknown')) + ')',
                'intake': bounded(origin['availability']),
                'ocr': bounded(asset.get('printed', {}).get('status') or
                               (asset.get('printed_attempts') or [{}])[-1].get('status', 'not attempted')),
-               'identity': 'contested' if asset.get('contested') else 'identified' if identity else 'pending' if asset else 'not attempted',
-               'publication': 'published' if published else 'pending', 'reason': operator_reason(reason),
+               'identity': 'contested' if asset.get('contested') else 'identified' if identity or work else 'pending' if asset else 'not attempted',
+               'edition': 'confirmed' if identity else 'unknown',
+               'publication': 'classified' if classified else 'À identifier' if holding else 'published' if published else 'available_edition_unknown' if provisional else 'pending', 'reason': operator_reason(reason),
                'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
                'fiche': '/fiche/' + oid}
         row['kind'] = 'bundle' if origin.get('bundle') else 'bundle_member' if origin.get('parent_origin') else 'file'
@@ -143,7 +151,7 @@ def build_projection(root: Path) -> dict[str, Any]:
             row.update(title='Lot : ' + bounded(title), publication='not applicable', identity='not applicable', ocr='not applicable')
         elif origin.get('parent_origin'):
             row['title'] = 'Membre : ' + row['title']
-        row['status'] = 'rejected' if row['intake'] == 'rejected' else 'published' if published else 'pending'
+        row['status'] = 'rejected' if row['intake'] == 'rejected' else 'classified' if classified else 'À identifier' if holding else 'published' if published else 'available_edition_unknown' if provisional else 'pending'
         rows.append(row)
         assertions = []
         for assertion in asset.get('assertions', [])[:30]:
@@ -179,6 +187,7 @@ def build_projection(root: Path) -> dict[str, Any]:
             'summary': summary, 'summary_provenance': summary_provenance, 'taxonomy': taxonomy,
             'overrides': fields(overrides, ('title', 'author', 'series', 'genres', 'public', 'summary'), 1000),
             'assertions': assertions, 'candidates': candidate_projection, 'cover': cover_url,
+            'work_metadata': work_result, 'admission': admission,
             'cover_provenance': 'First page of the local file; not a publisher cover',
             'pipeline': {key: row[key] for key in ('transfer', 'intake', 'ocr', 'identity', 'publication', 'reason', 'observed_at', 'attempt_at')},
             'technical': {**fields(origin, ('pid', 'fid', 'path', 'sha256', 'parent_origin', 'parent_sha256', 'member', 'member_sha256')),
@@ -197,8 +206,12 @@ def build_projection(root: Path) -> dict[str, Any]:
     return {'schema': 1, 'generated_at': now(), 'catalogue_revision': state['revision'],
             'source': 'saved queue and catalogue snapshots; not live pyLoad',
             'cycle': {key: cycle[key] for key in ('status', 'started_at', 'finished_at', 'duration_seconds',
-                      'next_cycle_at', 'reason', 'backlog', 'intake_backlog', 'assets', 'origins', 'published') if key in cycle},
-            'rows': rows, 'fiches': fiches}
+                      'next_cycle_at', 'stage', 'stage_started_at', 'error_source', 'reason', 'backlog', 'intake_backlog', 'assets', 'origins', 'published') if key in cycle},
+            'rows': rows, 'counts': {'sources': len({r['source_id'] for r in rows}), 'origins': len(rows),
+                'confirmed_assets': len({e['publication']['asset'] for e in state['editions'].values() if e.get('publication')}),
+                'classified_assets': sum(a.get('admission', {}).get('status') == 'classified' for a in state['assets'].values()),
+                'holding_assets': sum(a.get('admission', {}).get('status') == 'holding' for a in state['assets'].values()),
+                'provisional_assets': sum(a.get('provisional', {}).get('status') == 'published' for a in state['assets'].values())}, 'fiches': fiches}
 
 
 def fiche_html(fiche: dict[str, Any]) -> str:
@@ -241,7 +254,7 @@ def fiche_html(fiche: dict[str, Any]) -> str:
     return body
 
 
-PAGE = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+PAGE = r'''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Booksys library lab</title><style>body{font:15px system-ui;margin:2em;background:#101923;color:#e4edf5}
 input,select,button{padding:.5em;margin:.3em;background:#233546;color:inherit;border:1px solid #657888}
 table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:.5em;border-bottom:1px solid #456;text-align:left}
@@ -252,18 +265,21 @@ a{color:#81caff}.muted{color:#a6b6c5}td:last-child{max-width:30em}</style>
 <label>Intake <select id="intake"></select></label><label>Identity <select id="identity"></select></label>
 <label>Publication <select id="publication"></select></label>
 <button id="refresh">Refresh</button><p id="count"></p><table><thead><tr>
-<th data-key="title" tabindex="0">Title / fiche ↕</th><th data-key="status" tabindex="0">Status ↕</th><th data-key="transfer" tabindex="0">Transfer ↕</th><th data-key="intake" tabindex="0">Intake ↕</th><th data-key="ocr" tabindex="0">OCR ↕</th><th data-key="identity" tabindex="0">Identity ↕</th><th data-key="publication" tabindex="0">Publication ↕</th><th data-key="reason" tabindex="0">Reason ↕</th></tr></thead><tbody id="rows"></tbody></table>
-<script>let data,sortKey='title',ascending=true;const $=id=>document.getElementById(id),filters=['status','transfer','intake','identity','publication'];
-function render(){if(!data)return;const q=$('query').value.toLowerCase();const rows=data.rows.filter(r=>filters.every(k=>!$(k).value||r[k]===$(k).value)&&(!q||['title','author','isbn','series','reason'].map(k=>r[k]||'').join(' ').toLowerCase().includes(q)));
-rows.sort((a,b)=>(String(a[sortKey]||'').localeCompare(String(b[sortKey]||''),undefined,{numeric:true}))*(ascending?1:-1));
-$('count').textContent=rows.length+' / '+data.rows.length+' source origins (not distinct books)';$('rows').replaceChildren();
-for(const r of rows){const tr=document.createElement('tr');for(const k of ['title','status','transfer','intake','ocr','identity','publication','reason']){const td=document.createElement('td');td.textContent=r[k];if(k==='title'&&r.fiche){const a=document.createElement('a');a.href=r.fiche;a.textContent=r.title;td.replaceChildren(a)}tr.append(td)}$('rows').append(tr)}}
+<th data-key="title" tabindex="0">Title / fiche ↕</th><th data-key="status" tabindex="0">Status ↕</th><th data-key="transfer" tabindex="0">Transfer ↕</th><th data-key="intake" tabindex="0">Intake ↕</th><th data-key="ocr" tabindex="0">OCR ↕</th><th data-key="identity" tabindex="0">Identity ↕</th><th data-key="publication" tabindex="0">Publication ↕</th><th data-key="reason" tabindex="0">Reason ↕</th></tr></thead><tbody id="rows"></tbody></table><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button>
+<script>let data,sortKey='title',ascending=true,page=1,lastRows='',lastOptions='';const pageSize=50,$=id=>document.getElementById(id),filters=['status','transfer','intake','identity','publication'];
+function matching(r,q){return filters.every(k=>!$(k).value||r[k]===$(k).value)&&(!q||['title','author','isbn','series','reason'].map(k=>r[k]||'').join(' ').toLowerCase().includes(q))}
+function cells(r){const tr=document.createElement('tr');for(const k of ['title','status','transfer','intake','ocr','identity','publication','reason']){const td=document.createElement('td');td.textContent=r[k];if(k==='title'&&/^\/fiche\/[a-zA-Z0-9_-]{1,64}$/.test(r.fiche||'')){const a=document.createElement('a');a.href=r.fiche;a.textContent=r.title;td.replaceChildren(a)}tr.append(td)}return tr}
+function render(){if(!data)return;const q=$('query').value.toLowerCase(),groups=new Map();for(const r of data.rows){const key=r.source_id||r.id;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r)}
+const rows=[...groups.values()].map(all=>({all,matches:all.filter(r=>matching(r,q))})).filter(g=>g.matches.length);
+rows.sort((a,b)=>String(a.matches[0][sortKey]||'').localeCompare(String(b.matches[0][sortKey]||''),undefined,{numeric:true})*(ascending?1:-1));
+const pages=Math.max(1,Math.ceil(rows.length/pageSize));page=Math.min(page,pages);$('count').textContent=rows.length+' / '+groups.size+' distinct sources | '+data.rows.length+' file origins | confirmed: '+(data.counts?.confirmed_assets??'?')+' | provisional: '+(data.counts?.provisional_assets??'?');$('page').textContent=page+' / '+pages;$('previous').disabled=page===1;$('next').disabled=page===pages;
+const visible=rows.slice((page-1)*pageSize,page*pageSize),signature=JSON.stringify(visible);if(signature===lastRows)return;lastRows=signature;$('rows').replaceChildren();for(const g of visible){const tr=cells(g.matches[0]);if(g.all.length>1){const details=document.createElement('details'),summary=document.createElement('summary'),table=document.createElement('table');summary.textContent=g.all.length+' files / mirrors / members';details.append(summary);for(const child of g.all)table.append(cells(child));details.append(table);tr.children[0].append(details)}$('rows').append(tr)}}
 async function refresh(){try{const response=await fetch('/api/status',{cache:'no-store'});if(!response.ok)throw Error(response.status);data=await response.json();
-for(const key of filters){const select=$(key),prior=select.value;select.replaceChildren();for(const value of ['',...new Set(data.rows.map(r=>r[key]))].sort()){const option=document.createElement('option');option.value=value;option.textContent=value||'All';select.append(option)}select.value=prior}
-$('clock').textContent='Snapshot: '+data.generated_at+' | '+data.source;const c=data.cycle;$('cycle').textContent='Cycle: '+c.status+' | Started: '+(c.started_at||'unknown')+' | Last finish: '+(c.finished_at||'none')+' | Duration: '+(c.duration_seconds??'?')+' s | Next: '+(c.next_cycle_at||'after completion')+' | Waiting intake: '+(c.intake_backlog??'?')+' | Waiting metadata: '+(c.backlog??'?')+(c.reason?' | '+c.reason:'');render()}
+const options=JSON.stringify(filters.map(k=>[...new Set(data.rows.map(r=>r[k]))].sort()));if(options!==lastOptions){lastOptions=options;for(const key of filters){const select=$(key),prior=select.value;select.replaceChildren();for(const value of ['',...new Set(data.rows.map(r=>r[key]))].sort()){const option=document.createElement('option');option.value=value;option.textContent=value||'All';select.append(option)}select.value=prior}}
+$('clock').textContent='Snapshot: '+data.generated_at+' | '+data.source;const c=data.cycle;$('cycle').textContent='Cycle: '+c.status+' | Stage: '+(c.stage||'idle')+' | Started: '+(c.started_at||'unknown')+' | Last finish: '+(c.finished_at||'none')+' | Duration: '+(c.duration_seconds??'?')+' s | Next: '+(c.next_cycle_at||'after completion')+' | Waiting intake: '+(c.intake_backlog??'?')+' | Waiting metadata: '+(c.backlog??'?')+(c.reason?' | '+c.reason:'');render()}
 catch(e){$('clock').textContent='Refresh failed; last displayed snapshot may be stale: '+e}}
-$('query').oninput=render;for(const key of filters)$(key).onchange=render;for(const head of document.querySelectorAll('th[data-key]')){head.onclick=()=>{ascending=sortKey===head.dataset.key?!ascending:true;sortKey=head.dataset.key;render()};head.onkeydown=e=>{if(e.key==='Enter')head.onclick()}}
-$('refresh').onclick=refresh;refresh();setInterval(refresh,30000);</script>'''
+function reset(){page=1;render()}$('query').oninput=reset;for(const key of filters)$(key).onchange=reset;for(const th of document.querySelectorAll('th[data-key]')){th.onclick=()=>{if(sortKey===th.dataset.key)ascending=!ascending;else{sortKey=th.dataset.key;ascending=true}reset()};th.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();th.onclick()}}}$('previous').onclick=()=>{page--;render()};$('next').onclick=()=>{page++;render()};$('refresh').onclick=refresh;refresh();setInterval(refresh,30000);
+</script>'''
 
 
 def handler(root: Path, *, resolution: Any = None) -> type[BaseHTTPRequestHandler]:
@@ -308,6 +324,11 @@ def handler(root: Path, *, resolution: Any = None) -> type[BaseHTTPRequestHandle
                 return
             projection = read_yaml(root / 'evidence/dashboard.yaml')
             if self.path == '/api/status':
+                if projection:
+                    cycle = read_yaml(root / 'evidence/cycle.yaml')
+                    projection['cycle'] = {k: cycle[k] for k in ('status', 'stage', 'stage_started_at',
+                        'started_at', 'finished_at', 'duration_seconds', 'next_cycle_at', 'reason',
+                        'error_source', 'backlog', 'intake_backlog', 'assets', 'origins', 'published') if k in cycle}
                 self.respond(200 if projection else 503, json.dumps({k: v for k, v in projection.items()
                     if k != 'fiches'}).encode(), 'application/json; charset=utf-8')
                 return
@@ -380,6 +401,9 @@ def handler(root: Path, *, resolution: Any = None) -> type[BaseHTTPRequestHandle
                     result = resolution.preview(value['asset'], value['values'])
                 elif action == 'confirm':
                     result = resolution.confirm(value)
+                elif action == 'confirm-work':
+                    from library.work_resolution import confirm_work
+                    result = confirm_work(resolution, value)
                 elif action == 'search' and set(value) == {'query'}:
                     result = resolution.search(value['query'])
                 else:

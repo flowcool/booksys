@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from library.catalog import Catalog, LibraryError, atomic_yaml, lock, now
 from library.cli import parser as cli_parser, run
 from library.runtime import lab_preflight
+from library.scheduling import heavy_stage, routing_candidates, RoutingClient
+from library.web import read_yaml
 
 
 def main() -> int:
@@ -30,6 +32,7 @@ def main() -> int:
     parser.add_argument('--printed', action='store_true', help='Bounded OCR on selected assets only')
     parser.add_argument('--budget', type=int, default=2, help='Total provider request budget for this cycle')
     parser.add_argument('--auto', action='store_true', help='Bounded new-input processing; uncertain identities are not retried')
+    parser.add_argument('--intake-burst', type=int, default=32, help='Sequential intake inspections per turn before backlog recheck')
     parser.add_argument('--route-mirrors', action='store_true', help='Apply one journaled native mirror routing operation after intake')
     args = parser.parse_args()
     inputs = (args.captured, args.submissions, *(p for p in (args.queue, args.credentials) if p))
@@ -48,6 +51,14 @@ def cycle(args: argparse.Namespace) -> int:
     started_at, started = now(), time.monotonic()
     state, library = args.root / 'state', args.root / 'library'
     snapshots, evidence = args.root / 'snapshots', args.root / 'evidence'
+    prior = read_yaml(evidence / 'cycle.yaml')
+    turn = prior.get('heavy_turn', 0)
+    stage = 'preflight'
+    def progress(name: str) -> None:
+        nonlocal stage
+        stage = name
+        atomic_yaml(evidence / 'cycle.yaml', {'status': 'running', 'started_at': started_at,
+            'stage': stage, 'stage_started_at': now(), 'heavy_turn': turn})
     try:
         inputs = (args.captured, args.submissions, *(p for p in (args.queue, args.credentials) if p))
         lab_preflight(args.reception, library, state, inputs)
@@ -64,10 +75,12 @@ def cycle(args: argparse.Namespace) -> int:
         for source, name in ((args.captured, 'captured.yaml'), (args.submissions, 'submissions.yaml')):
             if source.resolve() != (snapshots / name).resolve():
                 shutil.copyfile(source, snapshots / name)
+        progress('queue_snapshot')
         if args.queue:
             if args.queue.resolve() != (snapshots / 'queue.yaml').resolve():
                 shutil.copyfile(args.queue, snapshots / 'queue.yaml')
-        else:
+        elif not (args.auto and (snapshots / 'queue.yaml').is_file()
+                  and time.time() - (snapshots / 'queue.yaml').stat().st_mtime < 60):
             from pipeline import Pyload
             client = Pyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'])
             from mirrors import logical_snapshot
@@ -80,6 +93,7 @@ def cycle(args: argparse.Namespace) -> int:
             return run(cli_parser().parse_args(['--state', str(state), *map(str, arguments)]))
 
         common = ['--lab', '--reception', args.reception, '--library', library]
+        progress('recovery')
         command('reconcile', *common)  # Must precede intake/activation/projection after crash.
         from library.resolution import Resolution
         from library.publish import Publisher
@@ -87,12 +101,13 @@ def cycle(args: argparse.Namespace) -> int:
         Resolution(store, args.reception).apply(Publisher(store, args.reception, library, lab=True))
         with lock(state / 'library-network.lock'):
             atomic_yaml(state / 'library-network-budget.yaml', {'remaining': 50, 'cycle_started': now()})
+        progress('intake')
         if args.auto:
             from library.intake import receive
             from library.cli import load
             receive(Catalog(state), args.reception, load(snapshots / 'captured.yaml'),
                     load(snapshots / 'submissions.yaml'), load(snapshots / 'queue.yaml'),
-                    incremental=True, inspection_limit=8)
+                    incremental=True, inspection_limit=max(1, getattr(args, 'intake_burst', 32)))
         else:
             command('intake', *common, '--captured', snapshots / 'captured.yaml',
                     '--submissions', snapshots / 'submissions.yaml', '--queue', snapshots / 'queue.yaml')
@@ -101,12 +116,36 @@ def cycle(args: argparse.Namespace) -> int:
         from library.metadata import Providers, enrich
         providers = Providers(state / 'library-provider-cache', budget=min(50, max(0, args.budget)), shared=state)
         store = Catalog(state)
-        automatic = {}
+        automatic: dict[str, Any] = {}
+        intake_backlog = sum(o.get('reason') == 'Intake budget deferred' for o in store.read()['origins'].values())
         if args.auto:
-            from library.automatic import process_assets
-            automatic = process_assets(store, args.reception, library, providers)
-        mirror_results = []
+            from library.automatic import process_assets, ready_assets
+            from library.admission import process_admissions as process_provisional
+            selected = heavy_stage(intake_backlog, turn)
+            automatic = {'processed': 0, 'provisional_processed': 0}
+            if selected:
+                turn += 1
+                progress(selected)
+                if selected == 'metadata':
+                    automatic.update(process_assets(store, args.reception, library, providers, limit=1))
+                    if not automatic.get('processed'):
+                        progress('provisional')
+                        result = process_provisional(store, args.reception, library, limit=1)
+                        automatic.update({'provisional_' + k: v for k, v in result.items()})
+                else:
+                    result = process_provisional(store, args.reception, library, limit=1)
+                    automatic.update({'provisional_' + k: v for k, v in result.items()})
+                    if not result.get('processed'):
+                        progress('metadata')
+                        automatic.update(process_assets(store, args.reception, library, providers, limit=1))
+            automatic['ready_backlog'] = ready_assets(store)
+            # A zero-limit call reports eligible conversion work without writing copies.
+            result = process_provisional(store, args.reception, library, limit=0)
+            automatic['provisional_ready_backlog'] = result['ready_backlog']
+        mirror_results: list[dict[str, Any]] = []
+        optional_errors: list[dict[str, Any]] = []
         if getattr(args, 'route_mirrors', False):
+            progress('mirror_routing')
             if not args.credentials:
                 raise LibraryError('Mirror routing requires controller credentials')
             from pipeline import Pyload
@@ -114,19 +153,40 @@ def cycle(args: argparse.Namespace) -> int:
             from mirror_routing import route_package
             from mirrors import public_hosts
             from library.cli import load
-            availability = public_hosts()
             records, submissions = load(snapshots / 'captured.yaml')['items'], load(snapshots / 'submissions.yaml')['submissions']
             routing_path = args.submissions.parent / 'mirror-routing.yaml'
             routing_catalogue = store.read()  # Whole-cycle lock makes this snapshot stable for routing.
-            for source, entry in submissions.items():
-                if entry.get('status') != 'queued' or source not in records:
-                    continue
-                result = route_package(client, source, entry, records[source], routing_catalogue, args.reception,
-                                       routing_path, apply=True, availability=availability)
-                mirror_results.append(result)
-                if result['outcome'] in ('parked', 'fallback_active'):
-                    break
-            atomic_yaml(evidence / 'mirror-routing-cycle.yaml', {'created_at': now(), 'results': mirror_results})
+            candidates = routing_candidates(load(snapshots / 'queue.yaml'), submissions,
+                                            routing_catalogue, read_yaml(routing_path))
+            # One candidate per minute at most. Repeated fast intake turns must not
+            # exhaust pyLoad's native per-minute API budget through optional routing.
+            routing_prior = read_yaml(evidence / 'mirror-routing-cycle.yaml')
+            if candidates and time.time() >= routing_prior.get('next_attempt', 0):
+                from urllib.error import HTTPError, URLError
+                from booksys import CollectionError
+                availability = None
+                try:
+                    availability = public_hosts()
+                except (HTTPError, URLError, OSError, ValueError, CollectionError) as exc:
+                    optional_errors.append({'source': 'alldebrid_public_hosts',
+                        'http_status': getattr(exc, 'code', None), 'reason': type(exc).__name__})
+                if availability is not None:
+                    source = candidates[routing_prior.get('cursor', 0) % len(candidates)]
+                    routing_client = RoutingClient(client)
+                    # A retained intent can already contain an uncertain prior write.
+                    routing_client.wrote = bool(read_yaml(routing_path).get('packages', {}).get(
+                        str(submissions[source]['package_id'])))
+                    try:
+                        result = route_package(routing_client, source, submissions[source], records[source], routing_catalogue,
+                                               args.reception, routing_path, apply=True, availability=availability)
+                        mirror_results.append(result)
+                    except HTTPError as exc:
+                        if routing_client.wrote:
+                            raise  # Preserve every uncertain write and its readback.
+                        optional_errors.append({'source': 'pyload', 'endpoint': routing_client.endpoint,
+                            'http_status': exc.code, 'reason': 'HTTPError'})
+                atomic_yaml(evidence / 'mirror-routing-cycle.yaml', {'created_at': now(),
+                    'next_attempt': time.time() + 60, 'cursor': routing_prior.get('cursor', 0) + 1, 'results': mirror_results, 'errors': optional_errors})
         for asset in dict.fromkeys(args.asset if not args.auto else []):
             if asset not in store.read()['assets']:
                 raise LibraryError('Selected asset is absent from tracked intake')
@@ -157,8 +217,8 @@ def cycle(args: argparse.Namespace) -> int:
             origin_counts[kind] += 1
         intake_backlog = sum(o.get('reason') == 'Intake budget deferred' for o in current['origins'].values())
         summary = {'status': 'lab', 'started_at': started_at, 'finished_at': now(),
-                   'duration_seconds': round(time.monotonic() - started, 3), **automatic, 'mirror_outcomes': len(mirror_results),
-                   'intake_backlog': intake_backlog, 'assets': len(current['assets']), 'origins': len(current['origins']),
+                   'duration_seconds': round(time.monotonic() - started, 3), **automatic, 'mirror_outcomes': len(mirror_results), 'optional_errors': optional_errors,
+                   'stage': 'idle', 'heavy_turn': turn, 'intake_backlog': intake_backlog, 'assets': len(current['assets']), 'origins': len(current['origins']),
                    'published': len(published), 'pending_assets': len(set(current['assets']) - published),
                    'origin_counts': origin_counts, 'report': str(evidence / 'review.md'),
                    'concurrent_writer_reserve_guaranteed': False}
@@ -168,7 +228,11 @@ def cycle(args: argparse.Namespace) -> int:
         print(json.dumps(summary))
         return 0
     except (LibraryError, OSError, ValueError, KeyError, TypeError) as exc:
-        failure = {'status': 'blocked', 'reason': str(exc), 'started_at': started_at,
+        from urllib.error import HTTPError
+        from urllib.parse import urlsplit
+        error = ({'error_endpoint': urlsplit(exc.url).path, 'http_status': exc.code}
+                 if isinstance(exc, HTTPError) else {})
+        failure = {**error, 'status': 'blocked', 'reason': str(exc), 'stage': stage, 'error_source': stage, 'heavy_turn': turn, 'started_at': started_at,
                    'finished_at': now(), 'duration_seconds': round(time.monotonic() - started, 3)}
         atomic_yaml(evidence / 'cycle.yaml', failure)
         from library.web import build_projection

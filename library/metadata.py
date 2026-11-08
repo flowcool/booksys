@@ -35,6 +35,16 @@ def isbn13(value: str) -> str | None:
     return value if (10 - checksum % 10) % 10 == int(value[-1]) else None
 
 
+def discovery_hint(title: str, embedded: dict[str, Any]) -> dict[str, str]:
+    """Normalize captured captions for search only, never for identity proof."""
+    title = re.sub(r'\[[^]]*\]|\([^)]*\b(?:pdf|cbr|cbz|epub|scan)\b[^)]*\)', ' ', title, flags=re.I)
+    title = re.sub(r'\b(?:PDF|CBR|CBZ|EPUB|HD|FRENCH|MULTI)\b', ' ', title, flags=re.I)
+    title = re.sub(r'\s*[-–|]\s*$', '', title)
+    volume = re.search(r'\b(?:tome|vol(?:ume)?|t)\.?\s*(\d+)\b', title, re.I)
+    return {'title': ' '.join(title.split())[:200], 'author': str(embedded.get('Writer', ''))[:120],
+            'number': str(embedded.get('Number', '')) or (volume.group(1) if volume else '')}
+
+
 def identify(embedded: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
     upstreams = {c.get('upstream', c['source']) for c in candidates}
     outcome: dict[str, Any] = {'status': 'pending', 'independent_sources': len(upstreams),
@@ -46,17 +56,25 @@ def identify(embedded: dict[str, Any], candidates: list[dict[str, Any]]) -> dict
                    normalized(c.get('number', '')), normalized(c.get('language', '')),
                    normalized(c.get('publisher', '')), normalized(c.get('date', '')),
                    normalized(c.get('revision', ''))) for c in matches}
-    if not matches or len(identities) != 1:
-        return {**outcome, 'reason': 'Conflicting or missing edition evidence'}
+    if not matches:
+        return {**outcome, 'reason': 'No exact edition candidate found', 'reason_code': 'no_candidate'}
+    if len(identities) != 1:
+        conflict = any(len({row[index] for row in identities if row[index]}) > 1 for index in range(7))
+        return {**outcome, 'reason': 'Conflicting edition candidates' if conflict else 'Edition evidence is incomplete',
+                'reason_code': 'conflict' if conflict else 'missing_evidence'}
     if not code and len({c.get('upstream', c['source']) for c in matches}) < 2:
         return {**outcome, 'reason': 'Non-ISBN identity requires two independent upstream sources'}
     candidate = matches[0]
-    required = ('title', 'author', 'number', 'publisher', 'language', 'date',
-                'revision', 'work_ref', 'edition_ref', 'url', 'source', 'upstream')
+    required: tuple[str, ...] = ('title', 'author', 'publisher', 'language', 'date', 'revision',
+                'work_ref', 'edition_ref', 'url', 'source', 'upstream')
+    if not candidate.get('unnumbered'):
+        required += ('number',)
     if any(not candidate.get(field) for field in required):
-        return {**outcome, 'reason': 'Edition evidence is incomplete'}
+        return {**outcome, 'reason': 'Edition evidence is incomplete', 'reason_code': 'missing_evidence'}
     for source_field, field in [('Title', 'title'), ('Writer', 'author'), ('Number', 'number'),
                                 ('Publisher', 'publisher'), ('LanguageISO', 'language')]:
+        if field == 'number' and candidate.get('unnumbered') and not embedded.get(source_field):
+            continue
         if not embedded.get(source_field) or normalized(embedded[source_field]) != normalized(candidate[field]):
             return {**outcome, 'reason': f'Missing or conflicting {field}'}
     if not code:
@@ -157,12 +175,12 @@ class Providers:
     def _get(self, url: str) -> dict[str, Any]:
         parts = urlsplit(url)
         if (parts.scheme != 'https' or parts.hostname not in
-                ('openlibrary.org', 'www.bdtheque.com', 'api.mangadex.org', 'catalogue.bnf.fr')
+                ('openlibrary.org', 'www.bdtheque.com', 'api.mangadex.org', 'catalogue.bnf.fr', 'www.bedetheque.com')
                 or parts.username or parts.password or parts.port):
             raise LibraryError('Unqualified provider URL')
         path = self.cache / (digest(url) + '.yaml')
         if path.exists():
-            cached: dict[str, Any] = yaml.safe_load(path.read_text())
+            cached: dict[str, Any] = yaml.load(path.read_text(), Loader=getattr(yaml, 'CSafeLoader', yaml.SafeLoader))
             if cached['expires'] > time.time():
                 return cached
         if self.budget <= 0:
@@ -202,9 +220,15 @@ class Providers:
             atomic_yaml(budget_path, value)
         self.budget -= 1
 
-    def discover(self, title: str) -> dict[str, Any]:
-        url = 'https://openlibrary.org/search.json?' + urlencode({'title': title[:200], 'limit': 5,
-            'fields': 'key,title,author_name,isbn,edition_key,publisher,language,first_publish_year'})
+    def discover(self, title: str, *, author: str = '', number: str = '') -> dict[str, Any]:
+        query: dict[str, Any] = {'title': title[:200], 'limit': 5,
+            'fields': 'key,title,author_name,isbn,edition_key,publisher,language,first_publish_year'}
+        if author:
+            query['author'] = author[:120]
+        # Volume stays in the title query; OpenLibrary has no qualified volume index.
+        if number and not re.search(r'\b(?:vol(?:ume)?|tome|t)\.?\s*' + re.escape(number) + r'\b', title, re.I):
+            query['title'] += ' volume ' + number
+        url = 'https://openlibrary.org/search.json?' + urlencode(query)
         response = self.get(url)
         if response['status'] != 'ok':
             return response
@@ -287,7 +311,12 @@ class Providers:
                 'language': language, 'publisher': publishers[0] if len(publishers) == 1 else '',
                 'date': data.get('publish_date', ''), 'revision': data.get('edition_name', ''),
                 'work_ref': works[0]['key'] if len(works) == 1 else '', 'edition_ref': data['key'],
+                'medium': 'print' if normalized(data.get('physical_format', '')) in
+                    ('paperback', 'hardcover', 'hardback', 'softcover', 'broché', 'relié') else 'unknown',
+                'unnumbered': not volume and len(works) == 1,
                 'source_records': data.get('source_records', [])}
+            if any('bnf' in record.casefold() for record in candidate['source_records']):
+                candidate['upstream'] = 'bnf'
             return {'status': 'ok', 'candidate': candidate}
         except (ValueError, KeyError, TypeError, LibraryError) as exc:
             return {'status': 'unavailable', 'reason': str(exc), 'url': url}
@@ -306,7 +335,8 @@ class Providers:
                 return {'status': 'ok', 'candidate': parse_bnf(response['body'], reference,
                     url, response['retrieved_at'])}
             except LibraryError as exc:
-                return {'status': 'unavailable', 'reason': str(exc), 'url': url}
+                return {'status': 'not_found' if str(exc) == 'BnF edition not found' else 'unavailable',
+                        'reason': str(exc), 'url': url}
         if provider == 'openlibrary':
             return self.edition(reference)
         if provider == 'bdtheque' and re.fullmatch(r'\d+/[a-z0-9-]+', reference):
@@ -350,8 +380,15 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
            references: list[tuple[str, str]]) -> dict[str, Any]:
     state = store.read()
     asset = state['assets'][asset_id]
+    from library.work_enrichment import enrich_work
+    enrich_work(state, asset_id, providers)
+    if asset['work_result']['status'] == 'identified' and not references and not asset.get('identity'):
+        store.save(state, expected=state['revision'])
+        return store.read()
     # All external work happens on the snapshot, outside catalogue locks.
     candidates = []
+    attempt_start = len(asset.get('source_attempts', []))
+    discovery_unavailable = False
     for provider, ref in references:
         response = providers.source(provider, ref)
         add_assertions(asset, response)
@@ -374,8 +411,10 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
         if printed.get('status') == 'ok' and len(codes) == 1 and not invalid:
             printed_code = next(iter(codes))
     if title and not printed_code:
-        asset['discovery_hint'] = {'title': title, 'source': hint_source, 'validation': 'discovery_only'}
-        asset['discovery'] = providers.discover(title)
+        hint = discovery_hint(title, embedded)
+        asset['discovery_hint'] = {**hint, 'raw_title': title, 'source': hint_source, 'validation': 'discovery_only'}
+        asset['discovery'] = providers.discover(hint['title'], author=hint['author'], number=hint['number'])
+        discovery_unavailable = asset['discovery'].get('status') == 'unavailable'
         attempts = providers.resolve_discovery(asset['discovery'])
         asset['discovery']['edition_attempts'] = attempts
         candidates.extend(attempt['candidate'] for attempt in attempts
@@ -385,6 +424,12 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
         asset.setdefault('source_attempts', []).append({k: v for k, v in response.items() if k != 'body'})
         if response['status'] == 'ok':
             candidates.append(response['candidate'])
+    if not code and not printed_code:
+        for candidate_code in list(dict.fromkeys(c.get('isbn') for c in candidates if isbn13(str(c.get('isbn', '')))))[:3]:
+            response = providers.source('bnf', candidate_code)
+            add_assertions(asset, response)
+            if response['status'] == 'ok':
+                candidates.append(response['candidate'])
     candidates = list({(candidate['source'], candidate['edition_ref']): candidate
                        for candidate in candidates}.values())
     printed = asset.get('printed')
@@ -394,10 +439,11 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
             raise LibraryError('Printed assertions are not bound to this asset')
         codes, invalid = printed_isbns(printed)
         if printed.get('status') == 'ok' and len(codes) == 1 and not invalid:
-            response = providers.source('bnf', next(iter(codes)))
-            add_assertions(asset, response)
-            if response['status'] == 'ok':
-                candidates.append(response['candidate'])
+            for provider in ('bnf', 'openlibrary'):
+                response = providers.source(provider, next(iter(codes)))
+                add_assertions(asset, response)
+                if response['status'] == 'ok':
+                    candidates.append(response['candidate'])
         candidates = list({(candidate['source'], candidate['edition_ref']): candidate
                            for candidate in candidates}.values())
         printed_result = identify_printed(printed, embedded, candidates)
@@ -409,6 +455,12 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
             result = identify(embedded, candidates)
     else:
         result = identify(embedded, candidates)
+    if not candidates and (discovery_unavailable or any(attempt.get('status') == 'unavailable'
+            for attempt in asset.get('source_attempts', [])[attempt_start:])):
+        result.update(reason='Metadata provider unavailable; no edition candidate', reason_code='provider_unavailable')
+    if result['status'] != 'identified':
+        result.setdefault('reason_code', 'conflict' if any(word in result['reason'].lower()
+            for word in ('conflict', 'contradict')) else 'missing_evidence')
     asset['identity_result'] = result
     if result['status'] == 'identified':
         candidate = result['candidate']
@@ -419,7 +471,10 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
             asset['contested'] = True
         elif not existing:
             apply_effect(state, {'action': 'identify', 'target': asset_id, 'values': {
-                'work_id': wid, 'edition_id': eid, 'work': {'title': candidate['title'], 'author': candidate['author'], 'number': candidate['number']},
+                'work_id': wid, 'edition_id': eid, 'work': {
+                    **{key: candidate[key] for key in ('title', 'author', 'number', 'contributors', 'responsibility')
+                       if candidate.get(key)},
+                    'identity_scope': 'edition' if candidate['work_ref'].startswith('edition-scoped:') else 'work'},
                 'edition': {'language': candidate['language'], 'publisher': candidate['publisher'],
                             'date': candidate['date'], 'revision': candidate['revision'], 'evidence': result['evidence']}}})
             state['editions'][eid].setdefault('selected', asset['identity']['variant'])

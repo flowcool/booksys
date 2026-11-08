@@ -94,6 +94,11 @@ def project_state(store: Catalog) -> dict[str, Any]:
     if any(item not in {r['id'] for r in records} for item in state['ledger']):
         raise LibraryError('Snapshot references missing decisions')
     for record in records:
+        if record['action'] == 'identify_work':
+            for proof in record['values']['evidence'].get('pages', []):
+                piece = read(store.directory / 'library-resolution/pieces' / (identifier(proof['page']) + '.yaml'))
+                if digest(piece) != proof['page'] or piece.get('asset') != record['target']:
+                    raise LibraryError('Work decision proof missing or altered')
         if record['action'] == 'resolve':
             for notice in record['values'].get('notices', []):
                 value = read(store.directory / 'library-resolution/pieces' / (identifier(notice) + '.yaml'))
@@ -374,6 +379,8 @@ class Resolution:
     def trim_previews(self) -> None:
         durable = {key for r in self.store.ledger() if r['action'] == 'resolve'
                    for key in [*[p['page'] for p in r['values']['proof']], *r['values'].get('notices', [])]}
+        durable.update(p['page'] for r in self.store.ledger() if r['action'] == 'identify_work'
+                       for p in r['values']['evidence'].get('pages', []))
         previews = sorted(self.previews.glob('*.yaml'), key=lambda p: p.stat().st_mtime_ns)
         def temporary_size() -> int:
             return sum(p.stat().st_size for p in self.pieces.glob('*.yaml') if p.stem not in durable)
@@ -570,7 +577,7 @@ def case_view(service: Resolution, key: str) -> dict[str, Any]:
     if asset.get('status') != 'validated':
         raise LibraryError('Only validated assets can be resolved')
     candidates = []
-    for candidate in asset.get('identity_result', {}).get('candidates', [])[:10]:
+    for candidate in asset.get('work_result', asset.get('identity_result', {})).get('candidates', [])[:10]:
         candidates.append({'label': 'Candidat : ' + str(candidate.get('title', 'unknown')) + ' / ' + str(candidate.get('publisher', 'unknown')),
             'candidate': service.piece({'candidate': candidate}),
             'notice': {k: candidate.get(k) for k in ('source', 'url', 'edition_ref', 'retrieved_at')},
@@ -585,7 +592,10 @@ def case_view(service: Resolution, key: str) -> dict[str, Any]:
         operation = read(path)
         if operation.get('asset') == key and operation.get('previous') and operation.get('phase') == 'committed':
             recovery.append({'id': operation['id'], 'label': operation['id'] + ' / ' + operation['kind']})
-    return {'asset': key, 'identity': {k: asset['identity'][k] for k in ('work', 'edition', 'variant')} if asset.get('identity') else None, 'resolution': asset.get('resolution'),
+    from library.review import cases_for
+    work_case = next(c for c in cases_for(state).values() if c.get('asset') == key)
+    return {'asset': key, 'work_case': {'case': work_case['id'], 'version': work_case['version']},
+            'identity': {k: asset['identity'][k] for k in ('work', 'edition', 'variant')} if asset.get('identity') else None, 'resolution': asset.get('resolution'),
             'publications': {eid: e['publication'] for eid, e in state['editions'].items()
                              if e.get('publication', {}).get('asset') == key},
             'candidates': candidates, 'editions': editions, 'recovery': recovery,

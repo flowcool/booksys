@@ -34,6 +34,12 @@ def fingerprint(path: Path) -> tuple[int, int, int, int, int]:
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
+def worker_failure(label: str, code: int, stderr: bytes) -> str:
+    detail = {125: 'container setup failure', 126: 'worker invocation denied',
+              127: 'worker executable missing', 137: 'worker killed; CPU/OOM cause unconfirmed'}.get(code, 'worker failure')
+    return f'{label}: exit {code} ({detail}); ' + stderr.decode(errors='replace')[:256].strip()
+
+
 def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
     try:
         path = path.absolute()
@@ -68,7 +74,7 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
                 '/input', path.suffix.lower()]
         result = subprocess.run(command, capture_output=True, timeout=45, check=False)
         if result.returncode:
-            raise LibraryError('Isolated reader failed or resource limit exceeded')
+            raise LibraryError(worker_failure('Isolated reader failed', result.returncode, result.stderr))
         outcome: dict[str, Any] = json.loads(result.stdout)
         if outcome.get('reader_policy') != READER_POLICY:
             raise LibraryError('Reader policy differs from controller')
@@ -77,6 +83,9 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
         if fingerprint(path) != first or sha256(path) != asset_hash:
             raise LibraryError('Reception changed during validation')
         return {**outcome, 'sha256': asset_hash, 'size': first[2]}
-    except (LibraryError, OSError, subprocess.TimeoutExpired, ValueError) as exc:
+    except subprocess.TimeoutExpired:
+        return {'status': 'rejected', 'reason': 'Isolated reader timed out: wall limit 45 seconds',
+                'reader_policy': READER_POLICY}
+    except (LibraryError, OSError, ValueError) as exc:
         return {'status': 'rejected', 'reason': str(exc),
                 'reader_policy': None if str(exc) == 'Reader policy differs from controller' else READER_POLICY}

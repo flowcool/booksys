@@ -22,7 +22,9 @@ class IdentityTests(unittest.TestCase):
         from library.xmlmetadata import comicinfo
         from xml.etree import ElementTree
         class QualifiedFixtureProvider:
-            def discover(self, title):
+            def get(self, url):
+                return {"status": "unavailable", "reason": "Fixture has no French response"}
+            def discover(self, title, **kwargs):
                 return {'status': 'ok', 'candidates': []}
             def resolve_discovery(self, discovery):
                 return []
@@ -118,3 +120,35 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertEqual(providers.discover('Other')['status'], 'unavailable')
             self.assertEqual(len(calls), 1)
+
+
+class YieldIdentityTests(unittest.TestCase):
+    def test_normalized_discovery_separates_search_hints_from_evidence(self):
+        from library.metadata import discovery_hint
+        self.assertEqual(discovery_hint('Bird - Tome 2 [CBZ FRENCH HD]',{'Writer':'Author'}),
+                         {'title':'Bird - Tome 2','author':'Author','number':'2'})
+        self.assertEqual(identify({},[])['reason_code'],'no_candidate')
+        self.assertEqual(identify(EMBEDDED,[CANDIDATE,{**CANDIDATE,'title':'Wrong'}])['reason_code'],'conflict')
+
+    def test_discovered_isbn_gets_real_independent_bnf_check_without_source_isbn(self):
+        from test_library_publish import setup_library
+        class Provider:
+            def get(self, url):
+                return {"status": "unavailable", "reason": "Fixture has no French response"}
+            def discover(self,title,**hints):return {'status':'ok','candidates':[]}
+            def resolve_discovery(self,discovery):return [{'status':'ok','candidate':CANDIDATE}]
+            def source(self,provider,reference):
+                assert provider=='bnf' and reference=='9781569319017'
+                return {'status':'ok','candidate':{**CANDIDATE,'source':'bnf','upstream':'bnf',
+                    'edition_ref':'ark:/12148/cbfixture','url':'https://catalogue.bnf.fr/fixture'}}
+        with tempfile.TemporaryDirectory() as folder:
+            store,_,_,asset=setup_library(Path(folder))
+            state=store.read();state['assets'][asset].pop('identity');state['variants'].clear();state['editions'].clear();state['works'].clear()
+            state['assets'][asset]['embedded']={key:value for key,value in EMBEDDED.items() if key!='ISBN'}
+            state['assets'][asset]['embedded'].update(EditionDate='2003',EditionRevision='1 edition')
+            store.save(state,expected=state['revision'])
+            current=enrich(store,asset,Provider(),[])
+            self.assertEqual(current['assets'][asset]['identity_result']['status'],'identified')
+            state=store.read();state['assets'][asset].pop('identity');state['assets'][asset]['embedded']['EditionDate']='2004'
+            store.save(state,expected=state['revision'])
+            self.assertEqual(enrich(store,asset,Provider(),[])['assets'][asset]['identity_result']['status'],'pending')

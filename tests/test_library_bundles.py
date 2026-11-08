@@ -295,7 +295,7 @@ class BundleTests(unittest.TestCase):
             root = Path(folder); (root / 'reception').mkdir()
             parent = root / 'reception/oversized.rar'
             with parent.open('wb') as handle:
-                handle.truncate(1024**3 + 1)
+                handle.truncate(4 * 1024**3 + 1)
             with self.assertRaisesRegex(LibraryError, 'source limit'):
                 retain(parent, root / 'state', stable_seconds=.01)
             self.assertFalse((root / 'state').exists())

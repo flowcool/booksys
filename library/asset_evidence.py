@@ -25,6 +25,10 @@ def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:
             result['labels'].append(value)
         result['provenance'].setdefault('labels', []).append(
             {'value': value, 'source': source, 'scope': 'asset'})
+        from library.names import METHOD, parse_name
+        for field, parsed in parse_name(value).items():
+            result['provenance'].setdefault(field, []).append(
+                {'value': parsed, 'source': source, 'scope': 'asset', 'method': METHOD})
 
     embedded = asset.get('embedded', {})
     for xml_name, field in (('Title', 'title'), ('Series', 'series'), ('Number', 'number')):
@@ -54,4 +58,27 @@ def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:
         for value in (hint.get('parent_title'), hint.get('title')):
             if isinstance(value, str) and value.strip() and value not in result['discovery_queries']:
                 result['discovery_queries'].append(value)
+    # A plain standalone name is qualified only when the directly captured title
+    # agrees with the exact source file. Derived bundle hints cannot add this proof.
+    from library.work_identity import normalized, informative
+    def standalone(value: str) -> str:
+        value = re.sub(r'\.(?:pdf|cbz|cbr)$', '', value, flags=re.I)
+        value = re.sub(r'^Z[zZ](?=[A-ZÀ-Ý])', '', value)
+        value = re.sub(r"\b([LD])_(?=[A-ZÀ-Ý])", r"\1'", value)
+        value = value.replace('_', ' ')
+        value = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', value)
+        return ' '.join(value.split())
+    if not any(field in result['provenance'] for field in ('title', 'series', 'number')):
+        for oid, origin in origins:
+            if origin.get('parent_origin'):
+                continue
+            hint = asset.get('captured_hints', {}).get(origin['source'], {}).get('title')
+            filename = standalone(PurePosixPath(origin['path']).name)
+            if (isinstance(hint, str) and informative(filename) and len(filename.split()) >= 2
+                    and not re.search(r'\b(?:tomes?|volumes?|int[ée]grale|pages?|pack)\b|\d', filename, re.I)
+                    and normalized(filename, 'title') == normalized(standalone(hint), 'title')):
+                result['title'] = filename
+                result['provenance']['title'] = [{'value': filename, 'source': 'origin:' + oid,
+                    'scope': 'asset', 'method': 'standalone-file-and-capture-agreement-1'},
+                    {'value': standalone(hint), 'source': origin['source'], 'scope': 'asset'}]
     return result

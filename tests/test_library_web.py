@@ -17,9 +17,25 @@ class WebTests(unittest.TestCase):
         from library.web import operator_reason
         text = operator_reason('Intake budget deferred')
         self.assertIn('prochain cycle', text)
-        self.assertIn('8', text)
-        self.assertIn('5 minutes', text)
+        self.assertIn('travaux lourds', text)
+        self.assertNotIn('5 minutes', text)
         self.assertIn('Téléchargement', operator_reason('Transfer is not confirmed finished'))
+
+    def test_provisional_copy_is_available_without_confirmed_publication(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder);store, _, _, asset = setup_library(root)
+            state = store.read();state['assets'][asset].pop('identity', None)
+            state['assets'][asset]['provisional'] = {'status': 'published', 'edition_status': 'unknown',
+                'target': asset, 'artifact_format': 'cbz', 'operation': 'a'*32,
+                'manifest': {'book.cbz': 'b'*64, 'fiche.md': 'c'*64}}
+            store.save(state, expected=state['revision'])
+            projection = build_projection(root)
+            row = projection['rows'][0]
+            self.assertEqual(row['publication'], 'available_edition_unknown')
+            self.assertEqual(row['identity'], 'pending')
+            self.assertEqual(projection['counts']['confirmed_assets'], 0)
+            self.assertEqual(projection['counts']['provisional_assets'], 1)
+            self.assertEqual(projection['counts']['sources'], 1)
 
     def test_description_uses_matching_captured_source_then_bibliography_or_unknown(self):
         with tempfile.TemporaryDirectory() as folder:

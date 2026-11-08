@@ -102,6 +102,9 @@ def work_comicinfo(asset: dict[str, Any], work: dict[str, Any]) -> bytes:
         if field not in overrides and field in WORK_XML_FIELDS:
             elements.pop(WORK_XML_FIELDS[field], None)
     fields = {**work, **overrides}
+    for field in work.get('field_conflicts', {}):
+        if field not in overrides:
+            fields.pop(field, None)
     roles = {'writer': 'Writer', 'penciller': 'Penciller', 'inker': 'Inker', 'colorist': 'Colorist',
              'letterer': 'Letterer', 'cover_artist': 'CoverArtist', 'editor': 'Editor'}
     if 'date' in fields:

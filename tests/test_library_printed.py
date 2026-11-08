@@ -172,7 +172,7 @@ class PrintedIdentityTests(unittest.TestCase):
             state['assets'][asset]['captured_hints'] = {}
             store.save(state, expected=state['revision'])
             class FixtureProvider:
-                def discover(self, title): return {'status': 'ok', 'candidates': []}
+                def discover(self, title, **hints): return {'status': 'ok', 'candidates': []}
                 def resolve_discovery(self, discovery): return []
                 def edition(self, code): return {'status': 'ok', 'candidate': CANDIDATE}
             result = enrich(store, asset, FixtureProvider(), [])
@@ -210,3 +210,31 @@ class PrintedIdentityTests(unittest.TestCase):
                         os.kill(pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+    def test_current_bnf_publication_and_contributor_fields_are_retained(self):
+        from library.bnf import parse_bnf
+        fixture=Path(__file__).parent/'fixtures'
+        bird=parse_bnf((fixture/'bnf-oiseau.xml').read_text(),'9782368468425','https://fixture','now')
+        self.assertEqual((bird['publisher'],bird['date']),('Steinkis','DL 2026'))
+        self.assertEqual(bird['author'],'Désirée Frappier')
+        self.assertTrue(any(c['name']=='Alain Frappier' and 'Illustrateur' in c['roles'] for c in bird['contributors']))
+        for name, code, number in [('geeks1','9782302000599','1'),('geeks4','9782302008168','4')]:
+            geeks=parse_bnf((fixture/('bnf-'+name+'.xml')).read_text(),code,'https://fixture','now')
+            self.assertEqual(geeks['author'],'Gang')
+            self.assertEqual(geeks['number'],number)
+            self.assertTrue(any(c['name']=='Thomas Labourot' for c in geeks['contributors']))
+            self.assertNotIn('Labourot',geeks['author'])
+
+    def test_copyright_isbn_and_unnumbered_album_keep_missing_fields_unknown(self):
+        from library.bnf import parse_bnf
+        from library.printed import identify_printed
+        candidate=parse_bnf((Path(__file__).parent/'fixtures/bnf-oiseau.xml').read_text(),
+                            '9782368468425','https://fixture','now')
+        printed={'status':'ok','pages':[{'name':'cover','text':"L’oiseau chanteur Désirée Frappier"},
+                                      {'name':'copyright','text':'ISBN 9782368468425'}]}
+        self.assertTrue(candidate['unnumbered'])
+        self.assertEqual(candidate['number'],'')
+        self.assertEqual(identify_printed(printed,{},[candidate])['status'],'identified')
+        self.assertEqual(identify_printed(printed,{'Number':'2'},[candidate])['status'],'pending')
+        wrong={**candidate,'author':'Alain Frappier'}
+        self.assertEqual(identify_printed(printed,{},[wrong])['status'],'pending')

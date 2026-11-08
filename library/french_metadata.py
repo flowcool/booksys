@@ -38,6 +38,7 @@ class ReferenceCandidate:
     def to_match_candidate(self) -> dict[str, Any]:
         values = {'title': self.title, 'series': self.series, 'number': self.number, **self.fields}
         return {'source': 'bedetheque', 'upstream': 'bedetheque',
+                'retrieved_at': self.provenance.get('retrieved_at'),
                 'work_ref': None, 'edition_ref': self.reference_id, 'url': self.url,
                 **values, 'author': ', '.join(self.fields.get('writers', [])) or None,
                 'field_provenance': {key: self.provenance for key, value in values.items()

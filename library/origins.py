@@ -25,8 +25,18 @@ def resolve_asset_origin(store: Catalog, reception: Path, state: dict[str, Any],
                         or list(fingerprint(parent_path)) != parent.get('fingerprint')
                         or sha256(parent_path) != origin['parent_sha256']):
                     raise LibraryError('Bundle parent changed or unavailable')
+                for part in parent.get('source_parts', []):
+                    relative_part = Path(part['path'])
+                    part_path = reception_path(reception, str(relative_part.parent), relative_part.name)
+                    if list(fingerprint(part_path)) != part['fingerprint'] or sha256(part_path) != part['sha256']:
+                        raise LibraryError('Multipart source part changed')
                 directory = store.directory / 'bundle-inputs' / str(origin['parent_sha256'])
                 manifest = verify_directory(directory, origin['parent_sha256'])
+                if parent.get('source_parts'):
+                    expected_parts = [{'name': Path(part['path']).name, 'sha256': part['sha256'],
+                                       'size': part['fingerprint'][2]} for part in parent['source_parts']]
+                    if manifest.get('source_parts') != expected_parts:
+                        raise LibraryError('Multipart retained source manifest changed')
                 if manifest['members'] != parent.get('bundle', {}).get('members'):
                     raise LibraryError('Retained bundle manifest changed from canonical parent')
                 member = next((item for item in manifest['members'] if item['member'] == origin['member']), None)

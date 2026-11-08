@@ -109,6 +109,20 @@ def validate(state: Any) -> None:
             raise LibraryError('Asset references missing origin')
         if type(asset['size']) is not int or asset['size'] <= 0 or asset['format'] not in ('pdf', 'cbz', 'cbr'):
             raise LibraryError('Invalid asset size or format')
+        provisional = asset.get('provisional')
+        if provisional is not None:
+            if (not isinstance(provisional, dict) or provisional.get('target') != key
+                    or provisional.get('edition_status') != 'unknown'
+                    or provisional.get('artifact_format') != 'cbz'
+                    or provisional.get('status') not in ('published', 'recovered')
+                    or not re.fullmatch('[0-9a-f]{32}', str(provisional.get('operation', '')))
+                    or not isinstance(provisional.get('manifest'), dict)
+                    or set(provisional['manifest']) != {'book.cbz', 'fiche.md'}
+                    or any(not re.fullmatch('[0-9a-f]{64}', str(value))
+                           for value in provisional['manifest'].values())
+                    or (provisional['status'] == 'recovered' and provisional.get('recovery') !=
+                        'provisional-' + provisional['operation'])):
+                raise LibraryError('Invalid provisional publication record')
         identity = asset.get('identity')
         if identity and (identity.get('work') not in state['works'] or
                          identity.get('edition') not in state['editions'] or
@@ -195,7 +209,7 @@ class Catalog:
         return record
 
     def replay(self) -> dict[str, Any]:
-        if any(r['action'] == 'resolve' for r in self.ledger()):
+        if any(r['action'] in ('resolve', 'identify_work') for r in self.ledger()):
             from library.resolution import Resolution
             return Resolution(self, Path('.')).project()
         with lock(self.directory / 'decisions.lock'):
@@ -224,7 +238,17 @@ def apply_effect(state: dict[str, Any], decision: dict[str, Any], *, replay: boo
     if target not in state['assets']:
         raise LibraryError('Decision target missing after restore; restore inventory first')
     asset = state['assets'][target]
-    if action == 'identify':
+    if action == 'identify_work':
+        if asset.get('identity') or asset.get('resolution'):
+            raise LibraryError('Resolve existing edition ownership before work-only confirmation')
+        if not values.get('work', {}).get('title') or not values.get('evidence'):
+            raise LibraryError('Work confirmation requires a title and evidence')
+        result = {'status': 'identified', 'work': copy.deepcopy(values['work']),
+                  'edition_status': 'unknown', 'field_conflicts': {}, 'reason': 'Operator confirmed work',
+                  'evidence': copy.deepcopy(values['evidence']), 'decision': decision.get('id')}
+        asset['work_decision'] = result
+        asset['work_result'] = copy.deepcopy(result)
+    elif action == 'identify':
         work, edition = values['work'], values['edition']
         wid, eid = values['work_id'], values['edition_id']
         if any(not edition.get(k) for k in ('language', 'publisher', 'evidence')) or not work.get('title'):

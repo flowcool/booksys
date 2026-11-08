@@ -59,7 +59,12 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             continue
         if package['name'] != submission['name']:
             raise LibraryError('Tracked pyLoad package identity changed')
+        from library.multipart import is_multipart, receive_parts
+        inspected += receive_parts(state, store.directory, root, source, package, captured['items'][source],
+            max(0, (inspection_limit if inspection_limit is not None else 8) - inspected), stable_seconds)
         for item in package.get('links', []):
+            if is_multipart(item['name']):
+                continue
             fid = item['fid']
             oid = digest({'source': source, 'pid': pid, 'fid': fid})
             name = item['name']

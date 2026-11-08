@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from library.catalog import LibraryError, sync_dir
-from library.readers import fingerprint, inspect_file, sha256
+from library.readers import fingerprint, inspect_file, sha256, worker_failure
 from library.xmlmetadata import validate_xml
 
 VERSION = 'booksys-cbz-2'
@@ -68,7 +68,7 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
             process.kill()
             process.communicate()
     if process.returncode:
-        raise LibraryError('Isolated comic transformation failed')
+        raise LibraryError(worker_failure('Isolated comic transformation failed', process.returncode, stderr))
     outcome: dict[str, Any] = json.loads(stdout)
     if outcome['status'] != 'validated' or outcome.get('input_sha256') != asset_hash:
         raise LibraryError('Comic transformation blocked: ' + outcome.get('reason', 'input hash mismatch'))

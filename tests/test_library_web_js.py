@@ -24,7 +24,13 @@ for(const q of ['writer','9780000000001','series','unknown']){ids.query.value=q;
 ids.identity.value='identified';ids.identity.onchange();assert.equal(ids.rows.children.length,1);ids.identity.value='';ids.identity.onchange();
 ids.intake.value='validated';ids.intake.onchange();assert.equal(ids.rows.children.length,2);ids.intake.value='';ids.intake.onchange();
 heads[0].onclick();assert.equal(ids.rows.children[0].children[0].children[0].textContent,'Zebra');heads[0].onclick();assert.equal(ids.rows.children[0].children[0].children[0].textContent,'Album');
-await ids.refresh.onclick();assert.equal(fetched,2);process.stdout.write('Search, per-stage filters, header sorting and refresh events passed');
+const retained=ids.rows.children[0],option=ids.identity.children[0];await ids.refresh.onclick();assert.equal(fetched,2);assert.strictEqual(ids.rows.children[0],retained);assert.strictEqual(ids.identity.children[0],option);
+payload.data.rows=Array.from({length:103},(_,i)=>({...payload.data.rows[0],id:String(i),source_id:String(i),title:'Album '+String(i).padStart(3,'0')}));payload.data.rows.push({...payload.data.rows[0],id:'mirror'});
+await ids.refresh.onclick();assert.equal(ids.rows.children.length,50);assert(ids.count.textContent.includes('103 / 103 distinct sources'));assert.equal(ids.rows.children[0].children[0].children.length,2);
+ids.next.onclick();assert.equal(ids.rows.children.length,50);ids.next.onclick();assert.equal(ids.rows.children.length,3);assert.equal(ids.next.disabled,true);
+ids.query.value='Album 102';ids.query.oninput();assert.equal(ids.rows.children.length,1);assert.equal(ids.page.textContent,'1 / 1');ids.query.value='';ids.query.oninput();assert.equal(ids.rows.children.length,50);
+ids.publication.value='missing';ids.publication.onchange();assert.equal(ids.rows.children.length,0);assert.equal(ids.page.textContent,'1 / 1');ids.publication.value='';ids.publication.onchange();assert.equal(ids.rows.children.length,50);
+process.stdout.write('Search, per-stage filters, header sorting and refresh events passed');
 });'''
         result = subprocess.run(['node','-e',driver], input=json.dumps({'script':script,'data':{'rows':rows,'cycle':{},'source':'fixture','generated_at':'now'}}), capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)

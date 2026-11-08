@@ -13,7 +13,7 @@ import uuid
 
 import yaml
 
-from library.bundle_worker import POLICY, MAX_SOURCE, MAX_TOTAL
+from library.bundle_worker import POLICY, MAX_SOURCE, MAX_CHILD, MAX_TOTAL
 from library.catalog import LibraryError, atomic_yaml, digest, now, sync_dir
 from library.readers import fingerprint, sha256, inspect_file, READER_POLICY
 
@@ -32,10 +32,12 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
     if manifest.is_symlink():
         raise LibraryError('Symlink bundle manifest')
     value = yaml.safe_load(manifest.read_text())
-    if (not isinstance(value, dict) or value.get('schema') != 1 or value.get('policy') != POLICY
+    if (not isinstance(value, dict) or value.get('schema') != 1 or (value.get('policy') != POLICY and not (value.get('policy') == 'comic-bundle-1' and not value.get('source_parts')))
             or value.get('parent_sha256') != parent_hash or not isinstance(value.get('members'), list)
             or not 1 <= len(value['members']) <= 256):
         raise LibraryError('Invalid retained bundle manifest')
+    if value.get('source_parts') and value.get('volume_end_verified') is not True:
+        raise LibraryError('Multipart container-end proof is missing')
     expected = {'manifest.yaml'}
     names: set[str] = set()
     files: set[str] = set()
@@ -62,7 +64,7 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
             continue
         suffix = PurePosixPath(member).suffix.lower()
         if (item['kind'] != 'comic' or suffix not in ('.pdf', '.cbz', '.cbr') or
-                not 0 < size <= MAX_SOURCE or name != digest_name(member) + suffix or name in files):
+                not 0 < size <= MAX_CHILD or name != digest_name(member) + suffix or name in files):
             raise LibraryError('Invalid derived bundle filename or bounds')
         files.add(name)
         comics += 1
@@ -78,19 +80,39 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
 
 
 def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
-           fault: Callable[[str], None] = lambda phase: None, wall_limit: float = 180) -> tuple[Path, dict[str, Any]]:
+           fault: Callable[[str], None] = lambda phase: None, wall_limit: float = 180,
+           parts: list[Path] | None = None) -> tuple[Path, dict[str, Any]]:
     if not 0 < wall_limit <= 180:
         raise LibraryError('Invalid bundle wall limit')
     source = source.absolute()
+    parts = [part.absolute() for part in parts] if parts else None
     if any(p.is_symlink() for p in (source, *source.parents)):
         raise LibraryError('Symlink bundle source')
-    before = fingerprint(source)
-    if not 0 < before[2] <= MAX_SOURCE or re.search(r'(?:^|[ ._-])(?:part|pt)[ ._-]?\d+(?:[ ._-]|$)', source.name, re.I):
-        raise LibraryError('Bundle source limit or multipart name')
+    inputs = parts or [source]
+    if parts and (source != parts[0] or len({p.name for p in parts}) != len(parts)):
+        raise LibraryError('Invalid multipart input set')
+    if parts:
+        from library.multipart import select_parts
+        synthetic = [{'fid': i, 'name': part.name, 'status': 0, 'url': 'https://isolated.invalid/' + str(i),
+                      'input_folder': str(part.parent)} for i,part in enumerate(parts)]
+        if [item['name'] for item in select_parts(synthetic, synthetic[0])] != [part.name for part in parts]:
+            raise LibraryError('Unsupported multipart order')
+    for part in inputs:
+        if any(p.is_symlink() for p in (part, *part.parents)):
+            raise LibraryError('Symlink multipart source')
+    stamps = [fingerprint(part) for part in inputs]
+    before = stamps[0]
+    if not 0 < sum(stamp[2] for stamp in stamps) <= MAX_SOURCE:
+        raise LibraryError('Bundle source limit: 4 GiB source set maximum')
+    if not parts and re.search(r'(?:^|[ ._-])(?:part|pt)[ ._-]?\d+(?:[ ._-]|$)', source.name, re.I):
+        raise LibraryError('Unsupported multipart name; a tracked complete volume set is required')
     time.sleep(stable_seconds)
-    if fingerprint(source) != before:
+    if [fingerprint(part) for part in inputs] != stamps:
         raise LibraryError('Bundle source is unstable')
-    parent_hash = sha256(source)
+    hashes = [sha256(part) for part in inputs]
+    parent_hash = hashes[0]
+    source_parts = [{'name': part.name, 'sha256': key, 'size': stamp[2]}
+                    for part,key,stamp in zip(inputs,hashes,stamps)]
     root = state_dir / 'bundle-inputs'
     if source.is_relative_to(state_dir.absolute()) or state_dir.absolute().is_relative_to(source.parent):
         raise LibraryError('Bundle staging must be outside reception')
@@ -99,6 +121,8 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     binding = root / ('.source-' + digest(str(source)) + '.yaml')
     source_record = {'sha256': parent_hash, 'fingerprint': list(before)}
+    if parts:
+        source_record['source_parts'] = source_parts
     if binding.is_symlink():
         raise LibraryError('Symlink bundle source binding')
     if binding.exists():
@@ -134,7 +158,14 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
             stage.mkdir(mode=0o700)
             fault('intent')
             from library.sandbox import native_prefix, PYTHON
-            command = native_prefix(source, output=stage) + [PYTHON, '-m', 'library.bundle_worker', '/tmp/input', '/tmp/output']
+            command = native_prefix(source, output=stage)
+            if parts:
+                for part in inputs:
+                    command += ['--ro-bind', str(part), '/tmp/parts/' + part.name]
+            worker_source = '/tmp/parts/' + source.name if parts else '/tmp/input'
+            command += [PYTHON, '-m', 'library.bundle_worker', worker_source, '/tmp/output']
+            if parts:
+                command += ['/tmp/parts/' + part.name for part in inputs]
             image = os.environ.get('BOOKSYS_READER_IMAGE')
             container_name = 'booksys-bundle-' + uuid.uuid4().hex if image else None
             if image:
@@ -145,7 +176,15 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
                     '--memory', '768m', '--cpus', '1', '--pids-limit', '32',
                     '--mount', f'type=bind,src={source},dst=/input,readonly',
                     '--mount', f'type=bind,src={stage.absolute()},dst=/output',
-                    '--entrypoint', '/app/.venv/bin/python', image, '-m', 'library.bundle_worker', '/input', '/output']
+                    '--entrypoint', '/app/.venv/bin/python']
+                if parts:
+                    for part in inputs:
+                        if any(c in str(part) for c in ',\n'):
+                            raise LibraryError('Unsafe multipart mount')
+                        command += ['--mount', f'type=bind,src={part},dst=/parts/{part.name},readonly']
+                command += [image, '-m', 'library.bundle_worker', '/parts/' + source.name if parts else '/input', '/output']
+                if parts:
+                    command += ['/parts/' + part.name for part in inputs]
                 from library.process import bounded_run
                 created = bounded_run(command, timeout=20, stdout_limit=8192)
                 if created.returncode:
@@ -179,28 +218,42 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
             manifest = json.loads(stdout)
             if manifest.get('status') != 'extracted' or manifest.get('parent_sha256') != parent_hash:
                 raise LibraryError(manifest.get('reason', 'Bundle source hash mismatch'))
+            if parts:
+                manifest['source_parts'] = source_parts
             atomic_yaml(stage / 'manifest.yaml', manifest)
             verify_directory(stage, parent_hash)
             fault('prepared')
-        if fingerprint(source) != before or sha256(source) != parent_hash:
+        if ([fingerprint(part) for part in inputs] != stamps or
+                [sha256(part) for part in inputs] != hashes):
             raise LibraryError('Bundle source changed during extraction')
         os.rename(stage, target)
         sync_dir(root)
         fault('retained')
-    if fingerprint(source) != before or sha256(source) != parent_hash:
+    if ([fingerprint(part) for part in inputs] != stamps or
+                [sha256(part) for part in inputs] != hashes):
         raise LibraryError('Bundle source changed during retention')
+    if parts and manifest.get('source_parts') != source_parts:
+        raise LibraryError('Multipart source manifest changed')
     return target, manifest
 
 
 def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: str,
                    origin: dict[str, Any], hint: dict[str, Any], *, budget: int,
-                   stable_seconds: float = 2) -> int:
+                   stable_seconds: float = 2, parts: list[Path] | None = None) -> int:
     previous = state['origins'].get(oid, {})
     stamp = list(fingerprint(source))
     if previous.get('bundle') and (previous.get('fingerprint') != stamp or sha256(source) != previous['sha256']):
         raise LibraryError('Bundle parent changed after retention')
-    directory, manifest = retain(source, state_dir, stable_seconds=stable_seconds)
+    directory, manifest = retain(source, state_dir, stable_seconds=stable_seconds, parts=parts)
     parent_hash = manifest['parent_sha256']
+    if parts:
+        expected_parts = [{'name': Path(part['path']).name, 'sha256': part['sha256'],
+                           'size': part['fingerprint'][2]} for part in origin['source_parts']]
+        if manifest.get('source_parts') != expected_parts:
+            raise LibraryError('Multipart source changed during retention')
+    if parts:
+        if previous.get('source_parts') and previous['source_parts'] != origin.get('source_parts'):
+            raise LibraryError('Multipart source provenance changed')
     if previous.get('bundle') and previous['bundle']['members'] != manifest['members']:
         raise LibraryError('Retained bundle manifest changed from canonical parent')
     if previous.get('sha256') and previous['sha256'] != parent_hash:

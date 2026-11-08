@@ -13,9 +13,19 @@ class ServiceTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder);setup_library(root)
+            from library.catalog import atomic_yaml
+            atomic_yaml(root/'evidence/cycle.yaml', {'status': 'blocked', 'reason': 'old error',
+                'finished_at': 'old finish', 'error_source': 'old stage'})
+            def launch_failure(*args, **kwargs):
+                value = module.read_yaml(root/'evidence/cycle.yaml')
+                self.assertEqual(value['stage'], 'starting')
+                self.assertNotIn('reason', value)
+                self.assertNotIn('finished_at', value)
+                self.assertNotIn('error_source', value)
+                raise OSError('fixture launch failure')
             with patch('sys.argv', ['service', '--root', str(root), '--credentials', str(root/'secret'),
                                    '--listen', '127.0.0.1', '--port', '0']), \
-                 patch.object(module.subprocess, 'run', side_effect=OSError('fixture launch failure')) as launch:
+                 patch.object(module.subprocess, 'run', side_effect=launch_failure) as launch:
                 with self.assertRaisesRegex(RuntimeError, 'cycle thread failed'):
                     module.main()
             self.assertIn('--route-mirrors', launch.call_args.args[0])

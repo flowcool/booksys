@@ -1,4 +1,4 @@
-"""One LAN read-only server and one sequential five-minute lab cycle thread."""
+"""One LAN server and one sequential backlog-aware lab worker."""
 from __future__ import annotations
 
 import argparse
@@ -15,6 +15,7 @@ import json
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from library.catalog import atomic_yaml, now
+from library.scheduling import next_delay
 from library.web import build_projection, handler, read_yaml
 
 
@@ -41,8 +42,9 @@ def main() -> None:
     def cycles() -> None:
         while not stop.is_set():
             prior = read_yaml(evidence / 'cycle.yaml')
-            atomic_yaml(evidence / 'cycle.yaml', {**prior, 'status': 'running', 'started_at': now(),
-                        'next_cycle_at': None})
+            atomic_yaml(evidence / 'cycle.yaml', {'status': 'running', 'started_at': now(), 'stage': 'starting',
+                        'stage_started_at': now(), 'next_cycle_at': None,
+                        'heavy_turn': prior.get('heavy_turn', 0)})
             snapshot()
             started = time.monotonic()
             # The child holds the whole-cycle lock. This single thread never overlaps children.
@@ -55,13 +57,14 @@ def main() -> None:
                 outcome = json.loads(result.stdout)
             except ValueError:
                 outcome = {'status': 'blocked', 'reason': 'Cycle failed; inspect saved service evidence'}
+            delay = next_delay(outcome)
             finished = time.time()
             value = {**read_yaml(evidence / 'cycle.yaml'), **outcome, 'finished_at': now(),
                      'duration_seconds': round(time.monotonic() - started, 3),
-                     'next_cycle_at': datetime.fromtimestamp(finished + 300, timezone.utc).isoformat()}
+                     'next_cycle_at': datetime.fromtimestamp(finished + delay, timezone.utc).isoformat()}
             atomic_yaml(evidence / 'cycle.yaml', value)
             snapshot()
-            stop.wait(300)  # Five minutes after completion, no calendar overlap or catch-up burst.
+            stop.wait(delay)  # No overlap. Idle waits; eligible work continues immediately.
 
     def request_stop(*_: object) -> None:
         stop.set()  # Let an active cycle finish. Never terminate a publication half-way for shutdown.

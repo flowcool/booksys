@@ -6,6 +6,17 @@ from library.catalog import LibraryError
 
 
 class AssetEvidenceTests(unittest.TestCase):
+    def test_standalone_title_requires_filename_and_bound_capture_agreement(self) -> None:
+        key = 'a' * 64
+        state = {'assets': {key: {'sha256': key, 'origins': ['origin'],
+            'captured_hints': {'https://source': {'title': "L'Oiseau Chanteur (2026)"}}}},
+            'origins': {'origin': {'sha256': key, 'source': 'https://source',
+                                  'path': 'package/ZzL_Oiseau Chanteur.cbz'}}}
+        result = bind_evidence(state, key)
+        self.assertEqual(result['title'], "L'Oiseau Chanteur")
+        state['assets'][key]['captured_hints']['https://source']['title'] = 'Another title'
+        self.assertNotIn('title', bind_evidence(state, key))
+
     def test_bundle_member_keeps_its_name_and_excludes_parent_identity(self) -> None:
         key = 'a' * 64
         state = {'assets': {key: {'sha256': key, 'embedded': {}, 'origins': ['child'],
