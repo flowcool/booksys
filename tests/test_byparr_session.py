@@ -200,3 +200,22 @@ class SessionApiTests(unittest.TestCase):
                 pressure[0] = False
                 response = client.post("/v1", json={"url": ORIGIN + "/ok"})
                 self.assertEqual(response.json()["solution"]["response"], "<h1>Visit 1</h1>")
+
+    def test_solver_failure_is_not_retried_and_discards_clearance(self):
+        closed = []
+
+        async def browser():
+            try:
+                yield SimpleNamespace(page=Page(), context=Context())
+            finally:
+                closed.append(True)
+
+        with patch("src.endpoints.challenge_present", new=AsyncMock(side_effect=[True, False])):
+            with patch("src.endpoints.solve_challenge", new=AsyncMock(side_effect=TimeoutError("solver failed"))) as solver:
+                with TestClient(create_app(browser)) as client:
+                    failed = client.post("/v1", json={"url": ORIGIN + "/ok"})
+                    self.assertEqual(failed.status_code, 408)
+                    self.assertEqual(len(closed), 1)
+                    self.assertEqual(solver.await_count, 1)
+                    resumed = client.post("/v1", json={"url": ORIGIN + "/ok"})
+                    self.assertEqual(resumed.json()["solution"]["response"], "<h1>Visit 1</h1>")
