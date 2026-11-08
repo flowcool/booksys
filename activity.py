@@ -25,9 +25,9 @@ def read_activity(root: Path, stage: str) -> dict[str, Any]:
     return read_yaml(root / (stage + '.yaml'))
 
 
-def read_yaml(path: Path) -> dict[str, Any]:
+def read_yaml(path: Path, *, max_bytes: int = 32 * 1024 * 1024) -> dict[str, Any]:
     try:
-        if path.is_symlink() or path.stat().st_size > 32 * 1024 * 1024:
+        if path.is_symlink() or path.stat().st_size > max_bytes:
             return {}
         value = yaml.load(path.read_text(), Loader=getattr(yaml, 'CSafeLoader', yaml.SafeLoader))
         return value if isinstance(value, dict) else {}

@@ -27,7 +27,7 @@ def proof() -> dict[str, Any]:
     submissions = read_yaml(collector / 'monitor.yaml').get('submissions', {})
     history = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (collector / 'backfill-history').glob('*.yaml')}
     retirements = read_yaml(collector / 'package-retirement.yaml').get('acquisitions', {})
-    catalogue = read_yaml(Path('/data/booksys/library-lab/state/library.yaml'))
+    catalogue = read_yaml(Path('/data/booksys/library-lab/state/library.yaml'), max_bytes=128 * 1024 * 1024)
     origins = {k: {'sha256': v.get('sha256'), 'source': hashlib.sha256(v.get('source', '').encode()).hexdigest()}
                for k, v in catalogue.get('origins', {}).items()}
     output = subprocess.run(['docker', 'inspect', '--format', '{{.Name}} {{.Id}} {{.Image}} {{.State.Running}}',
@@ -47,6 +47,12 @@ def main() -> None:
     if args.before:
         (args.evidence / 'preservation-before.json').write_text(json.dumps(proof(), indent=2))
         return
+    for _ in range(15):
+        if get(args.url + '/api/activity').get('observed_at') is not None:
+            break
+        time.sleep(2)
+    else:
+        raise RuntimeError('Shared observer did not produce its first snapshot')
     samples = []
     for index in range(2):
         value = get(args.url + '/api/activity')

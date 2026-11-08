@@ -275,7 +275,7 @@ class Observer:
             stages['collection']['items'] = [{'id': reference(s), 'title': title(captured.get(s, {}), text(v)),
                 'reason': 'Backfill source pending', 'state': 'waiting', 'observed_at': stamp}
                 for s, v in backfill.get('items', {}).items() if submissions.get(s, {}).get('status') != 'queued'][:2000]
-        state = read_yaml(self.root / 'state/library.yaml')
+        state = read_yaml(self.root / 'state/library.yaml', max_bytes=128 * 1024 * 1024)
         origins, assets = state.get('origins', {}), state.get('assets', {})
         for stage_name in ('local', 'identity'):
             for key, asset in assets.items():
