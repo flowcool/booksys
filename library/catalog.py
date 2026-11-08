@@ -109,6 +109,17 @@ def validate(state: Any) -> None:
             raise LibraryError('Asset references missing origin')
         if type(asset['size']) is not int or asset['size'] <= 0 or asset['format'] not in ('pdf', 'cbz', 'cbr'):
             raise LibraryError('Invalid asset size or format')
+        admission = asset.get('admission')
+        if admission is not None:
+            target = Path(str(admission.get('target', '')))
+            if (admission.get('status') not in ('holding', 'classified') or target.is_absolute()
+                    or '..' in target.parts or not target.parts
+                    or target.parts[0] != ('holding' if admission['status'] == 'holding' else 'classified')
+                    or not re.fullmatch('[0-9a-f]{32}', str(admission.get('operation', '')))
+                    or not re.fullmatch('[0-9a-f]{64}', str(admission.get('signature', '')))
+                    or set(admission.get('manifest', {})) != {'book.cbz', 'fiche.md'}
+                    or any(not re.fullmatch('[0-9a-f]{64}', str(v)) for v in admission['manifest'].values())):
+                raise LibraryError('Invalid work admission record')
         provisional = asset.get('provisional')
         if provisional is not None:
             if (not isinstance(provisional, dict) or provisional.get('target') != key

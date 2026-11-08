@@ -20,7 +20,7 @@ def parse_name(value: str) -> dict[str, Any]:
     name = re.sub(r'\.(?:pdf|cbr|cbz)$', '', name, flags=re.I).strip()
     name = re.sub(r'@BD[_ ]Fr$', '', name, flags=re.I)
     name = re.sub(r'^Z[zZ](?=[A-ZÀ-Ý])', '', name)
-    encoded = bool(re.search(r'__\d+_', name))
+    encoded = '_' in name
     name = name.replace('_', ' ')
     name = ' '.join(name.split())
     name = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', name)

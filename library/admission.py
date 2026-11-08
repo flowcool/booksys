@@ -147,6 +147,8 @@ class AdmissionPublisher(Publisher):
 
     def publish_asset(self, key: str) -> dict[str, Any]:
         with lock(self.store.directory/'library-copy.lock', blocking=False):
+            Publisher(self.store, self.reception, self.root, exclusive=True,
+                      capacity=self.capacity).reconcile(locked=True, provisional=False)
             self.reconcile(locked=True)
             state = self.store.read()
             if not eligible(state, key):

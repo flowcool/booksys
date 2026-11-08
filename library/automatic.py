@@ -63,7 +63,7 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
             attempt = {'attempts': 0, 'outcome': 'new'}
         if attempt.get('outcome') == 'running' and int(attempt.get('attempts', 0)) >= 3:
             attempt.update(outcome='unavailable', reason='Interrupted attempt limit reached', updated_at=now(),
-                           method=METHOD, evidence=evidence_version(asset))
+                           method=METHOD, evidence=evidence_version(asset), next_attempt=clock() + WEEK)
             save_attempt(store, key, attempt)
             continue
         if completed >= limit or providers.budget <= 0:

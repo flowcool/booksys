@@ -247,6 +247,15 @@ def fiche_html(fiche: dict[str, Any]) -> str:
         body += '<img src="' + html.escape(fiche['cover'], quote=True) + '" alt="Local first page"><p>' + html.escape(fiche['cover_provenance']) + '</p>'
     body += '<h2>Pipeline and blockers</h2>' + table(fiche['pipeline'])
     body += '<h2>Bibliography</h2>' + table(fiche['bibliography'])
+    metadata = fiche.get('work_metadata', {})
+    if metadata:
+        body += '<h2>Album et classement</h2>' + table({
+            'Identification': metadata.get('status'), 'Edition': metadata.get('edition_status', 'unknown'),
+            **{k: metadata.get('work', {}).get(k) for k in ('family', 'genres', 'adult', 'recommended_age')},
+            'Fields for review': metadata.get('field_conflicts', {}),
+            'Managed copy': fiche.get('admission', {}).get('target')})
+        body += '<details><summary>Sources de l’album</summary><pre>' + html.escape(
+            json.dumps(metadata.get('provenance', []), ensure_ascii=False, indent=2)) + '</pre></details>'
     body += '<h2>Description</h2><p>' + html.escape(fiche['summary_provenance']) + '</p><p style="white-space:pre-wrap">' + html.escape(fiche['summary']) + '</p>'
     body += '<h2>Genres and audience assertions</h2>' + records(fiche['taxonomy'])
     body += '<h2>Source categories</h2>' + table({'category': fiche['source_categories'], 'provenance': fiche['category_provenance']})
@@ -275,7 +284,7 @@ function cells(r){const tr=document.createElement('tr');for(const k of ['title',
 function render(){if(!data)return;const q=$('query').value.toLowerCase(),groups=new Map();for(const r of data.rows){const key=r.source_id||r.id;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r)}
 const rows=[...groups.values()].map(all=>({all,matches:all.filter(r=>matching(r,q))})).filter(g=>g.matches.length);
 rows.sort((a,b)=>String(a.matches[0][sortKey]||'').localeCompare(String(b.matches[0][sortKey]||''),undefined,{numeric:true})*(ascending?1:-1));
-const pages=Math.max(1,Math.ceil(rows.length/pageSize));page=Math.min(page,pages);$('count').textContent=rows.length+' / '+groups.size+' distinct sources | '+data.rows.length+' file origins | confirmed: '+(data.counts?.confirmed_assets??'?')+' | provisional: '+(data.counts?.provisional_assets??'?');$('page').textContent=page+' / '+pages;$('previous').disabled=page===1;$('next').disabled=page===pages;
+const pages=Math.max(1,Math.ceil(rows.length/pageSize));page=Math.min(page,pages);$('count').textContent=rows.length+' / '+groups.size+' distinct sources | '+data.rows.length+' file origins | confirmed: '+(data.counts?.confirmed_assets??'?')+' | classified: '+(data.counts?.classified_assets??'?')+' | À identifier: '+(data.counts?.holding_assets??'?');$('page').textContent=page+' / '+pages;$('previous').disabled=page===1;$('next').disabled=page===pages;
 const visible=rows.slice((page-1)*pageSize,page*pageSize),signature=JSON.stringify(visible);if(signature===lastRows)return;lastRows=signature;$('rows').replaceChildren();for(const g of visible){const tr=cells(g.matches[0]);if(g.all.length>1){const details=document.createElement('details'),summary=document.createElement('summary'),table=document.createElement('table');summary.textContent=g.all.length+' files / mirrors / members';details.append(summary);for(const child of g.all)table.append(cells(child));details.append(table);tr.children[0].append(details)}$('rows').append(tr)}}
 async function refresh(){try{const response=await fetch('/api/status',{cache:'no-store'});if(!response.ok)throw Error(response.status);data=await response.json();
 const options=JSON.stringify(filters.map(k=>[...new Set(data.rows.map(r=>r[k]))].sort()));if(options!==lastOptions){lastOptions=options;for(const key of filters){const select=$(key),prior=select.value;select.replaceChildren();for(const value of ['',...new Set(data.rows.map(r=>r[key]))].sort()){const option=document.createElement('option');option.value=value;option.textContent=value||'All';select.append(option)}select.value=prior}}

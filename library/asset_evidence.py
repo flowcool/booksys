@@ -68,7 +68,7 @@ def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:
         value = value.replace('_', ' ')
         value = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', value)
         return ' '.join(value.split())
-    if not any(field in result['provenance'] for field in ('title', 'series', 'number')):
+    if not any(field in result['provenance'] for field in ('title', 'number')):
         for oid, origin in origins:
             if origin.get('parent_origin'):
                 continue

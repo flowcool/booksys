@@ -38,13 +38,20 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     # Labels without qualified structured identity cannot establish concordance.
     # Avoid spending public requests until there is a usable anchor.
     queries = list(dict.fromkeys(queries))[:2]
+    # The complete reference list is identical within a cycle for the same query.
+    cache = getattr(providers, '_french_discovery', None)
+    if cache is None:
+        cache = {}
+        providers._french_discovery = cache
     candidates: list[dict[str, Any]] = []
     attempts = []
     source = FrenchSource(providers)
     truncated = False
     for query in queries:
         try:
-            found = discover(source, query)
+            if query not in cache:
+                cache[query] = discover(source, query)
+            found = cache[query]
             attempts.append({'query': query, 'status': found.status, 'reason': found.reason,
                              'truncated': found.truncated, 'retrieved_at': now()})
             rows = [row.to_match_candidate() for row in found.candidates]
