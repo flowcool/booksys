@@ -13,3 +13,4 @@ library/__pycache__/
 !ops/byparr/
 !ops/byparr/session_api.py
 !retirement_history.py
+!activity.py
