@@ -207,8 +207,13 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
         value = page.name if chapter_numbers else name
         parts = tuple(int(part) if part.isdigit() else part.casefold() for part in re.split(r'(\d+)', value))
         return (chapter_numbers[str(page.parent)], *parts) if chapter_numbers else parts
-    if len({natural(name) for name in names}) != len(names):
-        raise PendingFile('Ambiguous page naming/order')
+    ordered_names: dict[tuple[Any, ...], str] = {}
+    for name in names:
+        key = natural(name)
+        if key in ordered_names:
+            raise PendingFile('Ambiguous page naming/order: ' +
+                repr(ordered_names[key])[:180] + ' and ' + repr(name)[:180])
+        ordered_names[key] = name
     output['page_manifest'].sort(key=lambda entry: natural(entry['name']))
     del output['folders']
     return {'status': 'validated', 'format': suffix[1:], **output}

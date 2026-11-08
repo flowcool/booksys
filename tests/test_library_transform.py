@@ -92,4 +92,7 @@ class TransformTests(unittest.TestCase):
             with zipfile.ZipFile(source, 'w') as archive:
                 archive.writestr('1.png', image_bytes())
                 archive.writestr('01.png', image_bytes())
-            self.assertEqual(inspect_file(source, stable_seconds=.01)['status'], 'pending')
+            result = inspect_file(source, stable_seconds=.01)
+            self.assertEqual(result['status'], 'pending')
+            self.assertIn('1.png', result['reason'])
+            self.assertIn('01.png', result['reason'])
