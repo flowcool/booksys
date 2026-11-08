@@ -1,5 +1,6 @@
 """Read-only Activity pane. All source strings enter the DOM through textContent."""
 ACTIVITY_PANE = r'''<section id="activity-pane" hidden>
+<style>#activity-pane details{margin:.8em 0;padding:.8em;background:#162635;border:1px solid #345}#activity-pane li{padding:.7em 0;border-bottom:1px solid #345;overflow-wrap:anywhere}#activity-pane li p{margin:.4em 0;color:#b9c9d6}#activity-pane summary{cursor:pointer;font-weight:600}#activity-pane button:disabled{opacity:.45}</style>
 <h2>Activité</h2><p id="activity-clock">Observation en attente.</p><p id="activity-resources"></p>
 <p>Collecte → téléchargements → traitement local → identification et copies. Byparr sert la collecte. Le retrait conserve les fichiers locaux.</p>
 <div id="activity-stages"></div><details><summary>Événements importants · 24 heures</summary>
