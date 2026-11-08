@@ -97,3 +97,38 @@ test cannot run in this isolated native environment: no working UnRAR executable
 is available (`RarCannotExec`). This does not qualify CBR conversion and is not
 reported as a passing check. No archive transport code changed here. The parent
 runs integrated checks with its qualified reader image and toolchain.
+
+
+## Pure work matching and work-level export contract
+
+`library.work_identity.evaluate_work(evidence, candidates)` accepts flat reference
+assertions from the adapter. It requires an informative asset-bound title or an
+asset-bound series and number. French article aliases and decimal issue numbers
+are normalized. It does not parse filename labels. Parent discovery queries are
+not identity evidence. `identity_conflicts` or contradictory asset assertions
+stop identification. Assertions are accepted through `assertions`,
+`provenance[field]`, or direct fields with `asset_bound=True` / per-field scope.
+
+The result retains all candidates and concordant candidates. Distinct work
+identity values cause review. Multiple references to the same album retain only
+common secondary fields and common genre tags. Divergent fields retain their
+source assertions under `field_conflicts`. Truncated discovery cannot identify.
+Every result has `edition_status=unknown`; no exact edition is selected.
+
+`classify_work(work, assertions)` accepts explicit field/value/source/url
+assertions. Family is BD, Manga or Comics, otherwise None. Explicit adult genres
+can establish adult content, but never a numeric recommended age. Conflicting
+family, adult or age assertions remain unresolved. Missing age stays None.
+
+`library.xmlmetadata.work_comicinfo(asset, work)` uses the pinned schema order.
+The original base64 XML remains untouched. Supported annotations, Notes and page
+bookmarks survive. Asset overrides win over source and reference metadata.
+Explicit conflicting fields remove stale source values unless overridden.
+Unsupported elements remain only in the retained original and central record.
+ISBN, adult and numeric recommended age are not projected into unsupported or
+inferred XML fields. An explicit schema age_rating is supported. The legacy
+writer also no longer maps an adult flag to Adults Only 18+.
+
+These APIs are not connected to the catalogue, scheduler, provider network or
+operator decisions. Qualification includes a native CBZ transform using the
+new writer and verifies unchanged image bytes and page hashes.
