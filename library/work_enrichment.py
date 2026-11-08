@@ -10,6 +10,34 @@ from library.french_source import ProviderPage, robots_allowed
 from library.work_identity import evaluate_work, classify_work
 
 
+def printed_concordance(evidence: dict[str, Any], asset: dict[str, Any],
+                        candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Opening-page title AND creator corroboration; no rear advertisements.
+
+    OCR locates complete reference phrases. It cannot supply edition fields or
+    silently resolve a structured identity contradiction.
+    """
+    from copy import deepcopy
+    from library.printed import words
+    printed = (asset.get('printed') or {})
+    if printed.get('status') != 'ok' or printed.get('asset') != asset['sha256']:
+        return evidence
+    text = ' ' + words('\n'.join(p.get('text', '') for p in printed.get('pages', [])[:4])) + ' '
+    result = deepcopy(evidence)
+    for candidate in candidates:
+        title, author = words(candidate.get('title') or ''), words(candidate.get('author') or '')
+        if len(title.split()) < 2 or not author or ' '+title+' ' not in text or ' '+author+' ' not in text:
+            continue
+        for field in ('title', 'series', 'number', 'integral'):
+            if candidate.get(field) not in (None, ''):
+                result['provenance'].setdefault(field, []).append({'value': candidate[field],
+                    'scope': 'asset', 'source': 'printed:'+asset['sha256'],
+                    'method': 'opening4-reference-title-and-creator-1',
+                    'pages': [{k: p[k] for k in ('name', 'sha256', 'page') if k in p}
+                              for p in printed.get('pages', [])[:4]]})
+    return result
+
+
 class FrenchSource:
     """Use the existing sequential cache and shared network budget."""
     def __init__(self, providers: Any):
@@ -38,12 +66,15 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     # Labels without qualified structured identity cannot establish concordance.
     # Avoid spending public requests until there is a usable anchor.
     queries = list(dict.fromkeys(queries))[:2]
+    if not queries and (asset.get('printed') or {}).get('status') == 'ok':
+        queries = list(dict.fromkeys(evidence['labels'] + evidence['discovery_queries']))[:2]
     # The complete reference list is identical within a cycle for the same query.
     cache = getattr(providers, '_french_discovery', None)
     if cache is None:
         cache = {}
         providers._french_discovery = cache
     candidates: list[dict[str, Any]] = []
+    event_start = len(getattr(providers, 'events', []))
     attempts = []
     source = FrenchSource(providers)
     truncated = False
@@ -55,8 +86,16 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             attempts.append({'query': query, 'status': found.status, 'reason': found.reason,
                              'truncated': found.truncated, 'retrieved_at': now()})
             rows = [row.to_match_candidate() for row in found.candidates]
-            preliminary = evaluate_work(evidence, rows)
+            preliminary = evaluate_work(printed_concordance(evidence, asset, rows), rows)
             matching = preliminary.get('concordant_candidates', [])
+            # Series listings omit creators. OCR may select complete title
+            # phrases for bounded page retrieval; final title+creator proof below
+            # is still mandatory before identification.
+            if not matching and (asset.get('printed') or {}).get('asset') == key:
+                from library.printed import words
+                text = ' '+words('\n'.join(p.get('text', '') for p in asset['printed'].get('pages', [])[:4]))+' '
+                matching = [row for row in rows if len(words(row.get('title') or '').split()) >= 2
+                            and ' '+words(row['title'])+' ' in text]
             if len(matching) > 3:
                 truncated = True
                 continue
@@ -74,14 +113,24 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             truncated = True
     candidates.extend(extra or [])
     candidates = list({(row.get('source'), row.get('edition_ref')): row for row in candidates}.values())
+    evidence = printed_concordance(evidence, asset, candidates)
     evidence['discovery_truncated'] = truncated
     result = evaluate_work(evidence, candidates)
     result['attempts'] = attempts
     result['evidence'] = evidence
     result['updated_at'] = now()
+    from library.cover_candidates import compare_covers, METHOD as COVER_METHOD
+    hashes = {str(c.get('edition_ref')): c.get('cover_hash') for c in candidates}
+    comparisons = compare_covers((asset.get('printed') or {}).get('cover_hash'), hashes)
+    result['cover_comparison'] = {'method': COVER_METHOD, 'candidates': comparisons,
+        'status': 'compared' if comparisons else 'unavailable',
+        'reason': '' if comparisons else 'No qualified reference cover bytes; media robots policy retained'}
     if not candidates and not evidence.get('identity_conflicts'):
         statuses = {a['status'] for a in attempts}
         result['source_status'] = ('unavailable' if statuses - {'ok', 'no_candidate'} else 'no_candidate')
+    if any(event.get('reason') == 'Request budget exhausted'
+           for event in getattr(providers, 'events', [])[event_start:]):
+        result['source_status'] = 'budget_exhausted'
     if result['status'] == 'identified':
         assertions = []
         for row in result['concordant_candidates']:

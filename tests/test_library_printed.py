@@ -172,6 +172,7 @@ class PrintedIdentityTests(unittest.TestCase):
             state['assets'][asset]['captured_hints'] = {}
             store.save(state, expected=state['revision'])
             class FixtureProvider:
+                def get(self, url): return {'status': 'unavailable', 'reason': 'Not in retained fixture'}
                 def discover(self, title, **hints): return {'status': 'ok', 'candidates': []}
                 def resolve_discovery(self, discovery): return []
                 def edition(self, code): return {'status': 'ok', 'candidate': CANDIDATE}

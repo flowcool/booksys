@@ -33,9 +33,36 @@ def work_fields(state: dict[str, Any], key: str) -> dict[str, Any] | None:
 def eligible(state: dict[str, Any], key: str) -> bool:
     asset = state['assets'][key]
     # Prepared legacy decisions retain exclusive control of their application.
-    return bool(asset.get('status') == 'validated' and not asset.get('resolution')
-                and not asset.get('contested') and asset.get('disposition') not in ('exclude', 'defer')
-                and not any(e.get('publication', {}).get('asset') == key for e in state['editions'].values()))
+    return bool(asset.get('status') == 'validated'
+                and asset.get('resolution', {}).get('status') not in ('pending', 'blocked')
+                and not asset.get('contested') and asset.get('disposition') not in ('exclude', 'defer'))
+
+
+def retire_legacy(state: dict[str, Any], key: str, root: Path) -> bool:
+    """Retain exact-edition exposure in recovery after verified CBZ admission.
+
+    Caller holds the copy lock. The deterministic recovery name also makes a
+    crash after rename and before catalogue save safe to reconcile.
+    """
+    changed = False
+    for edition in state['editions'].values():
+        record = edition.get('publication', {})
+        if record.get('asset') != key:
+            continue
+        if Path(record['target']).name != record['target']:
+            raise LibraryError('Unsafe legacy publication target')
+        source = root/'bd'/record['target']
+        recovery = root/'.recovery'/('edition-'+record['operation'])
+        if source.exists() and not recovery.exists():
+            verify(source, record['manifest'])
+            rename_atomic(source, recovery)
+        elif source.exists() or not recovery.exists():
+            raise LibraryError('Legacy admission retirement divergence')
+        verify(recovery, record['manifest'])
+        state['assets'][key].setdefault('edition_recovery', []).append({**record, 'recovery': recovery.name})
+        edition.pop('publication')
+        changed = True
+    return changed
 
 
 def slug(value: Any) -> str:
@@ -113,8 +140,11 @@ class AdmissionPublisher(Publisher):
         state['assets'][operation['asset']]['admission'] = {
             key: operation[key] for key in ('target', 'manifest', 'signature', 'status', 'transformation')}
         state['assets'][operation['asset']]['admission']['operation'] = operation['id']
+        retire_legacy(state, operation['asset'], self.root)
         self.store.save(state, expected=state['revision'])
         self.transition(operation, 'committed')
+        from library.provisional import retire_provisional
+        retire_provisional(self.store, self.root, operation['asset'])
 
     def reconcile(self, *, locked: bool = False, provisional: bool = True) -> list[dict[str, Any]]:
         if not locked:
@@ -143,6 +173,13 @@ class AdmissionPublisher(Publisher):
             current = asset.get('admission')
             if current and not any(op['id'] == current['operation'] and op['asset'] == key for op in operations):
                 raise LibraryError('Admission journal missing')
+            if current and eligible(self.store.read(), key):
+                verify(self.target_path(current['target']), current['manifest'])
+                state = self.store.read()
+                if retire_legacy(state, key, self.root):
+                    self.store.save(state, expected=state['revision'])
+                from library.provisional import retire_provisional
+                retire_provisional(self.store, self.root, key)
         return operations
 
     def publish_asset(self, key: str) -> dict[str, Any]:
@@ -215,6 +252,7 @@ def process_admissions(store: Any, reception: Path, library: Path, *, limit: int
     ready = [key for key in state['assets'] if eligible(state, key) and
              state['assets'][key].get('admission', {}).get('signature') != projection(state, key)['signature']]
     if limit > 0:
+        options.setdefault('lab', True)
         writer = AdmissionPublisher(store, reception, library, **options)
         writer.reconcile()
         for key in ready[:limit]:

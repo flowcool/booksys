@@ -128,10 +128,10 @@ class CLITests(unittest.TestCase):
             with patch('sys.argv', argv), contextlib.redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(module.main(), 0)
                 self.assertEqual(json.loads(output.getvalue())['published'], 1)
-                operation = store.read()['editions']['edition']['publication']['operation']
+                operation = store.read()['assets'][asset]['admission']['operation']
                 with patch('library.intake.inspect_file', side_effect=AssertionError('repeated validation')):
                     self.assertEqual(module.main(), 0)
-                self.assertEqual(store.read()['editions']['edition']['publication']['operation'], operation)
+                self.assertEqual(store.read()['assets'][asset]['admission']['operation'], operation)
                 with lock(store.directory / 'library-cycle.lock'):
                     with contextlib.redirect_stdout(io.StringIO()) as skipped:
                         self.assertEqual(module.main(), 0)

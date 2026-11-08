@@ -11,6 +11,63 @@ from test_library_publish import setup_library
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_exact_migration_recovers_after_old_folder_moved_before_catalogue_save(self):
+        from unittest.mock import patch
+        from library.publish import Publisher, rename_atomic
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store, reception, source, key = setup_library(root)
+            old = Publisher(store, reception, root/'library', isolated=True, capacity=Capacity(reserve=0)).publish(key)
+            writer = AdmissionPublisher(store, reception, root/'library', isolated=True, capacity=Capacity(reserve=0))
+            def interrupted_move(before, after, *args, **kwargs):
+                rename_atomic(before, after, *args, **kwargs)
+                if before.parent.name == 'bd':
+                    raise RuntimeError('crash after legacy move')
+            with patch('library.admission.rename_atomic', side_effect=interrupted_move):
+                with self.assertRaises(RuntimeError):
+                    writer.publish_asset(key)
+            writer.reconcile()
+            self.assertEqual(store.read()['assets'][key]['admission']['status'], 'classified')
+            self.assertFalse((root/'library/bd'/old['target']).exists())
+            self.assertEqual(sha256(source), key)
+
+    def test_holding_then_manual_edition_reconciles_and_reclassifies_once(self):
+        from library.publish import Publisher
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store, reception, source, key = setup_library(root)
+            state = store.read(); identity = state['assets'][key].pop('identity')
+            store.save(state, expected=state['revision'])
+            writer = AdmissionPublisher(store, reception, root/'library', isolated=True, capacity=Capacity(reserve=0))
+            holding = writer.publish_asset(key)
+            state = store.read(); state['assets'][key]['identity'] = identity
+            store.save(state, expected=state['revision'])
+            legacy = Publisher(store, reception, root/'library', isolated=True, capacity=Capacity(reserve=0))
+            old = legacy.publish(key)
+            legacy.reconcile()
+            classified = writer.publish_asset(key)
+            self.assertFalse((root/'library/bd'/old['target']).exists())
+            self.assertFalse((root/'library'/holding['target']).exists())
+            self.assertTrue((root/'library'/classified['target']/'book.cbz').exists())
+            self.assertEqual(sha256(source), key)
+
+    def test_exact_publication_migrates_to_classified_without_duplicate(self):
+        from library.publish import Publisher
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store, reception, source, key = setup_library(root)
+            legacy = Publisher(store, reception, root/'library', isolated=True, capacity=Capacity(reserve=0))
+            old = legacy.publish(key)
+            writer = AdmissionPublisher(store, reception, root/'library', isolated=True, capacity=Capacity(reserve=0))
+            new = writer.publish_asset(key)
+            self.assertTrue(new['target'].startswith('classified/'))
+            self.assertFalse((root/'library/bd'/old['target']).exists())
+            self.assertTrue((root/'library/.recovery'/('edition-'+old['id'])/'book.cbz').exists())
+            self.assertFalse(any(e.get('publication') for e in store.read()['editions'].values()))
+            legacy.reconcile()
+            writer.reconcile()
+            self.assertEqual(sha256(source), key)
+
     def test_holding_to_classified_preserves_original_and_recovery(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

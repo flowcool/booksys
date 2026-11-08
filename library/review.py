@@ -25,8 +25,11 @@ def cases_for(state: dict[str, Any]) -> dict[str, Any]:
                   'edition': state['editions'].get(identity['edition']) if identity else None}
         inputs['works'] = state['works']
         inputs['edition_ownership'] = {key: value['work'] for key, value in state['editions'].items()}
+        candidates = [*asset.get('work_result', {}).get('candidates', []),
+                      *asset.get('identity_result', {}).get('candidates', [])]
+        candidates = list({digest(candidate): candidate for candidate in candidates}.values())
         cases[cid] = {'id': cid, 'asset': key, 'version': digest(inputs), 'reason': reason,
-                      'evidence': inputs, 'candidates': asset.get('work_result', asset.get('identity_result', {})).get('candidates', [])}
+                      'evidence': inputs, 'candidates': candidates}
     for oid, origin in state['origins'].items():
         if origin['availability'] != 'validated':
             cid = digest({'origin': oid, 'kind': 'file_review'})

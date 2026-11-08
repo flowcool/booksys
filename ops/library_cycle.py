@@ -133,11 +133,11 @@ def cycle(args: argparse.Namespace) -> int:
             automatic = {'processed': 0, 'provisional_processed': 0}
             if selected:
                 turn += 1
-                progress(selected)
+                progress('admission' if selected == 'provisional' else selected)
                 if selected == 'metadata':
                     automatic.update(process_assets(store, args.reception, library, providers, limit=1))
                     if not automatic.get('processed'):
-                        progress('provisional')
+                        progress('admission')
                         result = process_provisional(store, args.reception, library, limit=1)
                         automatic.update({'provisional_' + k: v for k, v in result.items()})
                 else:
@@ -171,7 +171,6 @@ def cycle(args: argparse.Namespace) -> int:
             routing_prior = read_yaml(evidence / 'mirror-routing-cycle.yaml')
             if candidates and time.time() >= routing_prior.get('next_attempt', 0):
                 from urllib.error import HTTPError, URLError
-                from booksys import CollectionError
                 availability = None
                 try:
                     availability = public_hosts()
@@ -231,6 +230,7 @@ def cycle(args: argparse.Namespace) -> int:
         current = store.read()
         published = {edition['publication']['asset'] for edition in current['editions'].values()
                      if edition.get('publication')}
+        published.update(key for key, asset in current['assets'].items() if asset.get('admission'))
         origin_counts = {'published': 0, 'pending': 0, 'rejected': 0}
         for origin in current['origins'].values():
             kind = ('rejected' if origin['availability'] == 'rejected' else
@@ -242,6 +242,8 @@ def cycle(args: argparse.Namespace) -> int:
                    'stage': 'idle', 'heavy_turn': turn, 'intake_backlog': intake_backlog, 'assets': len(current['assets']), 'origins': len(current['origins']),
                    'retired_acquisitions': sum(r['outcome'] == 'retired' for r in retirement_results),
                    'published': len(published), 'pending_assets': len(set(current['assets']) - published),
+                   'classified': sum(a.get('admission', {}).get('status') == 'classified' for a in current['assets'].values()),
+                   'holding': sum(a.get('admission', {}).get('status') == 'holding' for a in current['assets'].values()),
                    'origin_counts': origin_counts, 'report': str(evidence / 'review.md'),
                    'concurrent_writer_reserve_guaranteed': False}
         atomic_yaml(evidence / 'cycle.yaml', summary)

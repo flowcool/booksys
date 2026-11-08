@@ -5,6 +5,14 @@ from xml.etree import ElementTree as ET
 from library.xmlmetadata import work_comicinfo
 
 class WorkComicInfoTests(unittest.TestCase):
+    def test_qualified_french_contributors_export_roles(self):
+        root = ET.fromstring(work_comicinfo({}, {'title': 'Known', 'contributors': [
+            {'name': 'A', 'role': 'Scénario'}, {'name': 'B', 'role': 'Dessin'},
+            {'name': 'C', 'role': 'Couleurs'}]}))
+        self.assertEqual(root.findtext('Writer'), 'A')
+        self.assertEqual(root.findtext('Penciller'), 'B')
+        self.assertEqual(root.findtext('Colorist'), 'C')
+
     def test_preserves_annotations_and_maps_work_without_fabricating_age(self):
         source = b'<ComicInfo><Title>Old</Title><Notes>Manual note</Notes><Writer>Old writer</Writer><Pages><Page Image="0" Bookmark="Keep" /></Pages><PrivateUnknown>central only</PrivateUnknown></ComicInfo>'
         asset = {'source_comicinfo_base64': base64.b64encode(source).decode(), 'pages': 2,

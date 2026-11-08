@@ -117,6 +117,17 @@ def work_comicinfo(asset: dict[str, Any], work: dict[str, Any]) -> bytes:
                 element.text = str(int(value))
                 elements[tag] = element
     contributors = fields.get('contributors')
+    if isinstance(contributors, list):
+        mapped: dict[str, list[str]] = {}
+        for person in contributors:
+            if not isinstance(person, dict) or not person.get('name'):
+                continue
+            for token, role in (('scénario', 'writer'), ('dessin', 'penciller'),
+                                ('encre', 'inker'), ('couleur', 'colorist'),
+                                ('lettrage', 'letterer')):
+                if token in str(person.get('role', '')).casefold():
+                    mapped.setdefault(role, []).append(str(person['name']))
+        contributors = mapped
     if isinstance(contributors, dict):
         for role, tag in roles.items():
             if contributors.get(role):

@@ -57,8 +57,15 @@ def main() -> None:
         version = bounded_run([tool, '--version'], timeout=5, stdout_limit=8192)
         if version.returncode:
             raise LibraryError('OCR version probe failed')
-        pages = []
+        pages: list[dict[str, Any]] = []
+        cover = None
         for page in selected:
+            if not pages:
+                from io import BytesIO
+                from PIL import Image
+                from library.cover_candidates import cover_hash
+                with Image.open(BytesIO(images[page['name']])) as image:
+                    cover = cover_hash(image)
             result = bounded_run([tool, 'stdin', 'stdout', '-l', 'eng+fra', '--psm', '3'],
                 input=images[page['name']], timeout=30, stdout_limit=65536,
                 env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
@@ -68,7 +75,8 @@ def main() -> None:
                 raise LibraryError('OCR text output limit')
             pages.append({**page, 'text': result.stdout.decode('utf-8')})
         output = {'status': 'ok', 'pages': pages, 'tool': version.stdout.decode().splitlines()[0],
-                  'window': 'first4_last4', 'languages': ['eng', 'fra'], 'psm': 3}
+                  'window': 'first4_last4', 'languages': ['eng', 'fra'], 'psm': 3,
+                  'cover_hash': cover}
     except Exception as exc:
         output = {'status': 'unavailable', 'reason': f'{type(exc).__name__}: {exc}'}
     output['input_sha256'] = sha256(path)

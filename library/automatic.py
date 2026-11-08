@@ -16,7 +16,9 @@ WEEK = 7 * 86400
 
 
 def evidence_version(asset: dict[str, Any]) -> str:
-    return digest({key: asset.get(key) for key in ('embedded', 'printed', 'captured_hints', 'assertions', 'status')})
+    from library.names import METHOD as NAME_METHOD
+    return digest({'name_method': NAME_METHOD, **{key: asset.get(key) for key in
+        ('embedded', 'printed', 'captured_hints', 'assertions', 'status', 'origins')}})
 
 
 def ready_asset(asset: dict[str, Any], state: dict[str, Any], timestamp: float) -> bool:
@@ -116,10 +118,11 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
                 if identity and not value.get('contested'):
                     edition = current['editions'][identity['edition']]
                     if edition.get('selected') == identity['variant']:
-                        if edition.get('publication', {}).get('asset') != key:
+                        if not value.get('admission'):
                             # Failed writes stop the cycle. Never resend them as transport retries.
                             try:
-                                Publisher(store, reception, library, lab=True).publish(key)
+                                from library.admission import AdmissionPublisher
+                                AdmissionPublisher(store, reception, library, lab=True).publish_asset(key)
                             except (LibraryError, OSError):
                                 record.update(outcome='unavailable', reason='Publication failed; inspect journal before retry')
                                 save_attempt(store, key, record)
