@@ -36,8 +36,13 @@ class Retirement:
             inspection_limit: int = 8) -> list[dict[str, Any]]:
         history = read_history(self.path)
         entries = yaml.safe_load(self.submissions.read_text())['submissions']
+        # A source without technical origins cannot pass retirement. This local
+        # shortlist avoids native reads for the unprocessed historical backlog.
+        evidenced = {o['source'] for o in self.store.read()['origins'].values()
+                     if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
         sources = sorted(s for s, e in entries.items() if e.get('status') == 'queued'
-                         and history['acquisitions'].get(s, {}).get('phase') != 'retired')
+                         and history['acquisitions'].get(s, {}).get('phase') != 'retired'
+                         and (not apply or s in evidenced or s in history['acquisitions']))
         cursor = history.get('cursor')
         if cursor in sources:
             index = sources.index(cursor) + 1
