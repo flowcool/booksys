@@ -443,6 +443,11 @@ interrupted extraction, changed parent/child and identical mirrored children.
 
 ## Accepted AllDebrid-first download amendment — 8 November 2026
 
+The accepted [package retirement extension](0003-pyload-package-retirement.md)
+allows removal after complete technical proof and durable local history.
+Its implementation is separate. The retention and parking rules below remain
+the current behavior until that extension is implemented and qualified.
+
 the operator explicitly chose AllDebrid first, with other mirrors retained as fallback.
 Keep collecting every URL. This replaces the earlier requirement to start every
 hoster link automatically, not the requirement to preserve the captured links.
