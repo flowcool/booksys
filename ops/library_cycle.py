@@ -80,6 +80,13 @@ def cycle(args: argparse.Namespace) -> int:
             return run(cli_parser().parse_args(['--state', str(state), *map(str, arguments)]))
 
         common = ['--lab', '--reception', args.reception, '--library', library]
+        command('reconcile', *common)  # Must precede intake/activation/projection after crash.
+        from library.resolution import Resolution
+        from library.publish import Publisher
+        store = Catalog(state)
+        Resolution(store, args.reception).apply(Publisher(store, args.reception, library, lab=True))
+        with lock(state / 'library-network.lock'):
+            atomic_yaml(state / 'library-network-budget.yaml', {'remaining': 50, 'cycle_started': now()})
         if args.auto:
             from library.intake import receive
             from library.cli import load
@@ -92,7 +99,7 @@ def cycle(args: argparse.Namespace) -> int:
         command('activate', *common)
         command('reconcile', *common)
         from library.metadata import Providers, enrich
-        providers = Providers(state / 'library-provider-cache', budget=min(50, max(0, args.budget)))
+        providers = Providers(state / 'library-provider-cache', budget=min(50, max(0, args.budget)), shared=state)
         store = Catalog(state)
         automatic = {}
         if args.auto:
@@ -110,10 +117,11 @@ def cycle(args: argparse.Namespace) -> int:
             availability = public_hosts()
             records, submissions = load(snapshots / 'captured.yaml')['items'], load(snapshots / 'submissions.yaml')['submissions']
             routing_path = args.submissions.parent / 'mirror-routing.yaml'
+            routing_catalogue = store.read()  # Whole-cycle lock makes this snapshot stable for routing.
             for source, entry in submissions.items():
                 if entry.get('status') != 'queued' or source not in records:
                     continue
-                result = route_package(client, source, entry, records[source], store.read(), args.reception,
+                result = route_package(client, source, entry, records[source], routing_catalogue, args.reception,
                                        routing_path, apply=True, availability=availability)
                 mirror_results.append(result)
                 if result['outcome'] in ('parked', 'fallback_active'):
@@ -134,7 +142,7 @@ def cycle(args: argparse.Namespace) -> int:
             if (identity and current['status'] == 'validated' and not current.get('contested')
                     and current.get('disposition') not in ('exclude', 'defer')
                     and enriched['editions'][identity['edition']].get('selected') == identity['variant']
-                    and {v['edition'] for v in enriched['variants'].values() if v['asset'] == asset} == {identity['edition']}):
+                    and {v['edition'] for v in enriched['variants'].values() if v['asset'] == asset and v.get('active', True)} == {identity['edition']}):
                 command('publish', '--asset', asset, *common)
         command('reconcile', *common)
         if not args.auto:

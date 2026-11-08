@@ -169,7 +169,7 @@ class Catalog:
             if not isinstance(record, dict) or 'id' not in record:
                 raise LibraryError('Invalid decision record')
             payload = {k: v for k, v in record.items() if k != 'id'}
-            if (record['id'] != digest(payload) or record.get('schema') != 1 or
+            if (record['id'] != digest(payload) or record.get('schema') not in (1, 2) or
                     record.get('sequence') != len(records) + 1 or
                     path.name != f"{len(records)+1:09d}-{record['id']}.yaml" or
                     record.get('previous') != (records[-1]['id'] if records else None)):
@@ -186,7 +186,7 @@ class Catalog:
     def append_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Caller owns decision.lock. Ledger precedes effects and checkpoint."""
         records = self.ledger()
-        record = {**payload, 'schema': 1, 'sequence': len(records) + 1,
+        record = {**payload, 'schema': 2 if payload['action'] in ('resolve', 'resolution_result') else 1, 'sequence': len(records) + 1,
                   'previous': records[-1]['id'] if records else None}
         record['id'] = digest(record)
         atomic_yaml(self.decisions / f"{record['sequence']:09d}-{record['id']}.yaml", record, exclusive=True)
@@ -195,6 +195,9 @@ class Catalog:
         return record
 
     def replay(self) -> dict[str, Any]:
+        if any(r['action'] == 'resolve' for r in self.ledger()):
+            from library.resolution import Resolution
+            return Resolution(self, Path('.')).project()
         with lock(self.directory / 'decisions.lock'):
             state = self.read()
             records = self.ledger()
@@ -213,6 +216,10 @@ class Catalog:
 
 
 def apply_effect(state: dict[str, Any], decision: dict[str, Any], *, replay: bool = False) -> None:
+    if decision['action'] in ('resolve', 'resolution_result'):
+        from library.resolution import apply_resolution
+        apply_resolution(state, decision)
+        return
     action, target, values = decision['action'], decision['target'], decision['values']
     if target not in state['assets']:
         raise LibraryError('Decision target missing after restore; restore inventory first')
@@ -223,7 +230,7 @@ def apply_effect(state: dict[str, Any], decision: dict[str, Any], *, replay: boo
         if any(not edition.get(k) for k in ('language', 'publisher', 'evidence')) or not work.get('title'):
             raise LibraryError('Manual identity requires work and edition evidence')
         claims = {v['edition'] for v in state['variants'].values() if v['asset'] == target}
-        if claims and claims != {eid}:
+        if not replay and claims and claims != {eid}:
             raise LibraryError('Asset ownership conflict')
         if not replay and eid in state['editions'] and state['editions'][eid]['work'] != wid:
             raise LibraryError('Edition ownership conflict')

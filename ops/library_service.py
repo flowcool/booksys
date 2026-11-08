@@ -27,7 +27,10 @@ def main() -> None:
     args = parser.parse_args()
     stop = threading.Event()
     failed = threading.Event()
-    server = ThreadingHTTPServer((args.listen, args.port), handler(args.root))
+    from library.catalog import Catalog
+    from library.resolution import Resolution
+    server = ThreadingHTTPServer((args.listen, args.port), handler(args.root, resolution=Resolution(
+        Catalog(args.root / 'state'), Path('/data/booksys/downloads'))))
     server.timeout = 1
     evidence = args.root / 'evidence'
     evidence.mkdir(parents=True, exist_ok=True)

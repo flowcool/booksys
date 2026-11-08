@@ -96,7 +96,7 @@ class AcceptanceTests(unittest.TestCase):
                     errors.append(str(exc))
             thread = threading.Thread(target=run_enrichment)
             thread.start()
-            self.assertTrue(entered.wait(2))
+            self.assertTrue(entered.wait(30 if os.environ.get('BOOKSYS_READER_IMAGE') else 2))
             downloader = MemoryDownloader()
             def fetch(url):
                 return '<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="' + FIRST + '">Old</a></div>'
@@ -107,7 +107,7 @@ class AcceptanceTests(unittest.TestCase):
             store.save(state, expected=state['revision'])
             self.assertLess(time.monotonic() - start, 2)
             release.set()
-            thread.join(5)
+            thread.join(30 if os.environ.get('BOOKSYS_READER_IMAGE') else 5)
             self.assertFalse(thread.is_alive())
             self.assertEqual(errors, ['Stale catalogue revision'])
             self.assertEqual(inventory(reception), before)
@@ -135,12 +135,14 @@ class AcceptanceTests(unittest.TestCase):
                                   capacity=Capacity(reserve=0), fault=pause)
             thread = threading.Thread(target=lambda: publisher.publish(asset))
             thread.start()
-            self.assertTrue(entered.wait(2))
-            with self.assertRaisesRegex(LibraryError, 'active'):
-                Publisher(store, reception, root / 'library', isolated=True,
-                          capacity=Capacity(reserve=0)).publish(asset)
-            release.set()
-            thread.join(5)
+            try:
+                self.assertTrue(entered.wait(30 if os.environ.get('BOOKSYS_READER_IMAGE') else 2))
+                with self.assertRaisesRegex(LibraryError, 'active'):
+                    Publisher(store, reception, root / 'library', isolated=True,
+                              capacity=Capacity(reserve=0)).publish(asset)
+            finally:
+                release.set()
+                thread.join(30 if os.environ.get('BOOKSYS_READER_IMAGE') else 5)
             self.assertFalse(thread.is_alive())
 
     def test_manual_override_survives_reenrichment_and_failure_is_not_safe(self):

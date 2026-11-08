@@ -22,6 +22,8 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
     initial = store.read()
     completed = 0
     for key, asset in initial['assets'].items():
+        if asset.get('resolution'):
+            continue  # Operator application owns its retries and source evidence.
         attempt = dict(asset.get('automation', {}))
         # Delivered evidence is reused. An uncertain identity is not a transport error.
         if not attempt and asset.get('identity_result'):

@@ -109,7 +109,7 @@ def fiche_for(state: dict[str, Any], asset_id: str) -> bytes:
              '## Captured embedded metadata (untrusted assertions)', '', '<pre>' + html.escape(json.dumps(
                  asset.get('embedded', {}), ensure_ascii=False, indent=2)) + '</pre>', '',
              '## Origins', '', '<pre>' + html.escape(json.dumps(
-                 [state['origins'][key] for key in asset['origins']], ensure_ascii=False, indent=2)) + '</pre>', '']
+                 [{k: v for k, v in state['origins'][key].items() if k not in ('observed_at', 'transfer_status')} for key in asset['origins']], ensure_ascii=False, indent=2)) + '</pre>', '']
     return '\n'.join(lines).encode()
 
 
@@ -169,11 +169,12 @@ class Publisher:
         from library.origins import resolve_asset
         return resolve_asset(self.store, self.reception, state, asset_id)
 
-    def publish(self, asset_id: str, *, replace: bool = False) -> dict[str, Any]:
+    def publish(self, asset_id: str, *, replace: bool = False, decision: str | None = None, role: str | None = None) -> dict[str, Any]:
         with lock(self.store.directory / 'library-copy.lock', blocking=False):
             self.reconcile(locked=True)
             self.store.replay()
             state = self.store.read()
+            self.decision_gate(state, asset_id, decision, role)
             asset = state['assets'][asset_id]
             identity = asset.get('identity')
             if not identity or asset.get('contested') or asset.get('disposition') in ('exclude', 'defer'):
@@ -183,7 +184,7 @@ class Publisher:
             edition = state['editions'][identity['edition']]
             if edition.get('selected') != identity['variant']:
                 raise LibraryError('Asset is not the selected edition variant')
-            claims = {v['edition'] for v in state['variants'].values() if v['asset'] == asset_id}
+            claims = {v['edition'] for v in state['variants'].values() if v['asset'] == asset_id and v.get('active', True)}
             if claims != {identity['edition']}:
                 raise LibraryError('Conflicting asset ownership')
             from library.origins import resolve_asset_origin
@@ -218,7 +219,7 @@ class Publisher:
                 'asset': asset_id, 'edition': identity['edition'], 'target': target.name,
                 'manifest': expected, 'previous': previous, 'catalogue_revision': state['revision'],
                 'source': source_origin, 'created_at': now(), 'export_version': export_version,
-                'artifact_format': 'cbz' if xml else 'pdf'}
+                'artifact_format': 'cbz' if xml else 'pdf', 'decision': decision, 'role': role}
             self.transition(operation, 'intent')
             stage = self.staging / operation['id']
             stage.mkdir(mode=0o700)
@@ -268,7 +269,7 @@ class Publisher:
             self.check_capacity(operation, 0)
             self.transition(operation, 'verified')
             existing_artifact = self.store.read()['artifacts'].get(expected[book_name])
-            if existing_artifact and identity['edition'] not in existing_artifact['editions']:
+            if existing_artifact and identity['edition'] not in existing_artifact['editions'] and not self.artifact_transfer_allowed(state, asset_id, decision):
                 raise LibraryError('Generated artifact has conflicting edition ownership')
             self.fault('before_substitution', operation)
             if self.store.read()['revision'] != operation['catalogue_revision']:
@@ -292,6 +293,38 @@ class Publisher:
             self.transition(operation, 'published')
             self.commit(operation)
             return operation
+
+    def artifact_transfer_allowed(self, state: dict[str, Any], asset: str, decision: str | None) -> bool:
+        return bool(decision and any(op.get('decision') == decision and op.get('role') == 'withdraw'
+                    and op['status'] == 'committed' for op in state['operations'].values())
+                    and not any(e.get('publication', {}).get('asset') == asset for e in state['editions'].values()))
+
+    def decision_gate(self, state: dict[str, Any], asset: str, decision: str | None, role: str | None) -> None:
+        from library.resolution import gate
+        gate(state, asset, decision, role)
+        if decision:
+            record = next((r for r in self.store.ledger() if r['id'] == decision and r['action'] == 'resolve'), None)
+            if not record or record['target'] != asset or role not in record['roles']:
+                raise LibraryError('Operation is not authorized by this decision')
+            if any(op.get('decision') == decision and op.get('role') == role and op['status'] == 'committed'
+                   for op in state['operations'].values()):
+                raise LibraryError('Decision role already committed')
+
+    def preflight(self, asset_id: str) -> None:
+        """Prove deterministic transform and capacity prerequisites before withdrawal."""
+        state = self.store.read()
+        source = self.resolve_origin(state, asset_id)
+        identity = state['assets'][asset_id]['identity']
+        title = state['works'][identity['work']]['title']
+        slug = re.sub(r'[^a-z0-9]+', '-', str(title).lower()).strip('-')[:48] or 'work'
+        target = self.exposed / (slug + '--' + identity['edition'])
+        if target.exists() or target.is_symlink():
+            raise LibraryError('Transfer target already exists')
+        self.capacity.check(self.root, max(state['assets'][asset_id]['size'] * 2, 2 * 1024**3))
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='resolution-preflight-', dir=self.staging) as folder:
+            transform_archive(source, Path(folder), comicinfo(state, asset_id), asset_id,
+                              check_capacity=lambda: self.capacity.check(self.root, 0))
 
     def load_operation(self, operation_id: str) -> dict[str, Any]:
         if not re.fullmatch('[0-9a-f]{32}', operation_id):
@@ -327,11 +360,13 @@ class Publisher:
         else:
             artifact_hash = operation['manifest']['book.' + operation['artifact_format']]
             existing_artifact = state['artifacts'].get(artifact_hash)
-            if existing_artifact and operation['edition'] not in existing_artifact['editions']:
+            if existing_artifact and operation['edition'] not in existing_artifact['editions'] and not self.artifact_transfer_allowed(state, operation['asset'], operation.get('decision')):
                 raise LibraryError('Generated artifact has conflicting edition ownership')
             artifact = state['artifacts'].setdefault(artifact_hash, {'sha256': artifact_hash,
                 'source_assets': [], 'editions': [operation['edition']],
                 'transformation': operation.get('transformation')})
+            if operation['edition'] not in artifact['editions']:
+                artifact['editions'].append(operation['edition'])
             if operation['asset'] not in artifact['source_assets']:
                 artifact['source_assets'].append(operation['asset'])
             edition['publication'] = {'target': operation['target'], 'manifest': operation['manifest'],
@@ -340,11 +375,12 @@ class Publisher:
                 'artifact_format': operation['artifact_format'], 'export_version': operation.get('export_version'),
                 'transformation': operation.get('transformation')}
         state['operations'][operation['id']] = {'kind': operation['kind'], 'edition': operation['edition'],
-                                               'status': 'committed', 'journal': operation['id'] + '.yaml'}
+                                               'status': 'committed', 'journal': operation['id'] + '.yaml',
+                                               'decision': operation.get('decision'), 'role': operation.get('role')}
         self.store.save(state, expected=state['revision'])
         self.transition(operation, 'committed')
 
-    def withdraw(self, edition_id: str, *, expected: int) -> dict[str, Any]:
+    def withdraw(self, edition_id: str, *, expected: int, decision: str | None = None, role: str | None = None) -> dict[str, Any]:
         with lock(self.store.directory / 'library-copy.lock', blocking=False):
             self.reconcile(locked=True)
             state = self.store.read()
@@ -353,6 +389,7 @@ class Publisher:
             previous = state['editions'][edition_id].get('publication')
             if not previous:
                 raise LibraryError('Edition has no managed publication')
+            self.decision_gate(state, previous['asset'], decision, role)
             target = self.exposed / previous['target']
             verify(target, previous['manifest'])
             private_tree(self.root)
@@ -360,7 +397,7 @@ class Publisher:
                 'asset': previous['asset'], 'edition': edition_id, 'target': previous['target'],
                 'artifact_format': previous['artifact_format'],
                 'manifest': previous['manifest'], 'previous': previous,
-                'catalogue_revision': expected, 'created_at': now()}
+                'catalogue_revision': expected, 'created_at': now(), 'decision': decision, 'role': role}
             self.transition(operation, 'intent')
             self.fault('before_substitution', operation)
             verify(target, previous['manifest'])
@@ -370,7 +407,7 @@ class Publisher:
             self.commit(operation)
             return operation
 
-    def restore(self, operation_id: str, *, expected: int) -> dict[str, Any]:
+    def restore(self, operation_id: str, *, expected: int, decision: str | None = None, role: str | None = None) -> dict[str, Any]:
         with lock(self.store.directory / 'library-copy.lock', blocking=False):
             self.reconcile(locked=True)
             old = self.load_operation(operation_id)
@@ -382,6 +419,7 @@ class Publisher:
             state = self.store.read()
             if state['revision'] != expected:
                 raise LibraryError('Stale recovery version')
+            self.decision_gate(state, previous['asset'], decision, role)
             edition = state['editions'][old['edition']]
             selected = state['variants'].get(edition.get('selected'), {})
             if selected.get('asset') != previous['asset']:
@@ -399,7 +437,7 @@ class Publisher:
                 'artifact_format': previous['artifact_format'], 'export_version': previous.get('export_version'),
                 'transformation': previous.get('transformation'),
                 'manifest': previous['manifest'], 'previous': current,
-                'catalogue_revision': expected, 'created_at': now(), 'restore_source': operation_id}
+                'catalogue_revision': expected, 'created_at': now(), 'restore_source': operation_id, 'decision': decision, 'role': role}
             self.transition(operation, 'intent')
             self.transition(operation, 'verified')
             self.fault('before_substitution', operation)

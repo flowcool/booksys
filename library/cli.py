@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from library.catalog import Catalog, LibraryError, atomic_yaml
+from library.catalog import Catalog, LibraryError, atomic_yaml, lock
 from library.intake import receive
 from library.metadata import Providers, enrich
 from library.publish import Publisher, Capacity
@@ -207,7 +207,16 @@ def run(args: argparse.Namespace) -> Any:
 def main() -> int:
     args = parser().parse_args()
     try:
-        output = run(args)
+        if args.command in ('status', 'report', 'preview', 'preflight'):
+            output = run(args)
+        else:
+            # A local mutation is a manual cycle, serialized with the service.
+            with lock(args.state / 'library-cycle.lock', blocking=False):
+                if args.command not in ('publish', 'withdraw', 'restore', 'reconcile'):
+                    for path in (args.state / 'library-operations').glob('*.yaml'):
+                        if load(path).get('phase') not in ('committed', 'interrupted', 'capacity_aborted'):
+                            raise LibraryError('Reconcile copy journals before a local catalogue write')
+                output = run(args)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         if isinstance(output, list) and any(isinstance(item, dict) and item.get('status') in ('stale', 'rejected') for item in output):
             return 3

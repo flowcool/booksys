@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 import re
 import time
 import unicodedata
@@ -15,7 +16,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import yaml
 from bs4 import BeautifulSoup
 
-from library.catalog import Catalog, LibraryError, apply_effect, atomic_yaml, digest, now
+from library.catalog import Catalog, LibraryError, apply_effect, atomic_yaml, digest, now, lock
+
+REDIRECT_CHARGE: ContextVar[Callable[[], None] | None] = ContextVar('provider_redirect_charge', default=None)
 
 Fetch = Callable[[str], tuple[int, str]]
 
@@ -115,6 +118,9 @@ class QualifiedRedirect(HTTPRedirectHandler):
         if (target.scheme != 'https' or target.hostname != urlsplit(req.full_url).hostname
                 or target.username or target.password or target.port):
             raise LibraryError('Provider redirect escapes qualified origin')
+        charge = REDIRECT_CHARGE.get()
+        if charge is not None:
+            charge()
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -133,13 +139,18 @@ def http_fetch(url: str) -> tuple[int, str]:
 
 class Providers:
     def __init__(self, cache: Path, *, fetch: Fetch = http_fetch, interval: float = 1,
-                 budget: int = 12):
+                 budget: int = 12, shared: Path | None = None):
         self.cache, self.fetch, self.interval, self.budget = cache, fetch, interval, budget
+        self.shared = shared
         self.last_request = 0.0
         self.events: list[dict[str, Any]] = []
 
     def get(self, url: str) -> dict[str, Any]:
-        result = self._get(url)
+        if self.shared is None:
+            result = self._get(url)
+        else:
+            with lock(self.shared / 'library-network.lock'):
+                result = self._get(url)
         self.events.append({key: result[key] for key in ('status', 'http_status', 'reason') if key in result})
         return result
 
@@ -157,10 +168,17 @@ class Providers:
         if self.budget <= 0:
             return {'status': 'unavailable', 'reason': 'Request budget exhausted', 'url': url}
         time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
-        self.budget -= 1
+        try:
+            self.charge()
+        except LibraryError as exc:
+            return {'status': 'unavailable', 'reason': str(exc), 'url': url}
         self.last_request = time.monotonic()
         try:
-            status, body = self.fetch(url)
+            context = REDIRECT_CHARGE.set(self.charge)
+            try:
+                status, body = self.fetch(url)
+            finally:
+                REDIRECT_CHARGE.reset(context)
             result = {'status': 'ok' if status == 200 else 'unavailable',
                       'http_status': status, 'body': body if status == 200 else '',
                       'url': url, 'retrieved_at': now(),
@@ -170,6 +188,19 @@ class Providers:
                       'retrieved_at': now(), 'expires': time.time() + 300}
         atomic_yaml(path, result)
         return result
+
+    def charge(self) -> None:
+        if self.budget <= 0:
+            raise LibraryError('Request budget exhausted')
+        if self.shared is not None:
+            budget_path = self.shared / 'library-network-budget.yaml'
+            value = yaml.safe_load(budget_path.read_text()) if budget_path.exists() else {'remaining': 50}
+            if value['remaining'] <= 0:
+                raise LibraryError('Request budget exhausted')
+            time.sleep(max(0, self.interval - (time.time() - value.get('last_request', 0))))
+            value.update(remaining=value['remaining'] - 1, last_request=time.time())
+            atomic_yaml(budget_path, value)
+        self.budget -= 1
 
     def discover(self, title: str) -> dict[str, Any]:
         url = 'https://openlibrary.org/search.json?' + urlencode({'title': title[:200], 'limit': 5,

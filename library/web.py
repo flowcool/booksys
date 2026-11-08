@@ -266,7 +266,10 @@ $('query').oninput=render;for(const key of filters)$(key).onchange=render;for(co
 $('refresh').onclick=refresh;refresh();setInterval(refresh,30000);</script>'''
 
 
-def handler(root: Path) -> type[BaseHTTPRequestHandler]:
+def handler(root: Path, *, resolution: Any = None) -> type[BaseHTTPRequestHandler]:
+    import secrets
+    token = secrets.token_urlsafe(32)
+
     class Handler(BaseHTTPRequestHandler):
         def respond(self, status: int, body: bytes, content_type: str) -> None:
             self.send_response(status)
@@ -274,11 +277,32 @@ def handler(root: Path) -> type[BaseHTTPRequestHandler]:
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('X-Frame-Options', 'DENY')
+            self.send_header('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'none'")
             self.end_headers()
             if self.command != 'HEAD':
                 self.wfile.write(body)
 
+        def allowed_host(self) -> bool:
+            host = self.headers.get('Host', '')
+            address = str(self.server.server_address[0])  # type: ignore[index]
+            port = self.server.server_port  # type: ignore[attr-defined]
+            return host == str(address) + ':' + str(port)
+
         def do_GET(self) -> None:
+            if resolution is not None and not self.allowed_host():
+                self.respond(403, b'Invalid Host', 'text/plain')
+                return
+            if resolution is not None and self.path == '/api/resolution/token':
+                self.respond(200, json.dumps({'token': token}).encode(), 'application/json')
+                return
+            if resolution is not None and re.fullmatch(r'/api/resolution/proof/[a-f0-9]{64}', self.path):
+                try:
+                    piece = resolution.load_piece(self.path.rsplit('/', 1)[1])
+                    self.respond(200, base64.b64decode(piece['png'], validate=True), 'image/png')
+                except Exception:
+                    self.respond(404, b'Proof unavailable', 'text/plain')
+                return
             if self.path == '/':
                 self.respond(200, PAGE.encode(), 'text/html; charset=utf-8')
                 return
@@ -290,7 +314,30 @@ def handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if re.fullmatch(r'/fiche/[a-zA-Z0-9_-]{1,64}', self.path):
                 fiche = projection.get('fiches', {}).get(self.path.removeprefix('/fiche/'))
                 if fiche:
-                    self.respond(200, fiche_html(fiche).encode(), 'text/html; charset=utf-8')
+                    if resolution is not None:
+                        try:
+                            state = resolution.state()
+                            origin = state['origins'][self.path.removeprefix('/fiche/')]
+                            asset = state['assets'].get(origin.get('sha256'), {})
+                            decision = asset.get('resolution', {})
+                            if decision:
+                                fiche = dict(fiche)
+                                fiche['pipeline'] = {**fiche['pipeline'],
+                                    'operator_decision': decision.get('decision'),
+                                    'decision_application': decision.get('status'),
+                                    'decision_reason': decision.get('reason', 'Awaiting normal cycle')}
+                                identity = asset.get('identity')
+                                if identity:
+                                    fiche['bibliography'] = {**fields(state['works'][identity['work']], ('title', 'author', 'number', 'series')),
+                                        **fields(state['editions'][identity['edition']], ('publisher', 'language', 'date', 'revision', 'isbn'))}
+                        except Exception:
+                            self.respond(503, b'Decision evidence unavailable; inspect retained state', 'text/plain')
+                            return
+                    body = fiche_html(fiche)
+                    if resolution is not None:
+                        from library.resolution_ui import PANEL
+                        body += PANEL
+                    self.respond(200, body.encode(), 'text/html; charset=utf-8')
                     return
             if re.fullmatch(r'/cover/[0-9a-f]{64}\.png', self.path):
                 path = root / 'evidence/web-covers' / self.path.removeprefix('/cover/')
@@ -305,7 +352,44 @@ def handler(root: Path) -> type[BaseHTTPRequestHandler]:
         def rejected_method(self) -> None:
             self.respond(405, b'Read only; GET and HEAD only', 'text/plain')
 
-        do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_TRACE = rejected_method
+        def do_POST(self) -> None:
+            if resolution is None:
+                self.rejected_method()
+                return
+            from library.catalog import LibraryError
+            if (not self.allowed_host() or self.headers.get('Origin') != 'http://' + self.headers.get('Host', '')
+                    or not secrets.compare_digest(self.headers.get('X-CSRF-Token', ''), token)):
+                self.respond(403, b'Forbidden origin or token', 'text/plain')
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if self.headers.get('Content-Type') != 'application/json' or not 0 < length <= 65536:
+                    raise LibraryError('Expected bounded JSON')
+                value = json.loads(self.rfile.read(length))
+                if not isinstance(value, dict):
+                    raise LibraryError('Expected object')
+                from library.resolution import case_view
+                action = self.path.removeprefix('/api/resolution/')
+                if action == 'case' and set(value) in ({'origin'}, {'asset'}):
+                    state = resolution.state()
+                    key = value.get('asset') or state['origins'][value['origin']]['sha256']
+                    result = case_view(resolution, key)
+                elif action == 'page' and set(value) == {'asset', 'page'}:
+                    result = resolution.page(value['asset'], value['page'])
+                elif action == 'preview' and set(value) == {'asset', 'values'}:
+                    result = resolution.preview(value['asset'], value['values'])
+                elif action == 'confirm':
+                    result = resolution.confirm(value)
+                elif action == 'search' and set(value) == {'query'}:
+                    result = resolution.search(value['query'])
+                else:
+                    raise LibraryError('Unsupported action or fields')
+                self.respond(200, json.dumps(result).encode(), 'application/json')
+            except (LibraryError, ValueError, KeyError, TypeError, OSError) as exc:
+                reason = str(exc)[:500] if isinstance(exc, LibraryError) else 'Action refused. Refresh the case and check evidence.'
+                self.respond(409, json.dumps({'reason': reason}).encode(), 'application/json')
+
+        do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_TRACE = rejected_method
 
         def log_message(self, *_: Any) -> None:
             pass
