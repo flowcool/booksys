@@ -5,6 +5,8 @@ Statut : validé par the operator le 8 novembre 2026 après revue critique Claud
 Les choix ci-dessous proviennent du grilling. Ce document décrit une cible,
 pas le runtime actuel. Les portes techniques restent à qualifier.
 Livrable de cette session : conception et revue Claude. Aucune conversion de fichiers.
+Suite d'exécution : tâches V1,
+epic Beads `private-work-item`. La création du suivi ne lance pas l'implémentation.
 
 ## Résultat attendu
 
