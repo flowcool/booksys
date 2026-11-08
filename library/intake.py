@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+import os
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -108,8 +109,16 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             (previous.get('availability') == 'pending' and 'Nested container' in previous.get('reason', ''))):
                         from library.bundles import receive_bundle
                         from library.bundle_worker import POLICY
-                        if (incremental and not previous.get('bundle') and previous.get('fingerprint') == stamp
-                                and previous.get('availability') == 'rejected' and previous.get('bundle_policy') == POLICY and previous.get('reason') != 'Isolated bundle worker failed'):
+                        engine_policy = digest({'bundle': POLICY, 'reader': READER_POLICY,
+                                                'image': os.environ.get('BOOKSYS_READER_IMAGE', 'native')})
+                        temporary_bundle = any(text in previous.get('reason', '').lower() for text in
+                            ('isolated bundle worker failed', 'cannot create isolated bundle engine', 'wall limit'))
+                        same_attempt = (previous.get('fingerprint') == stamp and
+                                        previous.get('bundle_engine_policy') == engine_policy)
+                        retry_bundle = (temporary_bundle and int(previous.get('bundle_attempts', 1)) < 3 and
+                                        previous.get('bundle_next_attempt', 0) <= time.time())
+                        if (incremental and not previous.get('bundle') and same_attempt and
+                                previous.get('availability') == 'rejected' and not retry_bundle):
                             state['origins'][oid] = {**previous, 'observed_at': origin['observed_at']}
                             continue
                         if not previous.get('bundle') and (bundle_preparations >= 1 or
@@ -118,7 +127,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             state['origins'][oid] = origin
                             continue
                         bundle_preparations += not bool(previous.get('bundle'))
-                        origin.update(fingerprint=stamp, bundle_policy=POLICY)
+                        attempts = int(previous.get('bundle_attempts', 0)) + 1 if same_attempt else 1
+                        origin.update(fingerprint=stamp, bundle_policy=POLICY, bundle_engine_policy=engine_policy,
+                                      bundle_attempts=attempts, bundle_next_attempt=time.time() + (300 if attempts == 1 else 900))
                         inspected += receive_bundle(state, store.directory, path, oid, origin,
                             captured['items'][source], budget=max(0, (inspection_limit if inspection_limit is not None else 8) - inspected),
                             stable_seconds=stable_seconds)

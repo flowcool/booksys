@@ -264,11 +264,11 @@ def stop_bundle_container(name: str) -> None:
     if not re.fullmatch(r'booksys-bundle-[0-9a-f]{32}', name):
         raise LibraryError('Invalid owned bundle container')
     result = bounded_run(['docker', 'stop', '--time', '1', name], timeout=15, stdout_limit=8192)
-    if result.returncode and b'No such' not in result.stderr:
+    if result.returncode and b'no such' not in result.stderr.lower():
         raise LibraryError('Owned bundle engine stop failed; preserve evidence')
     for attempt in range(20):
         result = bounded_run(['docker', 'inspect', '--format', '{{.State.Running}}', name], timeout=10, stdout_limit=8192)
-        if (result.returncode == 0 and result.stdout.strip() == b'false') or (result.returncode and b'No such' in result.stderr):
+        if (result.returncode == 0 and result.stdout.strip() == b'false') or (result.returncode and b'no such' in result.stderr.lower()):
             return
         if result.returncode or result.stdout.strip() != b'true':
             break

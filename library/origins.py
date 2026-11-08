@@ -8,7 +8,7 @@ from library.catalog import Catalog, LibraryError
 from library.readers import fingerprint, sha256
 
 
-def resolve_asset(store: Catalog, reception: Path, state: dict[str, Any], asset_id: str) -> Path:
+def resolve_asset_origin(store: Catalog, reception: Path, state: dict[str, Any], asset_id: str) -> tuple[str, Path]:
     from library.intake import reception_path
     from library.bundles import verify_directory
     errors = []
@@ -39,7 +39,11 @@ def resolve_asset(store: Catalog, reception: Path, state: dict[str, Any], asset_
                 path = reception_path(reception, str(relative.parent), relative.name)
             if sha256(path) != asset_id:
                 raise LibraryError('Origin bytes changed')
-            return path
+            return oid, path
         except (LibraryError, OSError, KeyError) as exc:
             errors.append(str(exc))
     raise LibraryError('; '.join(errors) if errors else 'No validated origin with matching asset hash is available')
+
+
+def resolve_asset(store: Catalog, reception: Path, state: dict[str, Any], asset_id: str) -> Path:
+    return resolve_asset_origin(store, reception, state, asset_id)[1]

@@ -16,7 +16,9 @@ from library.readers import fingerprint, inspect_file, sha256
 from library.transform import transform_archive
 
 
-def qualify(state_path: Path, reception: Path, oid: str, output: Path, *, transform: bool = False) -> dict[str, Any]:
+def qualify(state_path: Path, reception: Path, oid: str, output: Path, *, transform: bool = False, transform_limit: int = 3) -> dict[str, Any]:
+    if not 0 <= transform_limit <= 64:
+        raise LibraryError('Transformation count must be between zero and 64')
     if any(path.is_symlink() for path in (output.absolute(), *output.absolute().parents)):
         raise LibraryError('Symlink proof output')
     if (output.resolve().is_relative_to(reception.resolve()) or reception.resolve().is_relative_to(output.resolve())
@@ -62,11 +64,12 @@ def qualify(state_path: Path, reception: Path, oid: str, output: Path, *, transf
         proof['members'].setdefault(cid, {}).update(member=child['member'], sha256=child['sha256'],
             validation=child['availability'], reason=child.get('reason'), identity='pending')
     atomic_yaml(proof_path, proof)
+    converted = sum('transformation' in item for item in proof['members'].values())
     for cid, child in children.items():
         record = proof['members'].setdefault(cid, {})
         record.update(member=child['member'], sha256=child['sha256'], validation=child['availability'],
                       reason=child.get('reason'), identity='pending')
-        if child['availability'] == 'validated' and transform:
+        if child['availability'] == 'validated' and transform and (record.get('transformation') or converted < transform_limit):
             derived = resolve_asset(store, reception, rerun, child['sha256'])
             prior = record.get('transformation')
             if prior:
@@ -81,6 +84,7 @@ def qualify(state_path: Path, reception: Path, oid: str, output: Path, *, transf
                 readback = inspect_file(destination / 'book.cbz', stable_seconds=.01)
                 if readback['status'] != 'validated':
                     raise LibraryError('Generated child CBZ readback failed')
+                converted += 1
                 record.update(transformation=result, artifact=str((destination / 'book.cbz').relative_to(output)),
                               readback={'status': readback['status'], 'pages': readback['pages'], 'sha256': readback['sha256']})
         proof['source_unchanged'] = sha256(parent) == before and list(fingerprint(parent)) == stamp
@@ -96,14 +100,16 @@ def main() -> int:
     parser.add_argument('--reception', type=Path, required=True)
     parser.add_argument('--origin', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--transform-limit', type=int, default=3, help='Maximum technical conversions; use 64 to cover every valid member')
     parser.add_argument('--transform', action='store_true', help='Technical CBZ conversion/readback only; no identity admission')
     args = parser.parse_args()
     try:
-        proof = qualify(args.state, args.reception, args.origin, args.output, transform=args.transform)
-        good = all(item['validation'] == 'validated' and (not args.transform or 'readback' in item)
-                   for item in proof['members'].values())
+        proof = qualify(args.state, args.reception, args.origin, args.output, transform=args.transform, transform_limit=args.transform_limit)
+        valid = sum(item['validation'] == 'validated' for item in proof['members'].values())
+        converted = sum('readback' in item for item in proof['members'].values())
+        good = valid == len(proof['members']) and (not args.transform or converted >= min(valid, args.transform_limit))
         print(json.dumps({'status': 'qualified' if good else 'pending', 'members': len(proof['members']),
-                          'source_unchanged': proof['source_unchanged'], 'rerun_idempotent': proof['rerun_idempotent']}))
+                          'converted_readbacks': converted, 'source_unchanged': proof['source_unchanged'], 'rerun_idempotent': proof['rerun_idempotent']}))
         return 0 if good else 2
     except (LibraryError, OSError, ValueError, KeyError) as exc:
         print(json.dumps({'status': 'blocked', 'reason': str(exc)}))

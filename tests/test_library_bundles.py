@@ -241,3 +241,82 @@ class BundleTests(unittest.TestCase):
             operation = publisher.publish(asset)
             self.assertEqual(operation['phase'], 'committed')
             self.assertTrue((root / 'library/bd' / operation['target'] / 'book.cbz').exists())
+
+    def test_failed_extraction_has_three_delayed_attempts_and_policy_reset(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            reception, _, captured, journal, queue = inputs(root, [('One.cbz', comic())])
+            store = Catalog(root / 'state')
+            with patch('library.bundles.retain', side_effect=LibraryError('Isolated bundle worker failed')) as engine:
+                for _ in range(2):
+                    receive(store, reception, captured, journal, queue, stable_seconds=.01, incremental=True)
+                self.assertEqual(engine.call_count, 1)
+                for _ in range(3):
+                    state = store.read()
+                    next(iter(state['origins'].values()))['bundle_next_attempt'] = 0
+                    store.save(state, expected=state['revision'])
+                    receive(store, reception, captured, journal, queue, stable_seconds=.01, incremental=True)
+                self.assertEqual(engine.call_count, 3)
+                with patch.dict('os.environ', {'BOOKSYS_READER_IMAGE': 'changed-policy-image'}):
+                    receive(store, reception, captured, journal, queue, stable_seconds=.01, incremental=True)
+                self.assertEqual(engine.call_count, 4)
+                self.assertEqual(next(iter(store.read()['origins'].values()))['bundle_attempts'], 1)
+
+    def test_corrupt_crc_and_total_expansion_are_rejected_before_admission(self):
+        import struct
+        from library.bundles import retain
+        for kind in ('crc', 'actual_short', 'total'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                _, parent, *_ = inputs(root, [(f'{i}.cbz', comic()) for i in range(5)])
+                data = bytearray(parent.read_bytes())
+                with zipfile.ZipFile(parent) as archive:
+                    position = archive.start_dir
+                    centers = []
+                    for _ in archive.infolist():
+                        centers.append(position)
+                        lengths = struct.unpack_from('<HHH', data, position + 28)
+                        position += 46 + sum(lengths)
+                if kind == 'crc':
+                    header = data.index(b'PK\x03\x04')
+                    name_size, extra_size = struct.unpack_from('<HH', data, header+26)
+                    data[header+30+name_size+extra_size+20] ^= 1
+                if kind == 'actual_short':
+                    struct.pack_into('<I', data, centers[0]+24, len(comic())+1)
+                if kind == 'total':
+                    for index in centers: struct.pack_into('<I', data, index+24, 1024**3)
+                parent.write_bytes(data)
+                with self.assertRaises(LibraryError): retain(parent, root / 'state', stable_seconds=.01)
+
+    def test_source_size_limit_is_checked_before_reading_or_extracting(self):
+        from library.bundles import retain
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); (root / 'reception').mkdir()
+            parent = root / 'reception/oversized.rar'
+            with parent.open('wb') as handle:
+                handle.truncate(1024**3 + 1)
+            with self.assertRaisesRegex(LibraryError, 'source limit'):
+                retain(parent, root / 'state', stable_seconds=.01)
+            self.assertFalse((root / 'state').exists())
+
+    def test_publication_records_the_valid_mirror_it_actually_used(self):
+        from library.catalog import apply_effect, digest
+        from library.publish import Publisher, Capacity
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            reception, _, captured, journal, queue = inputs(root, [('One.cbz', comic())])
+            (reception / 'mirror.cbz').write_bytes(comic())
+            queue[0]['links'].append({'fid': 2, 'name': 'mirror.cbz', 'status': 0, 'size': len(comic())})
+            store = Catalog(root / 'state')
+            state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
+            asset = next(iter(state['assets']))
+            child = next(o for o in state['origins'].values() if o.get('parent_origin'))
+            (root / 'state' / child['path']).write_bytes(b'changed')
+            apply_effect(state, {'action': 'identify', 'target': asset, 'values': {
+                'work_id': 'work', 'edition_id': 'edition', 'work': {'title': 'Album'},
+                'edition': {'language': 'fr', 'publisher': 'Publisher', 'evidence': {'operator': 'fixture'}}}})
+            apply_effect(state, {'action': 'select', 'target': asset, 'values': {}})
+            store.save(state, expected=state['revision'])
+            result = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0)).publish(asset)
+            self.assertEqual(result['source'], digest({'source': SOURCE, 'pid': 1, 'fid': 2}))

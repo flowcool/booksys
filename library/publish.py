@@ -186,7 +186,8 @@ class Publisher:
             claims = {v['edition'] for v in state['variants'].values() if v['asset'] == asset_id}
             if claims != {identity['edition']}:
                 raise LibraryError('Conflicting asset ownership')
-            source = self.resolve_origin(state, asset_id)
+            from library.origins import resolve_asset_origin
+            source_origin, source = resolve_asset_origin(self.store, self.reception, state, asset_id)
             fiche = fiche_for(state, asset_id)
             cover = base64.b64decode(asset['cover'], validate=True) if asset.get('cover') else None
             xml = comicinfo(state, asset_id)
@@ -216,7 +217,7 @@ class Publisher:
             operation = {'schema': 1, 'id': uuid.uuid4().hex, 'kind': 'replace' if previous else 'create',
                 'asset': asset_id, 'edition': identity['edition'], 'target': target.name,
                 'manifest': expected, 'previous': previous, 'catalogue_revision': state['revision'],
-                'source': next(key for key in asset['origins'] if state['origins'][key].get('availability') == 'validated'), 'created_at': now(), 'export_version': export_version,
+                'source': source_origin, 'created_at': now(), 'export_version': export_version,
                 'artifact_format': 'cbz' if xml else 'pdf'}
             self.transition(operation, 'intent')
             stage = self.staging / operation['id']
