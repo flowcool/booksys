@@ -8,7 +8,7 @@ WorkingDirectory=/opt/booksys
 Environment=TMPDIR=/data/tmp
 Environment=XDG_CACHE_HOME=/data/cache/booksys
 Environment=PYTHONDONTWRITEBYTECODE=1
-Environment=BOOKSYS_READER_IMAGE=sha256:4ab81b7c3744602ebd6c76dacf4a0e70f76fa2fd266fb7dcc13bd0952d0edd1c
+Environment=BOOKSYS_READER_IMAGE=sha256:95e209267aa99ebaee202ae3c75af44d1b799d0b4840f5342d3f52dc8d4e94a4
 ExecStart=/opt/booksys/.venv/bin/python /opt/booksys/ops/library_service.py --root /data/booksys/library-lab --credentials /data/booksys/secrets/pyload.json --listen 192.0.2.10 --port 8768
 Restart=on-failure
 RestartSec=30
