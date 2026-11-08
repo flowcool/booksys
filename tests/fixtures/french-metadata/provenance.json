@@ -1,0 +1,58 @@
+{
+  "album-540371.html": {
+    "url": "https://www.bedetheque.com/BD-Oiseau-Chanteur-L-Oiseau-Chanteur-540371.html",
+    "retrieved_at": "2026-11-08T18:49:54.824703+00:00",
+    "full_response_sha256": "760799b5e36ebf2d19e0b6024e6ab4feef863317723f61297e5b548e66a5ce17",
+    "fixture_sha256": "984af3b16757d11e6632fa1174f277c129cdcdc9e73047698d192596f55eec5d",
+    "selection": "Handwritten minimal parser markup reconstructed from factual bibliographic fields. Original capture hashes remain provenance, not a redistribution grant. No source prose, reviews, images, styles or scripts.",
+    "captured_fixture_sha256": "4217e40fdafc77b73c9af25a51fb585328cc451ec3e2d65a16ddbfebaf89888f"
+  },
+  "album-95136.html": {
+    "url": "https://www.bedetheque.com/BD-Geeks-Tome-4-Hacker-vaillant-rien-d-impossible-95136.html",
+    "retrieved_at": "2026-11-08T18:47:16.939668+00:00",
+    "full_response_sha256": "7a76c853dbc6a4ff52644e5215d74d35592a29ebbb803e04509ab607e5edbf39",
+    "fixture_sha256": "99541cc86c73dda95f94eaadbec7b68c794ce4676ee59f32e2c8a4ae10ccf061",
+    "selection": "Handwritten minimal parser markup reconstructed from factual bibliographic fields. Original capture hashes remain provenance, not a redistribution grant. No source prose, reviews, images, styles or scripts.",
+    "captured_fixture_sha256": "d33d23b02eacef50c5b2e33674a52b6f98c256845aa134ce6d457ec728859c51"
+  },
+  "album-83239.html": {
+    "url": "https://www.bedetheque.com/BD-Largo-Winch-INT-L-heritier-Le-groupe-W-83239.html",
+    "retrieved_at": "2026-11-08T18:49:58.948385+00:00",
+    "full_response_sha256": "af8bb51847a529d1df93ef6d2c239e95ff78cec43b4e418f7f6ee0f090bb6e84",
+    "fixture_sha256": "cffaef4dd2b99a9c03884c35407975682ae8302c8c5ae50b15bab7758464278a",
+    "selection": "Handwritten minimal parser markup reconstructed from factual bibliographic fields. Original capture hashes remain provenance, not a redistribution grant. No source prose, reviews, images, styles or scripts.",
+    "captured_fixture_sha256": "2f86385f3fd94ace212e873f337914ad47293a6e53ca5a1b0934ebe8e17e75cb"
+  },
+  "album-71072.html": {
+    "url": "https://www.bedetheque.com/BD-Geeks-Tome-1-Un-clavier-azerty-en-vaut-deux-71072.html",
+    "retrieved_at": "2026-11-08T18:47:14.872003+00:00",
+    "full_response_sha256": "f1788815753f8772988f6b3fcc7281f4c81c395af38ac8387d12ae3355c05cbf",
+    "fixture_sha256": "9a2c914c2d6310c8d8b057aa31fcb37c6c63d01c1abbc57d8439438e66e407fd",
+    "selection": "Handwritten minimal parser markup reconstructed from factual bibliographic fields. Original capture hashes remain provenance, not a redistribution grant. No source prose, reviews, images, styles or scripts.",
+    "captured_fixture_sha256": "eb6fac13fd191e551351aaba4792ef2803ba4bcfe1bf4bec9b779377f22023da"
+  },
+  "album-972.html": {
+    "url": "https://www.bedetheque.com/BD-Druuna-Tome-3-Creatura-972.html",
+    "retrieved_at": "2026-11-08T18:51:00.993269+00:00",
+    "full_response_sha256": "946f84cefec9c7812b4d73d4d450bc4a3e3fdb3954d96e660afe708d721b4a78",
+    "fixture_sha256": "4b2206ecf02ede99c27554f99b490183684c05bd54a444df3eb518538f6a157e",
+    "selection": "Handwritten minimal parser markup reconstructed from factual bibliographic fields. Original capture hashes remain provenance, not a redistribution grant. No source prose, reviews, images, styles or scripts.",
+    "captured_fixture_sha256": "f30024484318314083b860237a1891c6e3104a840d73bd482f8d7bbc29a1e9d9"
+  },
+  "album-212.html": {
+    "url": "https://www.bedetheque.com/BD-Largo-Winch-Tome-1-L-heritier-212.html",
+    "retrieved_at": "2026-11-08T18:44:12.651768+00:00",
+    "full_response_sha256": "0a02b5d0e04cc52d384098b902aec4df9035a7af43d2b2ddf6777898af04a0ee",
+    "fixture_sha256": "126eb3258cb0b953d68ab84f43bf46e36084b199a356e35e697b335ceb819b03",
+    "selection": "Handwritten minimal parser markup reconstructed from factual bibliographic fields. Original capture hashes remain provenance, not a redistribution grant. No source prose, reviews, images, styles or scripts.",
+    "captured_fixture_sha256": "24bb0db4f02ff39c1cd6257a42dd102504e701c0bfe21364b19c7840ddca12c7"
+  },
+  "album-24065.html": {
+    "url": "https://www.bedetheque.com/BD-Naruto-Tome-1-Naruto-Uzumaki-24065.html",
+    "retrieved_at": "2026-11-08T18:49:56.950370+00:00",
+    "full_response_sha256": "2835952537c31b510dd75691b02448fc6678b33d70ec5354c5e35f0c001f123f",
+    "fixture_sha256": "d63f598a27fc35a2741865a9f876f347bb35aa5208a799b7013185647daf46b8",
+    "selection": "Handwritten minimal parser markup reconstructed from factual bibliographic fields. Original capture hashes remain provenance, not a redistribution grant. No source prose, reviews, images, styles or scripts.",
+    "captured_fixture_sha256": "aa3c377af7040ff73028ca455ccb8000a8464e17ff8d483a9de7dc26bac5f294"
+  }
+}

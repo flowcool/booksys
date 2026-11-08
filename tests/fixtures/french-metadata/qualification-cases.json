@@ -1,0 +1,134 @@
+[
+  {
+    "id": "real-bd-largo1",
+    "reference_url": "https://www.bedetheque.com/BD-Largo-Winch-Tome-1-L-heritier-212.html",
+    "title": "L'héritier",
+    "number": "1",
+    "expected_work": {
+      "series": "Largo Winch",
+      "title": "L'héritier",
+      "number": "1"
+    },
+    "label_source": "Upstream retained test example plus independently supplied title/number; parser qualification, not a corpus auto-admission"
+  },
+  {
+    "id": "real-bundle-geeks1",
+    "query": "Les Geeks",
+    "title": "Un clavier azerty en vaut deux",
+    "number": "1",
+    "expected_work": {
+      "series": "Les Geeks",
+      "title": "Un clavier azerty en vaut deux",
+      "number": "1"
+    },
+    "label_source": "Frozen member caption and actual member filename agree; reference title/number qualification",
+    "enrich": true,
+    "provenance": {
+      "asset_sha256": "52394be4cb3c03cb91cd0f84d6c4d8bd05aeaed1f90e3e1fad7ea3975c187d16",
+      "evidence_pack_sha256": "4968fd4c82461ba8f5cd152f22c5ce3e47da7f65380447defc9125119d8df0db",
+      "member_names": [
+        "Les_Geeks_-_T01_-_Un_clavier_azerty_en_vaut_deux_Collectif_Gang_Labourot.pdf"
+      ],
+      "binding_status": "qualification hint only; runtime binding is a separate integration gate"
+    }
+  },
+  {
+    "id": "real-bundle-geeks4",
+    "query": "Les Geeks",
+    "title": "Hacker vaillant rien d'impossible",
+    "number": "4",
+    "expected_work": {
+      "series": "Les Geeks",
+      "title": "Hacker vaillant rien d'impossible",
+      "number": "4"
+    },
+    "label_source": "Frozen member caption and actual member filename agree; reference title/number qualification",
+    "enrich": true,
+    "provenance": {
+      "asset_sha256": "43604a9fa2327bae62121026f87747a342674f822a3e5c6790bc221ad425aa21",
+      "evidence_pack_sha256": "4968fd4c82461ba8f5cd152f22c5ce3e47da7f65380447defc9125119d8df0db",
+      "member_names": [
+        "Les_Geeks_-_T04_-_Hacker_vaillant_rien_d_39_impossible_Collectif_Gang_Labourot.pdf"
+      ],
+      "binding_status": "qualification hint only; runtime binding is a separate integration gate"
+    }
+  },
+  {
+    "id": "real-standalone-oiseau",
+    "reference_url": "https://www.bedetheque.com/BD-Oiseau-Chanteur-L-Oiseau-Chanteur-540371.html",
+    "title": "L'Oiseau Chanteur",
+    "expected_work": {
+      "series": "L'Oiseau Chanteur",
+      "title": "L'Oiseau Chanteur",
+      "number": null
+    },
+    "label_source": "Frozen embedded Series/Web and file name; no edition confirmation",
+    "provenance": {
+      "asset_sha256": "1eac92f27e9bed4ffd997126037d00ff6f54452a4967735aa321f9de450f4602",
+      "evidence_pack_sha256": "4968fd4c82461ba8f5cd152f22c5ce3e47da7f65380447defc9125119d8df0db",
+      "member_names": [],
+      "binding_status": "qualification hint only; runtime binding is a separate integration gate"
+    }
+  },
+  {
+    "id": "real-manga-naruto1",
+    "reference_url": "https://www.bedetheque.com/BD-Naruto-Tome-1-Naruto-Uzumaki-24065.html",
+    "title": "Naruto Uzumaki",
+    "number": "1",
+    "expected_work": {
+      "series": "Naruto",
+      "title": "Naruto Uzumaki",
+      "number": "1"
+    },
+    "label_source": "Retained public series row and album page; parser qualification only"
+  },
+  {
+    "id": "real-integral-largo",
+    "reference_url": "https://www.bedetheque.com/BD-Largo-Winch-INT-L-heritier-Le-groupe-W-83239.html",
+    "expected_work": {
+      "series": "Largo Winch",
+      "title": "L'héritier / Le groupe W",
+      "number": null
+    },
+    "label_source": "Explicit public integral badge; no page split or corpus claim"
+  },
+  {
+    "id": "real-adult-druuna",
+    "reference_url": "https://www.bedetheque.com/BD-Druuna-Tome-3-Creatura-972.html",
+    "title": "Creatura",
+    "number": "3",
+    "expected_work": {
+      "series": "Druuna",
+      "title": "Creatura",
+      "number": "3"
+    },
+    "label_source": "Retained public sitemap + canonical page identity; adult from explicit genre only"
+  },
+  {
+    "id": "negative-wrong-volume",
+    "query": "Les Geeks",
+    "title": "Un clavier azerty en vaut deux",
+    "number": "4",
+    "expected_work": {
+      "series": "Les Geeks",
+      "title": "Un clavier azerty en vaut deux",
+      "number": "1"
+    },
+    "label_source": "Deliberately contradictory fixture; must abstain"
+  },
+  {
+    "id": "negative-ambiguous-work",
+    "query": "Les Geeks",
+    "label_source": "No issue/title provided; multiple works must remain ambiguous"
+  },
+  {
+    "id": "negative-no-candidate",
+    "query": "Geeks Nonexistent Work 963852741",
+    "label_source": "Deliberate absent label; public Z index is uncached in offline replay"
+  },
+  {
+    "id": "negative-upstream-stale-url",
+    "reference_url": "https://www.bedetheque.com/BD-Spawn-Tome-1-Origines-1234.html",
+    "label_source": "Upstream cbzforge fixture URL currently returns301; unavailable not wrong match"
+  }
+]
