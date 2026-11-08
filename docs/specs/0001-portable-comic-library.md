@@ -387,3 +387,56 @@ Collapse technical details. Do not query new providers to render a fiche.
 Descriptions preserve manual corrections, then use the matching captured Bookys
 page, then available bibliographic text. Show the selected provenance. Strip
 source HTML to bounded text and show explicit absence when no description exists.
+
+## Accepted bundle-intake amendment — 8 November 2026
+
+the operator approved bounded multi-album bundle processing after the four rejected-file
+audit. This amendment replaces the earlier exclusion of lots to decompose only
+for the cases below. It does not permit splitting the pages of a single comic,
+assembling multipart files, recursive extraction or inferring identity from a bundle.
+
+- Accept tracked, finished, stable, single-volume ZIP/RAR containers holding one
+  or more complete PDF/CBZ/CBR members. Generic `.zip`/`.rar` names are allowed
+  only for this explicit bundle path. Verify the real container signature.
+- Reject encryption, split volumes, unsafe or duplicate member paths, links,
+  executable/unknown members and mixed loose images/comic files. Ancillary
+  entries use the same explicit bounded metadata allowlist as ordinary comics.
+  A CBZ/CBR child must pass the existing image-comic reader; it is never unpacked
+  again as another bundle.
+- Bound a source to 1 GiB, 64 complete comic members, 1 GiB per expanded child
+  and 4 GiB total expanded bytes. Check declared and actual sizes and CRCs,
+  enforce isolation/time/resource limits and retain the 20 GiB disk reserve.
+  These limits cover the observed Geeks bundle: 13 PDF names, about 568 MB
+  expanded. Names alone do not prove those files valid.
+- Keep the reception container unchanged. Store derived inputs outside reception
+  and reader exposure, under the existing lab's state-owned `bundle-inputs/`.
+  Use deterministic opaque output names; retain exact original member names as
+  data. No hoster URL, account or secret enters an extraction worker.
+- The parent origin records its original path, hash, fingerprint, policy version
+  and a bounded member manifest. Each child origin records its parent origin,
+  parent hash, exact member path, member hash, size and derived relative path.
+  Each valid child enters the normal content-addressed asset catalogue. Identical
+  bytes from another bundle or direct mirror remain one asset with all origins.
+- Validate and identify each child separately. A captured bundle title or member
+  filename is a discovery hint only. Parent bibliography is not confirmed child
+  bibliography. Keep the original source description available with its provenance.
+  Unknown or contradictory identities remain pending. Publish only ordinary
+  selected, proven editions as CBZ.
+- Prepare extraction in an operation-owned directory, verify all output hashes
+  and the unchanged parent, then atomically retain the complete derived directory.
+  A crash before catalogue commit reuses only a complete verified manifest.
+  Unknown files, a changed parent or a changed derived input block that bundle.
+  Preserve interrupted evidence; do not blindly clear or recursively purge it.
+- Existing five-minute cycles perform bounded intake. A large bundle may finish
+  extraction once and admit its children across later cycles within the existing
+  eight-input validation budget. Reruns create no duplicate origins or assets.
+  Source checks and derived-file validation also apply before OCR and publication.
+- The read-only page distinguishes a bundle parent from its children. It shows
+  member names, parent/source provenance and per-child validation/identity blockers.
+  A rejected child does not falsely mark all siblings as published or identified.
+
+Acceptance: all 13 Geeks members are accounted for; every valid PDF follows the
+ordinary identification/conversion path; a second cycle creates no duplicate;
+parent bytes remain unchanged. Isolated tests cover traversal, duplicate names,
+links, encryption/multipart, recursive or mixed content, declared/actual limits,
+interrupted extraction, changed parent/child and identical mirrored children.

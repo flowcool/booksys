@@ -118,3 +118,22 @@ explicit restoration role and the exact retained revision/source; returning to
 this asset's own conforming published copy is a no-change exception. Evict only
 unreferenced temporary previews when their quota is full. Check deterministic
 creation prerequisites before withdrawal.
+
+## Accepted bounded-bundle amendment — 8 November 2026
+
+the operator approved treating a downloaded multi-album container as an origin of
+separate assets. A bundle differs from a published integral, which is one work.
+The existing file-level identity and CBZ publication rules remain authoritative.
+
+Extract one level in the existing isolated reader. Retain the original container
+and stage complete derived inputs outside reception and reader exposure. Keep
+parent/member hashes and original member names in the catalogue. Use deterministic
+staging and verified manifests so a retry adds no duplicate or untracked child.
+Reuse normal PDF/CBZ/CBR validation, OCR, identification and publication for every
+child. The parent title cannot establish any child's edition.
+
+This costs storage for the extracted input plus any published CBZ, but preserves
+source provenance and permits ordinary file-level recovery. Streaming members
+directly into publication would complicate retries and couple extraction to
+identity. Recursive extraction and multipart assembly remain deferred. Exact
+bounds and acceptance cases are in the spec's bundle-intake amendment.

@@ -61,3 +61,11 @@ Retention of an embedded image that represents one complete visible PDF page wit
 **Page rendering**:
 A raster image of a visible PDF page. The copy retains its appearance but does not retain searchable text, vector structure or links.
 _Avoid_: Lossless extraction
+
+**Download bundle**:
+A received container holding separate complete comic files. A bundle is not an album, edition or selected variant.
+_Avoid_: Published integral, multipart representation
+
+**Bundle member**:
+One complete file retained from a download bundle. Each member has its own asset identity and keeps its relationship to the bundle and source record.
+_Avoid_: Automatically identified edition
