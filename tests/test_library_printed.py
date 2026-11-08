@@ -177,3 +177,36 @@ class PrintedIdentityTests(unittest.TestCase):
                 def edition(self, code): return {'status': 'ok', 'candidate': CANDIDATE}
             result = enrich(store, asset, FixtureProvider(), [])
             self.assertEqual(result['assets'][asset]['identity_result']['status'], 'identified')
+
+    def test_decoder_timeout_stops_descendant_after_parent_exits(self):
+        import os
+        import signal
+        import subprocess
+        import sys
+        from library.process import bounded_run
+        with tempfile.TemporaryDirectory() as folder:
+            pid_file = Path(folder) / 'child.pid'
+            code = ('import subprocess,sys; from pathlib import Path; '
+                    'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"]); '
+                    'Path(sys.argv[1]).write_text(str(child.pid))')
+            with self.assertRaises(subprocess.TimeoutExpired):
+                bounded_run([sys.executable, '-c', code, str(pid_file)], timeout=.3)
+            pid = int(pid_file.read_text())
+            proc = Path(f'/proc/{pid}/stat')
+            import time
+            def running():
+                try:
+                    return proc.read_text().split()[2] != 'Z'
+                except FileNotFoundError:
+                    return False
+            deadline = time.monotonic() + .5
+            while running() and time.monotonic() < deadline:
+                time.sleep(.01)
+            try:
+                self.assertFalse(running(), 'Owned descendant survived its group timeout')
+            finally:
+                if running():
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass

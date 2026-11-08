@@ -19,6 +19,7 @@ def bounded_run(command: list[str], *, input: bytes = b'', timeout: float,
     output: dict[str, bytearray] = {'stdout': bytearray(), 'stderr': bytearray()}
     deadline = time.monotonic() + timeout
     offset = 0
+    completed = False
     try:
         with selectors.DefaultSelector() as selector:
             assert process.stdin is not None and process.stdout is not None and process.stderr is not None
@@ -56,10 +57,14 @@ def bounded_run(command: list[str], *, input: bytes = b'', timeout: float,
                             raise LibraryError('Decoder output limit exceeded')
                         target.extend(chunk)
             result = process.wait(timeout=max(.001, deadline-time.monotonic()))
+        completed = True
         return subprocess.CompletedProcess(command, result, bytes(output['stdout']), bytes(output['stderr']))
     finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
+        if not completed or process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # The owned group already exited; this is the required absence.
         process.wait()
         for final_stream in (process.stdin, process.stdout, process.stderr):
             if final_stream and not final_stream.closed:
