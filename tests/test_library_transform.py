@@ -42,6 +42,34 @@ class TransformTests(unittest.TestCase):
             self.assertEqual(parsed['status'], 'validated', parsed)
             self.assertNotEqual(result['artifact_sha256'], inspected['sha256'])
 
+    def test_single_volume_chapters_keep_page_order_and_omit_only_bounded_picasa(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder);source = root / 'chapters.cbz'
+            with zipfile.ZipFile(source, 'w') as archive:
+                archive.writestr('volume 21/Chapter 122/02.png', image_bytes())
+                archive.writestr('volume 21/Chapitre 121/01.png', image_bytes())
+                archive.writestr('volume 21/Chapitre 121/.picasa.ini', b'[page]\nrotate=0')
+            checked = inspect_file(source, stable_seconds=.01)
+            self.assertEqual(checked['status'], 'validated', checked)
+            self.assertEqual([p['name'] for p in checked['page_manifest']],
+                ['volume 21/Chapitre 121/01.png', 'volume 21/Chapter 122/02.png'])
+            self.assertIn('volume 21/Chapitre 121/.picasa.ini', checked['omitted_ancillary_manifest'])
+            (root / 'out').mkdir()
+            result = transform_archive(source, root / 'out', b'<ComicInfo><Title>Album</Title></ComicInfo>', checked['sha256'])
+            self.assertEqual(result['page_manifest'], checked['page_manifest'])
+            with zipfile.ZipFile(root / 'out/book.cbz') as archive:
+                self.assertFalse(any(n.endswith('.ini') for n in archive.namelist()))
+            for name, data in [('other.ini', b'harmless'), ('.picasa.ini', b'x'*65537)]:
+                with zipfile.ZipFile(source, 'w') as archive:
+                    archive.writestr('01.png', image_bytes());archive.writestr(name, data)
+                self.assertEqual(inspect_file(source, stable_seconds=.01)['status'], 'rejected')
+            for dirs in [('volume1/Chapter 1', 'volume2/Chapter 2'),
+                         ('volume21/Chapter 1', 'volume21/Alpha 2'),
+                         ('volume21/Chapter 1', 'volume21/Chapter 01')]:
+                with zipfile.ZipFile(source, 'w') as archive:
+                    for d in dirs:archive.writestr(d+'/01.png', image_bytes())
+                self.assertEqual(inspect_file(source, stable_seconds=.01)['status'], 'pending')
+
     def test_cbr_conversion_preserves_page_bytes_and_order(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

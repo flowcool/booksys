@@ -15,6 +15,7 @@ from typing import Any
 from library.catalog import LibraryError
 
 MAX_FILE = 1024 ** 3
+READER_POLICY = 'single-comic-2'
 
 
 def sha256(path: Path) -> str:
@@ -42,9 +43,9 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
         if first[2] > MAX_FILE or first[2] == 0:
             raise LibraryError('File size limit or empty file')
         if path.suffix.lower() not in ('.pdf', '.cbz', '.cbr'):
-            return {'status': 'pending', 'reason': 'Unsupported or ambiguous suffix'}
-        if re.search(r'(?:part|pt)[ ._-]?\d+|\.\d{3}\.', path.name, re.I):
-            return {'status': 'pending', 'reason': 'Multipart representation'}
+            return {'status': 'pending', 'reason': 'Unsupported or ambiguous suffix', 'reader_policy': READER_POLICY}
+        if re.search(r'(?:^|[ ._-])(?:part|pt)[ ._-]?\d+(?:[ ._-]|$)', path.name, re.I):
+            return {'status': 'pending', 'reason': 'Multipart representation', 'reader_policy': READER_POLICY}
         time.sleep(stable_seconds)
         if fingerprint(path) != first:
             raise LibraryError('Reception bytes are not stable')
@@ -69,10 +70,13 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
         if result.returncode:
             raise LibraryError('Isolated reader failed or resource limit exceeded')
         outcome: dict[str, Any] = json.loads(result.stdout)
+        if outcome.get('reader_policy') != READER_POLICY:
+            raise LibraryError('Reader policy differs from controller')
         if outcome.pop('input_sha256', None) != asset_hash:
             raise LibraryError('Reader did not inspect the identified reception bytes')
         if fingerprint(path) != first or sha256(path) != asset_hash:
             raise LibraryError('Reception changed during validation')
         return {**outcome, 'sha256': asset_hash, 'size': first[2]}
     except (LibraryError, OSError, subprocess.TimeoutExpired, ValueError) as exc:
-        return {'status': 'rejected', 'reason': str(exc)}
+        return {'status': 'rejected', 'reason': str(exc),
+                'reader_policy': None if str(exc) == 'Reader policy differs from controller' else READER_POLICY}

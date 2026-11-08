@@ -11,6 +11,49 @@ from test_library_publish import setup_library
 
 
 class AutomaticTests(unittest.TestCase):
+    def test_changed_reader_policy_retries_terminal_format_once_without_metadata_reset(self):
+        from library.readers import READER_POLICY, fingerprint
+        from test_library_intake import SOURCE
+        with tempfile.TemporaryDirectory() as folder:
+            store, reception, original, asset = setup_library(Path(folder))
+            state = store.read()
+            for origin in state['origins'].values():
+                origin.pop('reader_policy', None)
+                origin.update(availability='rejected', reason='LibraryError: Active PDF content or attachment',
+                              fingerprint=list(fingerprint(original)))
+            store.save(state, expected=state['revision'])
+            captured = {'items': {SOURCE: {'title': 'Album'}}}
+            journal = {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}}
+            queue = [{'pid': 1, 'name': 'tracked', 'folder': 'package', 'links': [
+                {'fid': 1, 'name': original.name, 'status': 0, 'size': original.stat().st_size}]}]
+            with patch('library.intake.inspect_file', return_value={'status': 'rejected',
+                       'reason': 'LibraryError: Active PDF content or attachment', 'reader_policy': READER_POLICY}) as inspect:
+                for _ in range(2):receive(store, reception, captured, journal, queue, incremental=True)
+                self.assertEqual(inspect.call_count, 1)
+            self.assertEqual(store.read()['assets'][asset]['identity'], state['assets'][asset]['identity'])
+
+    def test_genuine_multipart_old_policy_is_retried_once_then_cached(self):
+        from library.readers import fingerprint, READER_POLICY
+        from test_library_intake import SOURCE
+        with tempfile.TemporaryDirectory() as folder:
+            store, reception, original, asset = setup_library(Path(folder))
+            target = original.with_name('album.part01.cbz');original.rename(target)
+            state = store.read()
+            for origin in state['origins'].values():
+                origin.update(path='package/'+target.name, availability='pending', reason='Multipart representation',
+                              fingerprint=list(fingerprint(target)))
+                origin.pop('reader_policy', None)
+            store.save(state, expected=state['revision'])
+            captured = {'items': {SOURCE: {'title': 'Album'}}}
+            journal = {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}}
+            queue = [{'pid': 1, 'name': 'tracked', 'folder': 'package', 'links': [
+                {'fid': 1, 'name': target.name, 'status': 0, 'size': target.stat().st_size}]}]
+            from library.readers import inspect_file
+            with patch('library.intake.inspect_file', wraps=inspect_file) as inspect:
+                for _ in range(2):receive(store, reception, captured, journal, queue, incremental=True)
+                self.assertEqual(inspect.call_count, 1)
+            self.assertEqual(next(iter(store.read()['origins'].values()))['reader_policy'], READER_POLICY)
+
     def test_uncertain_identity_is_attempted_once_and_prior_evidence_is_reused(self):
         with tempfile.TemporaryDirectory() as folder:
             store, reception, original, asset = setup_library(Path(folder))

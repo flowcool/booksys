@@ -9,6 +9,7 @@ import os
 import resource
 import re
 import stat
+import struct
 import sys
 import warnings
 import zipfile
@@ -23,6 +24,7 @@ import pikepdf
 from PIL import Image
 
 from library.catalog import LibraryError
+from library.readers import READER_POLICY
 
 MAX_MEMBER = 64 * 1024 ** 2
 MAX_EXPANDED = 2 * 1024 ** 3
@@ -50,8 +52,13 @@ def member(name: str, data: bytes, output: dict[str, Any]) -> None:
     path = PurePosixPath(name)
     if path.is_absolute() or '..' in path.parts or '\\' in name or ':' in name:
         raise LibraryError('Unsafe archive path')
+    if path.name == '.picasa.ini':
+        if len(data) > 64 * 1024:
+            raise LibraryError('Oversized Picasa ancillary file')
+        output.setdefault('ignored_ancillary', []).append(name)
+        return
     if path.name == 'Thumbs.db' and len(data) <= 4 * 1024**2:
-        if output.get('ignored_ancillary'):
+        if any(PurePosixPath(n).name == 'Thumbs.db' for n in output.get('ignored_ancillary', [])):
             raise LibraryError('Several ancillary database files')
         output.setdefault('ignored_ancillary', []).append(name)
         return
@@ -89,6 +96,7 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
     seen: set[str] = set()
     output['page_manifest'] = []
     output['ancillary_manifest'] = {}
+    output['omitted_ancillary_manifest'] = {}
     def consume(name: str, data: bytes) -> None:
         if name.casefold() in seen:
             raise LibraryError('Duplicate or case-ambiguous archive member')
@@ -97,16 +105,29 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
         member(name, data, output)
         if output['pages'] > before:
             output['page_manifest'].append({'name': name, 'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)})
+        elif PurePosixPath(name).name == '.picasa.ini':
+            output['omitted_ancillary_manifest'][name] = hashlib.sha256(data).hexdigest()
         elif PurePosixPath(name).name != 'ComicInfo.xml':
             output['ancillary_manifest'][name] = hashlib.sha256(data).hexdigest()
-        if sink and PurePosixPath(name).name != 'ComicInfo.xml':
+        if sink and PurePosixPath(name).name not in ('ComicInfo.xml', '.picasa.ini'):
             sink(name, data)
     if suffix == '.cbz':
+        with path.open('rb') as handle:
+            handle.seek(max(0, path.stat().st_size - 65557))
+            tail = handle.read(65557)
+        end = tail.rfind(b'PK\x05\x06')
+        if end < 0 or end + 22 > len(tail):
+            raise LibraryError('Missing ZIP end record')
+        disk, directory_disk, on_disk, total = struct.unpack_from('<HHHH', tail, end + 4)
+        if disk or directory_disk or on_disk != total:
+            raise PendingFile('Multipart ZIP')
         with zipfile.ZipFile(path) as archive:
             entries = archive.infolist()
             if len(entries) > MAX_PAGES + 100:
                 raise LibraryError('Archive member count limit')
             for entry in entries:
+                if entry.volume:
+                    raise PendingFile('Multipart ZIP')
                 mode = entry.external_attr >> 16
                 if stat.S_ISLNK(mode) or entry.flag_bits & 1:
                     raise LibraryError('Encrypted archive or symlink')
@@ -167,11 +188,25 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
             raise PendingFile('Multipart RAR') from exc
     if not output['pages'] or output['pages'] > MAX_PAGES:
         raise LibraryError('Empty archive or page count limit')
+    chapter_numbers: dict[str, int] = {}
     if len(output['folders']) > 1:
-        return {'status': 'pending', 'reason': 'Multiple image groups: possible multi-work archive'}
+        folders = [PurePosixPath(folder) for folder in output['folders']]
+        chapters = [re.fullmatch(r'(?:chapitre|chapter)[ _.-]+([0-9]+)', folder.name, re.I)
+                    for folder in folders]
+        numbers = [int(match.group(1)) for match in chapters if match]
+        if (len({str(folder.parent) for folder in folders}) != 1
+                or len(numbers) != len(folders) or len(set(numbers)) != len(numbers)
+                or sorted(numbers) != list(range(min(numbers), max(numbers) + 1))):
+            return {'status': 'pending', 'reason': 'Multiple image groups: possible multi-work archive'}
+        chapter_numbers = {str(folder): number for folder, number in zip(folders, numbers)}
+        output['layout'] = 'single-volume-numbered-chapters'
+
     names = [entry['name'] for entry in output['page_manifest']]
     def natural(name: str) -> tuple[Any, ...]:
-        return tuple(int(part) if part.isdigit() else part.casefold() for part in re.split(r'(\d+)', name))
+        page = PurePosixPath(name)
+        value = page.name if chapter_numbers else name
+        parts = tuple(int(part) if part.isdigit() else part.casefold() for part in re.split(r'(\d+)', value))
+        return (chapter_numbers[str(page.parent)], *parts) if chapter_numbers else parts
     if len({natural(name) for name in names}) != len(names):
         raise PendingFile('Ambiguous page naming/order')
     output['page_manifest'].sort(key=lambda entry: natural(entry['name']))
@@ -188,17 +223,24 @@ def inspect_pdf(path: Path) -> dict[str, Any]:
             r'WARNING: [^\n]+: incorrect object count in outline hint table', warning)]
         if not 0 < len(pdf.pages) <= MAX_PAGES or fatal_warnings:
             raise LibraryError('Unreadable PDF or page limit')
-        forbidden = {'/OpenAction', '/AA', '/JS', '/JavaScript', '/EmbeddedFiles',
+        forbidden = {'/AA', '/JS', '/JavaScript', '/EmbeddedFiles',
                      '/EF', '/RichMedia', '/AcroForm', '/XFA', '/Launch', '/Collection'}
         for obj in pdf.objects:
             if isinstance(obj, (pikepdf.Dictionary, pikepdf.Stream)):
                 if forbidden.intersection(str(key) for key in obj.keys()):
                     raise LibraryError('Active PDF content or attachment')
-                if '/A' in obj:
-                    action = obj['/A']
+                for action_key in ('/A', '/OpenAction'):
+                    if action_key not in obj:
+                        continue
+                    action = obj[action_key]
                     if (not isinstance(action, pikepdf.Dictionary) or str(action.get('/S', '')) != '/GoTo'
                             or set(map(str, action.keys())) - {'/S', '/D', '/Type'}):
                         raise LibraryError('Active or external PDF action')
+                    destination = action.get('/D')
+                    if (not isinstance(destination, pikepdf.Array) or len(destination) < 2
+                            or destination[0].objgen not in {page.obj.objgen for page in pdf.pages}
+                            or str(destination[1]) not in ('/Fit', '/FitB', '/XYZ', '/FitH', '/FitV', '/FitR', '/FitBH', '/FitBV')):
+                        raise LibraryError('Unresolved or external PDF destination')
                 if str(obj.get('/Type', '')) == '/Filespec':
                     raise LibraryError('PDF attachment')
         # Decode every stream. Syntax alone does not check compressed page bytes.
@@ -289,6 +331,7 @@ def main() -> None:
         output = {'status': 'pending' if unavailable else 'rejected',
                   'reason': f'{type(exc).__name__}: {exc}'}
     output['input_sha256'] = file_hash.hexdigest()
+    output['reader_policy'] = READER_POLICY
     print(json.dumps(output))
 
 

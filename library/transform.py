@@ -47,7 +47,7 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
             '/tmp/input', source.suffix.lower(), '--transform', '/tmp/output/book.cbz']
     request = json.dumps({'comicinfo': base64.b64encode(xml).decode()}).encode()
     import time
-    # PDF rendering is page-wise (30 s/page), with a bounded total lab window.
+    # PDF rendering is page-wise (60 s/page), with a bounded total lab window.
     wall_limit = 1800 if source.suffix.lower() == '.pdf' else 60
     started = time.monotonic()
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

@@ -35,6 +35,19 @@ def image_bytes():
 
 
 class ReaderTests(unittest.TestCase):
+    def test_three_digit_volume_is_not_multipart_but_split_zip_is(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'ZzNavy.-.135.cbz'
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('001.png', image_bytes())
+            self.assertEqual(inspect_file(path, stable_seconds=.01)['status'], 'validated')
+            raw = bytearray(path.read_bytes()); end = raw.rindex(b'PK\x05\x06')
+            struct.pack_into('<H', raw, end + 4, 1)
+            path.write_bytes(raw)
+            self.assertEqual(inspect_file(path, stable_seconds=.01)['status'], 'pending')
+            path.rename(path.with_name('album.part01.cbz'))
+            self.assertEqual(inspect_file(path.with_name('album.part01.cbz'), stable_seconds=.01)['status'], 'pending')
+
     def test_bounded_exact_ancillary_entry_is_ignored(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'album.cbz'
@@ -123,6 +136,22 @@ class ReaderTests(unittest.TestCase):
             path.rename(path.with_suffix('.zip'))
             self.assertEqual(inspect_file(path.with_suffix('.zip'), stable_seconds=0.01)['status'], 'pending')
 
+    def test_pdf_openaction_only_allows_explicit_internal_page_destinations(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for label, unsafe in [('internal', False), ('external', True), ('chained', True), ('missing', True)]:
+                with pikepdf.new() as pdf:
+                    page = pdf.add_blank_page()
+                    action = pikepdf.Dictionary(S=pikepdf.Name.GoTo,
+                        D=pikepdf.Array([page.obj, pikepdf.Name.Fit]))
+                    if label == 'external': action.S = pikepdf.Name.GoToR
+                    if label == 'chained': action.Next = pikepdf.Dictionary(S=pikepdf.Name.JavaScript, JS='alert(1)')
+                    if label == 'missing': action.D = pikepdf.String('unknown-page')
+                    pdf.Root.OpenAction = action
+                    path = root / (label + '.pdf');pdf.save(path)
+                self.assertEqual(inspect_file(path, stable_seconds=.01)['status'],
+                                 'rejected' if unsafe else 'validated', label)
+
     def test_pdf_active_content_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'album.pdf'
@@ -135,6 +164,6 @@ class ReaderTests(unittest.TestCase):
                 pdf.save(path.with_name('active.pdf'))
             self.assertEqual(inspect_file(path.with_name('active.pdf'), stable_seconds=0.01)['status'], 'rejected')
             with pikepdf.open(path) as pdf:
-                pdf.Root.TestLink = pikepdf.Dictionary(A=pikepdf.Dictionary(S=pikepdf.Name.GoTo, D='local-page'))
+                pdf.Root.TestLink = pikepdf.Dictionary(A=pikepdf.Dictionary(S=pikepdf.Name.GoTo, D=pikepdf.Array([pdf.pages[0].obj, pikepdf.Name.Fit])))
                 pdf.save(path.with_name('internal.pdf'))
             self.assertEqual(inspect_file(path.with_name('internal.pdf'), stable_seconds=.01)['status'], 'validated')

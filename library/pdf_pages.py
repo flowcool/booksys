@@ -123,7 +123,7 @@ def convert_pdf_pages(path: Path, sink: Callable[[str, bytes], None],
                         raise LibraryError('PDF renderer version probe failed')
                     tools['poppler'] = (version.stdout + version.stderr).decode(errors='replace').splitlines()[0]
                 rendered = bounded_run([tool, '-f', str(index), '-l', str(index), '-singlefile',
-                    '-r', str(DPI), '-cropbox', '-png', str(path)], timeout=30, stdout_limit=MAX_PAGE_BYTES)
+                    '-r', str(DPI), '-cropbox', '-png', str(path)], timeout=60, stdout_limit=MAX_PAGE_BYTES)
                 if rendered.returncode:
                     raise LibraryError('PDF page renderer failed')
                 data = rendered.stdout

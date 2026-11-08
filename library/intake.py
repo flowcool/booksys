@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from library.catalog import Catalog, LibraryError, digest, now
-from library.readers import inspect_file, fingerprint, sha256
+from library.readers import inspect_file, fingerprint, sha256, READER_POLICY
 
 
 def reception_path(root: Path, folder: str, name: str) -> Path:
@@ -104,10 +104,15 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             'transfer_error': bool(item.get('error'))}
                         continue
                     temporary = any(text in previous.get('reason', '').lower() for text in
-                        ('isolated reader failed', 'resource limit exceeded', 'timed out'))
+                        ('isolated reader failed', 'resource limit exceeded', 'timed out', 'reader policy differs'))
                     retry_due = (temporary and int(previous.get('intake_attempts', 1)) < 3
                                  and previous.get('intake_next_attempt', 0) <= time.time())
-                    if (incremental and not retry_due and previous.get('fingerprint') == stamp
+                    policy_retry = (previous.get('reader_policy') != READER_POLICY and
+                        previous.get('reason') in ('Multipart representation',
+                            'LibraryError: Active PDF content or attachment',
+                            'LibraryError: Nested container or unauthorized archive content',
+                            'Multiple image groups: possible multi-work archive'))
+                    if (incremental and not retry_due and not policy_retry and previous.get('fingerprint') == stamp
                             and previous.get('path') == origin['path']
                             and previous.get('availability') in ('validated', 'rejected', 'pending')):
                         if previous.get('availability') == 'validated' and previous.get('sha256') not in state['assets']:
@@ -124,7 +129,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                     origin.update(intake_attempts=count, intake_next_attempt=time.time() + (300 if count == 1 else 900))
                     if list(fingerprint(path)) == stamp:
                         origin['fingerprint'] = stamp
-                    origin.update(availability=result['status'], reason=result.get('reason', ''))
+                    origin.update(availability=result['status'], reason=result.get('reason', ''),
+                                  reader_policy=result.get('reader_policy'))
                     if not origin['sha256']:
                         origin['sha256'] = result.get('sha256')
                     if result['status'] == 'validated':
