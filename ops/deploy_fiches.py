@@ -34,12 +34,20 @@ run("docker", "image", "tag", worker["Image"], tag)
                                                            "shared_container_id": shared["Id"]}, indent=2))
 (recovery / "compose.runtime.yaml").write_text(run("git", "show", "prior-change:compose.runtime.yaml"))
 print(f"Recovery: {recovery}", flush=True)
+with (recovery / "build.log").open("w") as output:
+    build = subprocess.run(["docker", "compose", "-f", "compose.runtime.yaml", "build", "worker"],
+                           cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
+if build.returncode:
+    print((recovery / "build.log").read_text()[-2500:], flush=True)
+build.check_returncode()
+run("docker", "run", "--rm", "--network", "none", "--entrypoint", "/app/.venv/bin/python",
+    "booksys-worker:local", "-c", "import booksys, pipeline, fiches; print('worker imports verified')")
+print("New image built and imported without network or live mounts", flush=True)
 run("docker", "compose", "-f", "compose.runtime.yaml", "stop", "worker")
 shutil.copytree("/data/booksys/state", recovery / "state")
 before = {f["fid"] for p in api.call("get_queue_data") for f in p["links"]}
 (recovery / "queue-file-ids.json").write_text(json.dumps(sorted(before)))
 print("Worker stopped; state and original image preserved", flush=True)
-print(run("docker", "compose", "-f", "compose.runtime.yaml", "build", "worker")[-1500:], flush=True)
 run("docker", "compose", "-f", "compose.runtime.yaml", "up", "-d", "--no-deps", "worker")
 after = {f["fid"] for p in api.call("get_queue_data") for f in p["links"]}
 assert before <= after, "Existing queue files disappeared"
