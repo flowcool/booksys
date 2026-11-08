@@ -173,3 +173,17 @@ class ActivityTests(unittest.TestCase):
             value = read_activity(root, 'downloads')
             self.assertEqual(len(value['events']), 1)
             self.assertEqual(value['current']['last_progress_at'], 100000)
+
+    def test_missing_retirement_inspections_preserve_prior_counts(self):
+        from library.activity import Observer
+        from activity import write_yaml
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_yaml(root/'collector/package-retirement.yaml', {'acquisitions': {}})
+            write_yaml(root/'evidence/retirement-cycle.yaml', {'results': [{'source': 'source', 'outcome': 'blocked'}]})
+            observer = Observer(root, root/'collector', clock=lambda: 1000)
+            observer.save()
+            (root/'evidence/retirement-cycle.yaml').unlink()
+            stage = observer.snapshot()['stages']['retirement']
+            self.assertEqual(stage['counts']['retained acquisitions (last inspection)'], 1)
+            self.assertEqual(stage['queue_freshness'], 'unavailable')

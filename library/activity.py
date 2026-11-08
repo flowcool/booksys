@@ -263,6 +263,8 @@ class Observer:
         backfill = read_yaml(self.collector / 'backfill.yaml')
         transmitted = sum(v.get('status') == 'queued' for v in submissions.values())
         collection_valid = all(isinstance(read_yaml(self.collector / file).get(key), dict) for file, key in (('monitor.yaml', 'submissions'), ('state.yaml', 'items')))
+        if 'remaining backfill source entries' in self.saved.get('stages', {}).get('collection', {}).get('counts', {}) and not backfill:
+            collection_valid = False
         stages['collection']['scope'] = 'backfill' if backfill and backfill.get('status') != 'complete' else 'new entries'
         stages['collection']['counts'] = {'captured source entries': len(captured), 'transmitted source entries': transmitted}
         if backfill:
@@ -324,7 +326,8 @@ class Observer:
         validity = {'collection': collection_valid,
             'local': isinstance(state.get('origins'), dict) and isinstance(state.get('assets'), dict),
             'identity': isinstance(state.get('origins'), dict) and isinstance(state.get('assets'), dict),
-            'retirement': isinstance(read_yaml(self.collector / 'package-retirement.yaml').get('acquisitions'), dict)}
+            'retirement': isinstance(read_yaml(self.collector / 'package-retirement.yaml').get('acquisitions'), dict)
+                and isinstance(read_yaml(self.root / 'evidence/retirement-cycle.yaml').get('results'), list)}
         for name, valid in validity.items():
             stage = stages[name]
             previous = self.saved.get('stages', {}).get(name, {})
