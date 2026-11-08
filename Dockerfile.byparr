@@ -1,0 +1,3 @@
+FROM ghcr.io/thephaseless/byparr@sha256:c66fa161187b8fa527bfad7eefa2647ea1c553f77df68cbffd6fe83366d1787b
+COPY ops/byparr/session_api.py /app/session_api.py
+ENTRYPOINT ["tini", "-s", "--", "/app/.venv/bin/python", "/app/session_api.py"]
