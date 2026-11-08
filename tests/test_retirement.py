@@ -78,6 +78,24 @@ def fixture(root):
 
 
 class RetirementTests(unittest.TestCase):
+    def test_stock_scan_skips_sources_without_technical_evidence_before_api_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, reception, collector, original, client = fixture(Path(directory))
+            state = store.read()
+            for origin in state['origins'].values():
+                origin['availability'] = 'pending'
+            store.save(state, expected=state['revision'])
+            service = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml')
+            with patch.object(client, 'call', side_effect=AssertionError('No native read for unproven source')):
+                self.assertEqual(service.run(apply=True, limit=1000, inspection_limit=1000), [])
+            self.assertEqual(service.run(apply=False)[0]['outcome'], 'blocked')
+            state = store.read()
+            for origin in state['origins'].values():
+                origin['availability'] = 'validated'
+            store.save(state, expected=state['revision'])
+            self.assertEqual(service.run(apply=True, limit=1000, inspection_limit=1000)[0]['outcome'], 'retired')
+            self.assertTrue(original.is_file())
+
     def test_bulk_native_calls_are_spaced_and_failed_writes_are_not_retried(self):
         from ops.retire_packages import PacedPyload
         clock, starts = [10.0], []
