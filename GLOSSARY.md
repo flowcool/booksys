@@ -39,7 +39,7 @@ The original bytes received by the shared downloader, including Booksys and Luni
 Generated fiches and covers stored beside those files are not reception assets.
 
 **Library**:
-The selected, validated copies prepared for a future reader.
+The selected, validated CBZ copies prepared for a future reader.
 _Avoid_: Reception, pyLoad queue
 
 **Promotion**:
@@ -50,3 +50,14 @@ A metadata value with its source and retrieval date. An assertion can disagree w
 
 **Override**:
 An explicit operator decision that takes priority over subsequent source assertions until the operator changes it.
+
+**Library artifact**:
+The generated file admitted to the library. Its bytes can differ from the source asset.
+_Avoid_: Original download, source asset
+
+**Page extraction**:
+Retention of an embedded image that represents one complete visible PDF page without an unresolved appearance change.
+
+**Page rendering**:
+A raster image of a visible PDF page. The copy retains its appearance but does not retain searchable text, vector structure or links.
+_Avoid_: Lossless extraction

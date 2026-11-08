@@ -1,6 +1,6 @@
 FROM python:3.14-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 RUN printf 'deb http://deb.debian.org/debian trixie non-free\n' > /etc/apt/sources.list.d/unrar.list \
-    && apt-get update && apt-get install -y --no-install-recommends bubblewrap unrar=1:7.1.8-1 tesseract-ocr=5.5.0-1+b1 tesseract-ocr-eng=1:4.1.0-2 tesseract-ocr-fra=1:4.1.0-2 \
+    && apt-get update && apt-get install -y --no-install-recommends bubblewrap unrar=1:7.1.8-1 tesseract-ocr=5.5.0-1+b1 tesseract-ocr-eng=1:4.1.0-2 tesseract-ocr-fra=1:4.1.0-2 poppler-utils=25.03.0-5+deb13u4 fonts-liberation=1:2.1.5-3 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

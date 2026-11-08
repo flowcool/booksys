@@ -20,7 +20,7 @@ Préparer une future utilisation dans Kavita ou un équivalent.
 Kavita et sa synchronisation restent hors V1.
 Amendement validé par the operator le 8 novembre 2026 : la bibliothèque convertit les
 copies CBR en CBZ et écrit ComicInfo.xml dans toutes ses copies CBZ.
-Les originaux restent intacts. Les PDF restent PDF avec métadonnées externes.
+All published comic copies are CBZ, including PDF sources. Originals remain intact.
 
 ```mermaid
 flowchart TD
@@ -53,7 +53,7 @@ flowchart TD
 | Revue | Rapport local et décisions par lots dans la conversation. Pas d'interface dédiée en V1. |
 | Destination | `/data/booksys/library/bd/`. |
 | Fiches | Catalogue central, fiche et couverture locale ; ComicInfo.xml dans les copies CBZ. |
-| Archives publiées | CBZ uniquement. Conversion automatique des copies CBR ; mise à jour des CBZ depuis le catalogue validé. |
+| Archives publiées | CBZ uniquement. Conversion of CBR and PDF copies; ComicInfo from the validated catalogue. |
 
 ## Modèle et propriété des données
 
@@ -176,9 +176,19 @@ Une décision manuelle antérieure reste prioritaire ; la nouvelle assertion res
 
 ## Copies et variantes
 
-Les formats de réception restent PDF, CBZ et CBR. Les archives BD publiées sont
-des CBZ avec ComicInfo.xml généré depuis le catalogue validé. Les PDF restent
-des PDF, sans conversion en images ni ajout de métadonnées internes.
+Reception formats remain PDF, CBZ and CBR. Every published copy is CBZ with
+ComicInfo.xml from the validated catalogue. This amendment was confirmed by
+the operator on 8 November 2026. Original PDF bytes remain untouched.
+
+For PDF pages, extract an embedded image only when it demonstrably represents
+the complete visible page, with matching geometry and no unresolved rotation,
+colour, transparency or annotation effect. Otherwise render the visible CropBox
+with qualified Poppler at 200 dpi. Rendering preserves the visible page order and
+appearance; it loses searchable text, vector structure, links and editability.
+Record extraction or rendering per page, geometry, resolution, tool versions,
+source hash, output page hashes and artifact hash. Do not call rasterization
+lossless. Keep the same resource bounds and reject active or ambiguous input.
+Conversion does not establish bibliographic identity. Unknown editions remain pending.
 Les images des CBR et CBZ conservent leurs octets, noms et ordre de lecture.
 Vérifier le nombre de pages et leurs empreintes avant et après transformation.
 Un ordre ambigu impose une attente. Ne pas réencoder les images.
@@ -200,7 +210,7 @@ locale disponible. La fiche reste compréhensible si le site source disparaît.
 
 Préparer le dossier complet hors de l'arbre exposé, sur le même système de fichiers.
 Le nom temporaire référence une opération durable. Vérifier l'asset source contre
-son empreinte identifiée. Pour un PDF, vérifier aussi l'égalité de la copie.
+son empreinte identifiée. PDF output is verified as a transformed CBZ, not a byte-identical PDF copy.
 Pour un CBZ généré, vérifier les images, l'ordre et le XML puis son empreinte propre.
 Un changement de contenu impose un nouvel examen. Publier le dossier complet
 atomiquement, avec interdiction d'écraser une destination existante.
@@ -332,7 +342,7 @@ Conserver les preuves et les sauvegardes nécessaires au retour arrière.
 | CBR solid converti en copie CBZ | Même nombre, noms, ordre et empreintes des images ; source inchangée. |
 | CBZ avec ComicInfo contradictoire | XML régénéré depuis le catalogue validé ; assertions sources conservées. |
 | Transformation interrompue | Aucun artefact partiel exposé ; reprise journalisée sans perte des originaux. |
-| PDF après promotion | Octets PDF identiques ; fiche externe ; aucune rasterisation. |
+| PDF after promotion | CBZ, one visible page per ordered image; extraction/render method and hashes recorded; original unchanged. |
 | Enrichissement lent pendant un cycle de collecte | Aucun verrou long ne bloque le collecteur. |
 
 Les essais isolés comparent un inventaire haché complet de la réception de test

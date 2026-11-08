@@ -114,7 +114,7 @@ def fiche_for(state: dict[str, Any], asset_id: str) -> bytes:
 
 
 class Publisher:
-    def __init__(self, store: Catalog, reception: Path, root: Path, *, isolated: bool = False,
+    def __init__(self, store: Catalog, reception: Path, root: Path, *, isolated: bool = False, lab: bool = False,
                  capacity: Capacity | None = None,
                  fault: Callable[[str, dict[str, Any]], None] = lambda *_: None,
                  exclusive: bool = False):
@@ -125,7 +125,12 @@ class Publisher:
         if isolated and (self.root.is_relative_to(Path('/data/booksys')) or
                          self.reception.is_relative_to(Path('/data/booksys'))):
             raise LibraryError('Isolated mode refuses live Booksys data')
-        if not isolated and not exclusive:
+        if lab:
+            from library.runtime import lab_preflight
+            if isolated:
+                raise LibraryError('Lab and isolated modes are mutually exclusive')
+            lab_preflight(reception, root, store.directory)
+        if not (isolated or lab) and not exclusive:
             raise LibraryError('Runtime preflight must establish dedicated writer exclusivity')
         self.exposed, self.staging, self.recovery = (self.root / name for name in ('bd', '.staging', '.recovery'))
         self.journals = store.directory / 'library-operations'
@@ -192,7 +197,7 @@ class Publisher:
             source = self.resolve_origin(state, asset_id)
             fiche = fiche_for(state, asset_id)
             cover = base64.b64decode(asset['cover'], validate=True) if asset.get('cover') else None
-            xml = comicinfo(state, asset_id) if asset['format'] in ('cbr', 'cbz') else None
+            xml = comicinfo(state, asset_id)
             book_name = 'book.cbz' if xml else 'book.pdf'
             export_version = digest({'asset': asset_id, 'xml': hashlib.sha256(xml).hexdigest() if xml else None,
                                      'fiche': hashlib.sha256(fiche).hexdigest(), 'cover': asset.get('cover'), 'tool': VERSION})
@@ -213,8 +218,8 @@ class Publisher:
                 if target.exists() or target.is_symlink():
                     raise LibraryError('Unmanaged publication destination')
             private_tree(self.root)
-            estimated = (sum(page['size'] for page in asset.get('page_manifest', [])) + 8 * 1024**2
-                         if xml else asset['size']) + len(fiche) + (len(cover) if cover else 0)
+            estimated = ((2 * 1024**3 if asset['format'] == 'pdf' else
+                          sum(page['size'] for page in asset.get('page_manifest', []))) + 8 * 1024**2) + len(fiche) + (len(cover) if cover else 0)
             self.capacity.check(self.root, estimated)
             operation = {'schema': 1, 'id': uuid.uuid4().hex, 'kind': 'replace' if previous else 'create',
                 'asset': asset_id, 'edition': identity['edition'], 'target': target.name,
@@ -231,13 +236,16 @@ class Publisher:
                 transformed.mkdir(mode=0o700)
                 result = transform_archive(source, transformed, xml, asset_id,
                     check_capacity=lambda: self.check_capacity(operation, len(fiche) + (len(cover) if cover else 0)))
-                if result['page_manifest'] != asset.get('page_manifest'):
+                if (asset['format'] != 'pdf' and result['page_manifest'] != asset.get('page_manifest')) or (
+                        asset['format'] == 'pdf' and result['pages'] != asset['pages']):
                     raise LibraryError('Transformed page hashes/order differ from identified asset')
                 rename_atomic(transformed / 'book.cbz', stage / book_name)
                 transformed.rmdir()
                 expected[book_name] = result['artifact_sha256']
                 operation['transformation'] = {k: result[k] for k in ('transform_version', 'xml_sha256',
                     'source_asset_sha256', 'artifact_sha256', 'page_manifest', 'ancillary_manifest', 'tool_versions')}
+                if 'page_methods' in result:
+                    operation['transformation']['page_methods'] = result['page_methods']
                 self.transition(operation, 'transformed')
                 self.fault('copying', operation)
             else:

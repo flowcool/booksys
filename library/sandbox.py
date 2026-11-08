@@ -52,6 +52,12 @@ def native_prefix(source: Path, *, output: Path | None = None, ocr: bool = False
     if source.suffix.lower() == '.cbr':
         tool(os.environ.get('BOOKSYS_UNRAR') or shutil.which('unrar'), '/runtime/tools/unrar')
         command += ['--setenv', 'BOOKSYS_UNRAR', '/runtime/tools/unrar']
+    if source.suffix.lower() == '.pdf' and (ocr or output is not None):
+        tool(os.environ.get('BOOKSYS_PDFTOPPM') or shutil.which('pdftoppm'), '/runtime/tools/pdftoppm')
+        command += ['--setenv', 'BOOKSYS_PDFTOPPM', '/runtime/tools/pdftoppm']
+        for directory in ('/etc/fonts', '/usr/share/fonts', '/usr/share/fontconfig'):
+            if Path(directory).is_dir():
+                command += ['--ro-bind', directory, directory]
     if ocr:
         tool(os.environ.get('BOOKSYS_TESSERACT') or shutil.which('tesseract'), '/runtime/tools/tesseract')
         command += ['--setenv', 'BOOKSYS_TESSERACT', '/runtime/tools/tesseract']

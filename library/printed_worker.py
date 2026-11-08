@@ -28,20 +28,31 @@ def main() -> None:
         selected = request['pages']
         if not isinstance(selected, list) or not 1 <= len(selected) <= 8:
             raise LibraryError('OCR page count limit')
-        wanted = {page['name']: page for page in selected}
         images: dict[str, bytes] = {}
-        def collect(name: str, data: bytes) -> None:
-            if name in wanted:
-                if hashlib.sha256(data).hexdigest() != wanted[name]['sha256']:
-                    raise LibraryError('OCR page hash mismatch')
-                images[name] = data
-        inspection = inspect_archive(path, suffix, sink=collect)
-        if inspection['status'] != 'validated':
-            raise LibraryError('OCR archive is not validated')
-        manifest = inspection['page_manifest']
-        actual = list({p['name']: p for p in [*manifest[:4], *manifest[-4:]]}.values())
-        if actual != selected or set(images) != set(wanted):
-            raise LibraryError('OCR window differs from validated manifest')
+        if suffix == '.pdf':
+            from library.pdf_pages import convert_pdf_pages
+            indices = [p['page'] for p in selected]
+            from library.reader_worker import inspect_pdf
+            count = inspect_pdf(path)['pages']
+            actual_indices = sorted(set([*range(1, min(4, count) + 1), *range(max(1, count - 3), count + 1)]))
+            if indices != actual_indices:
+                raise LibraryError('OCR PDF window differs from validated page count')
+            inspection = convert_pdf_pages(path, lambda name, data: images.update({name: data}), indices=indices)
+            selected = [{**entry, **method} for entry, method in zip(inspection['page_manifest'], inspection['page_methods'])]
+        else:
+            wanted = {page['name']: page for page in selected}
+            def collect(name: str, data: bytes) -> None:
+                if name in wanted:
+                    if hashlib.sha256(data).hexdigest() != wanted[name]['sha256']:
+                        raise LibraryError('OCR page hash mismatch')
+                    images[name] = data
+            inspection = inspect_archive(path, suffix, sink=collect)
+            if inspection['status'] != 'validated':
+                raise LibraryError('OCR archive is not validated')
+            manifest = inspection['page_manifest']
+            actual = list({p['name']: p for p in [*manifest[:4], *manifest[-4:]]}.values())
+            if actual != selected or set(images) != set(wanted):
+                raise LibraryError('OCR window differs from validated manifest')
         tool = os.environ.get('BOOKSYS_TESSERACT', '/usr/bin/tesseract')
         version = bounded_run([tool, '--version'], timeout=5, stdout_limit=8192)
         if version.returncode:

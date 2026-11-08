@@ -100,14 +100,17 @@ def read_printed(path: Any, inspection: dict[str, Any]) -> dict[str, Any]:
     from library.readers import fingerprint, sha256
     path = Path(path).absolute()
     if (any(p.is_symlink() for p in (path, *path.parents)) or
-            inspection.get('status') != 'validated' or inspection.get('format') not in ('cbz', 'cbr')):
-        raise LibraryError('Printed evidence requires a validated archive')
+            inspection.get('status') != 'validated' or inspection.get('format') not in ('cbz', 'cbr', 'pdf')):
+        raise LibraryError('Printed evidence requires a validated comic input')
     before = fingerprint(path)
     expected = inspection['sha256']
     if sha256(path) != expected:
         raise LibraryError('Printed evidence source changed')
     manifest = inspection.get('page_manifest', [])
     selected = list({p['name']: p for p in [*manifest[:4], *manifest[-4:]]}.values())
+    if inspection['format'] == 'pdf':
+        count = inspection['pages']
+        selected = [{'page': i} for i in sorted(set([*range(1, min(4, count) + 1), *range(max(1, count - 3), count + 1)]))]
     if not selected:
         raise LibraryError('Printed evidence requires a validated page manifest')
     from library.sandbox import native_prefix, PYTHON
@@ -141,9 +144,12 @@ def read_printed(path: Any, inspection: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = json.loads(process.stdout)
     if result.pop('input_sha256', None) != expected:
         raise LibraryError('Printed reader inspected another source')
-    if result.get('status') == 'ok' and [(p['name'], p['sha256']) for p in result['pages']] != [
-            (p['name'], p['sha256']) for p in selected]:
-        raise LibraryError('Printed reader page evidence changed')
+    if result.get('status') == 'ok':
+        if inspection['format'] == 'pdf':
+            if [p.get('page') for p in result['pages']] != [p['page'] for p in selected]:
+                raise LibraryError('Printed PDF page selection changed')
+        elif [(p['name'], p['sha256']) for p in result['pages']] != [(p['name'], p['sha256']) for p in selected]:
+            raise LibraryError('Printed reader page evidence changed')
     result['asset'] = expected
     return result
 

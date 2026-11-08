@@ -14,7 +14,7 @@ from library.intake import receive
 from library.metadata import Providers, enrich
 from library.publish import Publisher, Capacity
 from library.review import decide, render_report, report
-from library.runtime import preflight
+from library.runtime import preflight, lab_preflight
 
 
 def load(path: Path) -> Any:
@@ -45,7 +45,9 @@ def parser() -> argparse.ArgumentParser:
     intake.add_argument('--captured', type=Path, required=True)
     intake.add_argument('--submissions', type=Path, required=True)
     intake.add_argument('--queue', type=Path, required=True, help='Read-only get_queue_data snapshot')
-    intake.add_argument('--isolated', action='store_true')
+    intake_mode = intake.add_mutually_exclusive_group()
+    intake_mode.add_argument('--isolated', action='store_true')
+    intake_mode.add_argument('--lab', action='store_true')
     intake.add_argument('--policy', type=Path)
     intake.add_argument('--library', type=Path)
     preview = commands.add_parser('preview')
@@ -57,7 +59,9 @@ def parser() -> argparse.ArgumentParser:
     printed_cmd = commands.add_parser('printed')
     printed_cmd.add_argument('--asset', required=True)
     printed_cmd.add_argument('--reception', type=Path, required=True)
-    printed_cmd.add_argument('--isolated', action='store_true')
+    printed_mode = printed_cmd.add_mutually_exclusive_group()
+    printed_mode.add_argument('--isolated', action='store_true')
+    printed_mode.add_argument('--lab', action='store_true')
     printed_cmd.add_argument('--policy', type=Path)
     printed_cmd.add_argument('--library', type=Path)
     enrich_cmd = commands.add_parser('enrich')
@@ -68,7 +72,9 @@ def parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument('--reception', type=Path, required=True)
         command.add_argument('--library', type=Path, required=True)
-        command.add_argument('--isolated', action='store_true')
+        mode = command.add_mutually_exclusive_group()
+        mode.add_argument('--isolated', action='store_true')
+        mode.add_argument('--lab', action='store_true')
         command.add_argument('--policy', type=Path)
         command.add_argument('--credentials', type=Path)
         command.add_argument('--pyload', default='http://127.0.0.1:8000')
@@ -124,7 +130,12 @@ def run(args: argparse.Namespace) -> Any:
         (args.output / 'review.md').write_text(render_report(value))
         return {'status': 'preview_only', 'cases': len(value['cases']), 'output': str(args.output)}
     if args.command == 'intake':
-        if args.isolated:
+        if args.lab:
+            if args.library is None:
+                raise LibraryError('Lab intake requires --library')
+            lab_preflight(args.reception, args.library, args.state,
+                          (args.captured, args.submissions, args.queue))
+        elif args.isolated:
             isolated_paths(args.state, args.reception)
         elif args.policy and args.library:
             preflight(args.reception, args.library, args.state, args.policy)
@@ -133,7 +144,11 @@ def run(args: argparse.Namespace) -> Any:
         state = receive(store, args.reception, load(args.captured), load(args.submissions), load(args.queue))
         return {'status': 'received', 'assets': len(state['assets']), 'origins': len(state['origins'])}
     if args.command == 'printed':
-        if args.isolated:
+        if args.lab:
+            if args.library is None:
+                raise LibraryError('Lab printed evidence requires --library')
+            lab_preflight(args.reception, args.library, args.state)
+        elif args.isolated:
             isolated_paths(args.state, args.reception)
         elif args.policy and args.library:
             preflight(args.reception, args.library, args.state, args.policy)
@@ -151,7 +166,9 @@ def run(args: argparse.Namespace) -> Any:
         providers = Providers(args.state / 'library-provider-cache', budget=min(50, max(0, args.budget)))
         state = enrich(store, args.asset, providers, refs)
         return {'status': 'enriched', 'identity': state['assets'][args.asset].get('identity_result')}
-    if args.isolated:
+    if args.lab:
+        qualification = lab_preflight(args.reception, args.library, args.state)
+    elif args.isolated:
         isolated_paths(args.state, args.reception, args.library)
         qualification = {'status': 'isolated', 'capacity_window': 'owned_fixture'}
     else:
@@ -163,7 +180,7 @@ def run(args: argparse.Namespace) -> Any:
             atomic_yaml(args.state / 'library-activation.yaml', qualification)
         return qualification
     capacity = Capacity()
-    if not args.isolated:
+    if not (args.isolated or args.lab):
         if not args.credentials:
             raise LibraryError('Runtime writes require read-only pyLoad capacity checks')
         from pipeline import Pyload
@@ -174,7 +191,7 @@ def run(args: argparse.Namespace) -> Any:
             # Require an already established paused window. Never pause it here.
             return not (status.get('pause') is True and status.get('active') == 0)
         capacity = Capacity(external_active=external_active)
-    publisher = Publisher(store, args.reception, args.library, isolated=args.isolated,
+    publisher = Publisher(store, args.reception, args.library, isolated=args.isolated, lab=args.lab,
         exclusive=qualification['status'] == 'qualified', capacity=capacity)
     if args.command == 'publish':
         return publisher.publish(args.asset, replace=args.replace)

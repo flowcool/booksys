@@ -1,11 +1,36 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import yaml
 
 from library.catalog import Catalog, LibraryError, atomic_yaml, lock
 
 
 class CatalogTests(unittest.TestCase):
+    def test_safe_catalogue_engine_preserves_types_aliases_and_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Catalog(Path(folder))
+            text = yaml.safe_dump(store.read()).replace('works: {}', 'works:\n  sample:\n    title: "Édition 漫画"\n    values: &facts [true, false, null, 42, 1.5, 2026-11-08, "001"]\n    alias: *facts')
+            store.path.write_text(text)
+            expected = yaml.load(text, Loader=yaml.SafeLoader)
+            self.assertEqual(store.read(), expected)
+            if hasattr(yaml, 'CSafeLoader'):
+                with patch.object(yaml, 'SafeLoader', side_effect=AssertionError('slow fallback used')):
+                    self.assertEqual(store.read(), expected)
+            with patch.dict(yaml.__dict__):
+                yaml.__dict__.pop('CSafeLoader', None)
+                self.assertEqual(store.read(), expected)
+            store.path.write_text(text.replace('"Édition 漫画"', '!!python/object/apply:builtins.str [forbidden]'))
+            with self.assertRaises(yaml.constructor.ConstructorError):
+                store.read()
+            with patch.dict(yaml.__dict__):
+                yaml.__dict__.pop('CSafeLoader', None)
+                with self.assertRaises(yaml.constructor.ConstructorError):
+                    store.read()
+
+
     def test_decisions_survive_old_index_and_missing_evidence_blocks(self):
         with tempfile.TemporaryDirectory() as folder:
             store = Catalog(Path(folder))

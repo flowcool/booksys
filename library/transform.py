@@ -1,4 +1,4 @@
-"""Sandboxed CBR/CBZ to CBZ transformation using UnRAR and Python ZipFile."""
+"""Sandboxed PDF/CBR/CBZ to CBZ transformation using UnRAR and Python ZipFile."""
 from __future__ import annotations
 
 import base64
@@ -16,7 +16,7 @@ from library.catalog import LibraryError, sync_dir
 from library.readers import fingerprint, inspect_file, sha256
 from library.xmlmetadata import validate_xml
 
-VERSION = 'booksys-cbz-1'
+VERSION = 'booksys-cbz-2'
 
 
 def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: str,
@@ -24,7 +24,7 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
     validate_xml(xml)
     source, destination = source.absolute(), destination.absolute()
     before = fingerprint(source)
-    if sha256(source) != asset_hash or source.suffix.lower() not in ('.cbr', '.cbz'):
+    if sha256(source) != asset_hash or source.suffix.lower() not in ('.cbr', '.cbz', '.pdf'):
         raise LibraryError('Transform source differs from identified comic asset')
     if any(path.is_symlink() for path in (source, destination, *source.parents, *destination.parents)):
         raise LibraryError('Symlink in transformation paths')
@@ -47,6 +47,8 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
             '/tmp/input', source.suffix.lower(), '--transform', '/tmp/output/book.cbz']
     request = json.dumps({'comicinfo': base64.b64encode(xml).decode()}).encode()
     import time
+    # PDF rendering is page-wise (30 s/page), with a bounded total lab window.
+    wall_limit = 1800 if source.suffix.lower() == '.pdf' else 60
     started = time.monotonic()
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
@@ -59,7 +61,7 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
             except subprocess.TimeoutExpired:
                 payload = None
                 check_capacity()
-                if time.monotonic() - started > 60:
+                if time.monotonic() - started > wall_limit:
                     raise LibraryError('Comic transformation exceeded time limit')
     finally:
         if process.poll() is None:

@@ -52,3 +52,29 @@ def preflight(reception: Path, root: Path, state: Path, policy_path: Path) -> di
     return {'status': 'qualified', 'time': now(), 'policy_hash': digest(policy),
             'writer_uid': os.getuid(), 'reception_readonly': True,
             'capacity_window': 'no_concurrent_writers', 'evidence': policy['evidence']}
+
+
+def lab_preflight(reception: Path, root: Path, state: Path,
+                  inputs: tuple[Path, ...] = ()) -> dict[str, Any]:
+    """Lab writes use dedicated data paths; source inputs remain read-only."""
+    paths = (reception, root, state, *inputs)
+    for path in paths:
+        if any(p.is_symlink() for p in (path.absolute(), *path.absolute().parents)):
+            raise LibraryError('Lab paths must not contain symlinks')
+    if not reception.is_dir():
+        raise LibraryError('Lab reception must exist')
+    outputs = (root.resolve(), state.resolve())
+    for path in outputs:
+        if not path.is_relative_to('/data') or path == Path('/data'):
+            raise LibraryError('Lab outputs require dedicated paths under /data')
+    for output, other in ((outputs[0], outputs[1]), (outputs[1], outputs[0])):
+        if output.is_relative_to(other):
+            raise LibraryError('Lab library and state must be disjoint')
+        for source in (reception.resolve(), Path('/data/booksys/state'),
+                       Path('/data/booksys/secrets'), Path('/data/booksys/downloads'),
+                       *(p.resolve() for p in inputs)):
+            if output.is_relative_to(source) or source.is_relative_to(output):
+                raise LibraryError('Lab outputs must be separate from reception and snapshot inputs')
+    return {'status': 'lab', 'writer_uid': os.getuid(),
+            'capacity_window': 'available_space_checks_only',
+            'concurrent_writer_reserve_guaranteed': False}

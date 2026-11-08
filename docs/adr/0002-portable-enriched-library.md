@@ -19,7 +19,7 @@ les corrections manuelles prioritaires. Les fiches sont des exports de ce catalo
 Le catalogue par URL Bookys existant reste un export de collecte séparé.
 
 La réception conserve les originaux. La bibliothèque `/data/booksys/library/bd/`
-reçoit des PDF inchangés et des CBZ indépendants des fichiers Booksys validés. Un fichier
+receives independent CBZ copies of validated Booksys PDF, CBZ and CBR files. Un fichier
 identique n'y apparaît qu'une fois. Une seule variante de chaque édition est exposée
 par défaut. Les variantes non choisies restent référencées dans la réception.
 Les lots à décomposer, les cas incertains et les fichiers Lunii restent hors bibliothèque.
@@ -43,7 +43,16 @@ Amendement accepté par the operator le 8 novembre 2026 : convertir les copies C
 CBZ et générer ComicInfo.xml dans tous les CBZ publiés depuis le catalogue validé.
 CBR et CBZ peuvent tous deux contenir ComicInfo. ZIP permet une écriture ouverte
 et plus simple à maintenir. Les images gardent leurs octets, noms et ordre.
-Les PDF restent PDF avec fiche externe. Aucune rasterisation n'est prévue.
+Further amendment confirmed by the operator on 8 November 2026: uniform CBZ output
+also applies to PDF sources. Preserve originals. Extract a complete page image
+without re-encoding only when geometry and colour/annotation/transparency effects
+are proved equivalent. Use qualified Poppler rendering for every other page.
+Raster pages are PNG at 200 dpi, with visible CropBox and rotation applied.
+Record the method, geometry, resolution and hashes per page. Rendering loses
+PDF text, vectors, links and editability in the copy; the original retains them.
+Uniform reader input is the accepted trade-off. Conversion/OCR does not permit
+publication of an unidentified edition. PDF acceptance belongs to the open
+extension in private-work-item, not the earlier closed archive delivery.
 La fiche externe et le catalogue restent conservés. Le lecteur reste remplaçable.
 La V1 journalise la transformation et distingue empreinte source et artefact.
 La classification par LLM reste exclue. Les connecteurs restent à qualifier.

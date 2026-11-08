@@ -136,7 +136,11 @@ class Catalog:
         self.decisions = directory / 'library-decisions'
 
     def read(self) -> dict[str, Any]:
-        value = yaml.safe_load(self.path.read_text()) if self.path.exists() else empty()
+        if self.path.exists():
+            loader = getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
+            value = yaml.load(self.path.read_text(), Loader=loader)
+        else:
+            value = empty()
         validate(value)
         return dict(value)
 

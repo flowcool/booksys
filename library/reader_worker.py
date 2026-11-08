@@ -207,6 +207,9 @@ def inspect_pdf(path: Path) -> dict[str, Any]:
             if isinstance(obj, pikepdf.Stream):
                 try:
                     if str(obj.get('/Subtype', '')) == '/Image':
+                        width, height = int(obj.get('/Width', 0)), int(obj.get('/Height', 0))
+                        if width <= 0 or height <= 0 or width * height > 50_000_000:
+                            raise LibraryError('PDF image pixel limit')
                         image = pikepdf.PdfImage(obj).as_pil_image()
                         if image.width * image.height > 50_000_000:
                             raise LibraryError('PDF image pixel limit')
@@ -227,7 +230,9 @@ def inspect_pdf(path: Path) -> dict[str, Any]:
 
 
 def main() -> None:
-    resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+    pdf_transform = '--transform' in sys.argv and len(sys.argv) > 2 and sys.argv[2] == '.pdf'
+    cpu_limit = 1800 if pdf_transform else 30
+    resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
     resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024 ** 2, 1536 * 1024 ** 2))
     transform = len(sys.argv) > 3 and sys.argv[3] == '--transform'
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_EXPANDED if transform else 0, MAX_EXPANDED if transform else 0))
@@ -257,13 +262,17 @@ def main() -> None:
                         info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
                         info.external_attr = 0o100600 << 16
                         archive.writestr(info, data)
-                    output = inspect_archive(path, suffix, sink=write_member)
+                    if suffix == '.pdf':
+                        from library.pdf_pages import convert_pdf_pages
+                        output = convert_pdf_pages(path, write_member)
+                    else:
+                        output = inspect_archive(path, suffix, sink=write_member)
                     write_member('ComicInfo.xml', xml)
                 if output['status'] != 'validated':
                     raise PendingFile(output['reason'])
                 from library.readers import sha256
                 output['artifact_sha256'] = sha256(destination)
-                output['tool_versions'] = {'python': platform.python_version(), 'archive_writer': 'stdlib.zipfile',
+                output['tool_versions'] = {**output.get('tool_versions', {}), 'python': platform.python_version(), 'archive_writer': 'stdlib.zipfile',
                     'xml_schema': 'ComicInfo-2.0', 'schema_sha256': sha256(Path(__file__).parent / 'schemas/ComicInfo-2.0.xsd')}
                 if suffix == '.cbr':
                     import rarfile
