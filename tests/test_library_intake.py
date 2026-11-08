@@ -11,6 +11,60 @@ SOURCE = 'https://www7.bookys-ebooks.com/bandes-dessinees/1-album'
 
 
 class IntakeTests(unittest.TestCase):
+    def test_finished_valid_file_uses_local_size_and_caches_reported_size_warning(self):
+        from unittest.mock import patch
+        from library.readers import inspect_file
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); reception = root / 'reception'; reception.mkdir()
+            source = reception / 'album.cbz'
+            with zipfile.ZipFile(source, 'w') as archive:
+                archive.writestr('001.png', image_bytes())
+            store = Catalog(root / 'state'); actual = source.stat().st_size
+            captured = {'items': {SOURCE: {'title': 'Album'}}}
+            journal = {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}}
+            queue = [{'pid': 1, 'name': 'tracked', 'folder': '', 'links': [
+                {'fid': 1, 'name': source.name, 'status': 0, 'size': actual + 777}]}]
+            with patch('library.intake.inspect_file', wraps=inspect_file) as reader:
+                state = receive(store, reception, captured, journal, queue, stable_seconds=.01, incremental=True)
+                self.assertEqual(reader.call_count, 1)
+                origin = next(iter(state['origins'].values()))
+                self.assertEqual(origin['availability'], 'validated')
+                self.assertEqual(origin['reported_size'], actual + 777)
+                self.assertEqual(origin['local_size'], actual)
+                self.assertTrue(origin['size_warning'])
+                self.assertEqual(state['assets'][origin['sha256']]['size'], actual)
+                queue[0]['links'][0]['size'] = actual
+                with patch('library.intake.sha256', side_effect=AssertionError('unchanged input was hashed again')):
+                    state = receive(store, reception, captured, journal, queue, stable_seconds=.01, incremental=True)
+                self.assertEqual(reader.call_count, 1)
+                origin = next(iter(state['origins'].values()))
+                self.assertEqual(origin['reported_size'], actual)
+                self.assertFalse(origin['size_warning'])
+
+    def test_size_mismatch_does_not_admit_corrupt_truncated_or_unfinished_inputs(self):
+        from unittest.mock import patch
+        from library.readers import inspect_file
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); reception = root / 'reception'; reception.mkdir()
+            good = reception / 'good.cbz'
+            with zipfile.ZipFile(good, 'w') as archive:
+                archive.writestr('001.png', image_bytes())
+            truncated = reception / 'truncated.cbz';truncated.write_bytes(good.read_bytes()[:-20])
+            corrupt = reception / 'corrupt.cbz'
+            with zipfile.ZipFile(corrupt, 'w') as archive:
+                archive.writestr('001.png', b'not an image')
+            captured = {'items': {SOURCE: {'title': 'Album'}}}
+            journal = {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}}
+            queue = [{'pid': 1, 'name': 'tracked', 'folder': '', 'links': [
+                {'fid': index, 'name': path.name, 'status': status, 'size': path.stat().st_size + 777}
+                for index, (path, status) in enumerate([(truncated, 0), (corrupt, 0), (good, 7)], 1)]}]
+            with patch('library.intake.inspect_file', wraps=inspect_file) as reader:
+                state = receive(Catalog(root / 'state'), reception, captured, journal, queue, stable_seconds=.01)
+                self.assertEqual(reader.call_count, 2)
+            self.assertFalse(state['assets'])
+            self.assertEqual({o['fid']: o['availability'] for o in state['origins'].values()},
+                             {1: 'rejected', 2: 'rejected', 3: 'pending'})
+
     def test_only_tracked_finished_files_and_mirror_origins(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

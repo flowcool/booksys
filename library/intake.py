@@ -65,7 +65,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                       'sha256': state['origins'].get(oid, {}).get('sha256'),
                       'observed_at': now(), 'availability': 'pending',
                       'transfer_status': item.get('status'),
-                      'transfer_error': bool(item.get('error'))}
+                      'transfer_error': bool(item.get('error')),
+                      'reported_size': item.get('size'), 'local_size': None, 'size_warning': ''}
             try:
                 path = reception_path(root, package['folder'], name)
                 # Exact pinned pyLoad status: core/datatypes/pyfile.py: finished = 0.
@@ -73,10 +74,14 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                     origin['reason'] = 'Transfer is not confirmed finished'
                 elif not path.exists():
                     origin.update(availability='missing', reason='Finished origin is missing or renamed')
-                elif path.stat().st_size != item.get('size'):
-                    origin['reason'] = 'pyLoad size and reception size differ'
                 else:
                     stamp = list(fingerprint(path))
+                    # pyLoad arrived includes chunk overlaps removed during assembly.
+                    # Only full reader validation establishes local file integrity.
+                    size_fields = {'reported_size': item.get('size'), 'local_size': stamp[2],
+                        'size_warning': 'Downloader-reported size differs from local file; reader validation required'
+                                        if item.get('size') != stamp[2] else ''}
+                    origin.update(size_fields)
                     previous = state['origins'].get(oid, {})
                     # Recover only the unique canonical reverse link lost by an older budget deferral.
                     if (incremental and not previous.get('sha256')
@@ -100,7 +105,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             and known.get('format') == path.suffix.lower().lstrip('.')
                             and sha256(path) == previous['sha256']
                             and sha256(path) == previous['sha256'] and list(fingerprint(path)) == stamp):
-                        state['origins'][oid] = {**previous, 'fingerprint': stamp,
+                        state['origins'][oid] = {**previous, **size_fields, 'fingerprint': stamp,
                             'availability': 'validated', 'reason': '',
                             'observed_at': origin['observed_at'], 'transfer_status': 0,
                             'transfer_error': bool(item.get('error'))}
@@ -119,7 +124,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                                         previous.get('bundle_next_attempt', 0) <= time.time())
                         if (incremental and not previous.get('bundle') and same_attempt and
                                 previous.get('availability') == 'rejected' and not retry_bundle):
-                            state['origins'][oid] = {**previous, 'observed_at': origin['observed_at']}
+                            state['origins'][oid] = {**previous, **size_fields, 'observed_at': origin['observed_at']}
                             continue
                         if not previous.get('bundle') and (bundle_preparations >= 1 or
                                 (inspection_limit is not None and inspected >= inspection_limit)):
@@ -149,7 +154,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             and previous.get('availability') in ('validated', 'rejected', 'pending')):
                         if previous.get('availability') == 'validated' and previous.get('sha256') not in state['assets']:
                             raise LibraryError('Cached origin references missing asset')
-                        state['origins'][oid] = {**previous, 'observed_at': origin['observed_at'], 'transfer_status': 0, 'transfer_error': bool(item.get('error'))}
+                        state['origins'][oid] = {**previous, **size_fields, 'observed_at': origin['observed_at'], 'transfer_status': 0, 'transfer_error': bool(item.get('error'))}
                         continue
                     if inspection_limit is not None and inspected >= inspection_limit:
                         origin['reason'] = 'Intake budget deferred'
