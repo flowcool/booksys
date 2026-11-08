@@ -68,7 +68,7 @@ def parser() -> argparse.ArgumentParser:
     enrich_cmd.add_argument('--asset', required=True)
     enrich_cmd.add_argument('--source', action='append', default=[], help='provider:reference')
     enrich_cmd.add_argument('--budget', type=int, default=12)
-    for name in ('publish', 'reconcile', 'withdraw', 'restore', 'preflight', 'activate'):
+    for name in ('publish', 'admit', 'reconcile', 'withdraw', 'restore', 'preflight', 'activate'):
         command = commands.add_parser(name)
         command.add_argument('--reception', type=Path, required=True)
         command.add_argument('--library', type=Path, required=True)
@@ -78,8 +78,9 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument('--policy', type=Path)
         command.add_argument('--credentials', type=Path)
         command.add_argument('--pyload', default='http://127.0.0.1:8000')
-        if name == 'publish':
+        if name in ('publish', 'admit'):
             command.add_argument('--asset', required=True)
+        if name == 'publish':
             command.add_argument('--replace', action='store_true')
         if name == 'withdraw':
             command.add_argument('--edition', required=True)
@@ -191,6 +192,11 @@ def run(args: argparse.Namespace) -> Any:
             # Require an already established paused window. Never pause it here.
             return not (status.get('pause') is True and status.get('active') == 0)
         capacity = Capacity(external_active=external_active)
+    if args.command == 'admit':
+        from library.admission import AdmissionPublisher
+        return AdmissionPublisher(store, args.reception, args.library,
+            isolated=args.isolated, lab=args.lab,
+            exclusive=qualification['status'] == 'qualified', capacity=capacity).publish_asset(args.asset)
     publisher = Publisher(store, args.reception, args.library, isolated=args.isolated, lab=args.lab,
         exclusive=qualification['status'] == 'qualified', capacity=capacity)
     if args.command == 'publish':
@@ -212,7 +218,7 @@ def main() -> int:
         else:
             # A local mutation is a manual cycle, serialized with the service.
             with lock(args.state / 'library-cycle.lock', blocking=False):
-                if args.command not in ('publish', 'withdraw', 'restore', 'reconcile'):
+                if args.command not in ('publish', 'admit', 'withdraw', 'restore', 'reconcile'):
                     for path in (args.state / 'library-operations').glob('*.yaml'):
                         if load(path).get('phase') not in ('committed', 'interrupted', 'capacity_aborted'):
                             raise LibraryError('Reconcile copy journals before a local catalogue write')

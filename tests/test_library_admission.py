@@ -11,6 +11,19 @@ from test_library_publish import setup_library
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_operator_cli_admits_valid_unknown_without_edition_fields(self):
+        from library.cli import parser, run
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store, reception, source, key = setup_library(root)
+            state = store.read(); state['assets'][key].pop('identity')
+            store.save(state, expected=state['revision'])
+            args = parser().parse_args(['--state', str(store.directory), 'admit',
+                '--asset', key, '--reception', str(reception), '--library', str(root/'library'), '--isolated'])
+            result = run(args)
+            self.assertEqual(result['status'], 'holding')
+            self.assertEqual(sha256(source), key)
+
     def test_exact_migration_recovers_after_old_folder_moved_before_catalogue_save(self):
         from unittest.mock import patch
         from library.publish import Publisher, rename_atomic
