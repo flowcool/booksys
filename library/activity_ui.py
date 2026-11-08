@@ -9,10 +9,17 @@ const el=id=>document.getElementById(id), labels={working:'En cours',waiting:'En
 const date=v=>v?new Date(v*1000).toLocaleString():'inconnue';
 const duration=v=>v===null||v===undefined?'inconnue':Math.floor(v/60)+' min';
 function node(tag,value){const e=document.createElement(tag);if(value!==undefined)e.textContent=value;return e}
-function details(stage){const list=node('ul');for(const item of stage.items||[]){const li=node('li');
+const pages={};
+function details(stage,key){const box=node('div'),list=node('ul'),controls=node('p'),previous=node('button','Précédents'),next=node('button','Suivants'),count=node('span');
+const items=stage.items||[];let page=Math.min(pages[key]||1,Math.max(1,Math.ceil(items.length/50)));
+function show(){pages[key]=page;list.replaceChildren();previous.disabled=page===1;next.disabled=page*50>=items.length;
+count.textContent=' Page '+page+' / '+Math.max(1,Math.ceil(items.length/50))+' · '+items.length+' éléments observés ';
+for(const item of items.slice((page-1)*50,page*50)){const li=node('li');
 const label=(item.title||'Élément')+' · '+(item.id||'?');if(/^\/fiche\/[0-9a-f]{64}$/.test(item.fiche||'')){const a=node('a',label);a.href=item.fiche;li.append(a)}else li.append(node('span',label));
-li.append(node('p',(labels[item.state]||'Inconnu')+' · '+(item.reason||'Motif inconnu')+' · Durée d’attente observée : '+duration(item.waiting_seconds)+' · Prochaine tentative : '+date(item.next_attempt)+' · Observé : '+date(item.observed_at)));list.append(li)}
-if(stage.details_truncated)list.append(node('li','Liste limitée à 2 000 éléments. Les compteurs couvrent tous les éléments.'));return list}
+li.append(node('p',(labels[item.state]||'Inconnu')+' · '+(item.reason||'Motif inconnu')+' · Durée d’attente observée : '+duration(item.waiting_seconds)+' · Prochaine tentative : '+date(item.next_attempt)+' · Observé : '+date(item.observed_at)));list.append(li)}}
+previous.onclick=()=>{page--;show()};next.onclick=()=>{page++;show()};controls.append(previous,count,next);box.append(controls,list);
+if(stage.details_truncated)box.append(node('p','Liste limitée à 2 000 éléments. Les compteurs couvrent tous les éléments.'));show();return box}
+
 function render(data){el('activity-clock').textContent='Observation partagée : '+date(data.observed_at)+' · Actualisation : 30 secondes';
 const r=data.resources||{},space=r.data||{},mem=r.byparr_memory||{},services=r.services||{};
 const gib=v=>v===null||v===undefined?'inconnu':(v/1073741824).toFixed(2)+' GiB';
@@ -24,7 +31,7 @@ d.append(node('p','Source : '+s.freshness+' · Observée : '+date(s.observed_at)
 d.append(node('p','Opération : '+(s.operation||'inconnue')+' · Élément : '+(s.title||s.item||'inconnu')+' · Motif : '+(s.reason||'inconnu')));
 d.append(node('p',s.no_progress_seconds===null?'Progression jamais observée.':'Aucune progression depuis '+duration(s.no_progress_seconds)+'.'));
 d.append(node('p','Attente observée : '+duration(s.waiting_seconds)+' · Prochaine tentative : '+date(s.next_attempt)));
-let filled=false;function fill(){if(d.open&&!filled){d.append(details(s));filled=true}}d.ontoggle=fill;fill();host.append(d)}
+let filled=false;function fill(){if(d.open&&!filled){d.append(details(s,key));filled=true}}d.ontoggle=fill;fill();host.append(d)}
 el('activity-history-start').textContent='Historique commencé : '+date(data.history_started_at)+'. Aucun événement antérieur reconstruit.';
 const events=el('activity-events');events.replaceChildren();for(const event of Object.values(data.events||{}).sort((a,b)=>b.at-a.at))events.append(node('li',date(event.at)+' · '+event.stage+' · '+(labels[event.state]||event.state)+' · '+event.operation+' · '+(event.title||event.item||'')+' · '+(event.reason||'')))}
 async function refresh(){try{const r=await fetch('/api/activity',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);render(await r.json())}catch(e){el('activity-clock').textContent='Lecture indisponible. Les anciennes valeurs restent affichées.'}}

@@ -18,7 +18,10 @@ vm.runInNewContext(script,{document,fetch:async path=>{assert.equal(path,'/api/a
 ids['activity-tab'].onclick();await new Promise(r=>setImmediate(r));assert.equal(calls,1);assert.equal(ids['library-pane'].hidden,true);assert.equal(ids['activity-pane'].hidden,false);
 const stage=ids['activity-stages'].children[0];stage.open=true;stage.ontoggle();let all=[];function walk(e){all.push(e);for(const c of e.children)walk(c)}walk(stage);assert(all.some(e=>e.textContent===bad+' · a'));assert(!all.some(e=>e.tag==='img'||e.tag==='a'));
 timers[0]();await new Promise(r=>setImmediate(r));assert.equal(calls,2);assert.equal(ids['activity-stages'].children[0].open,true);
-ids['library-tab'].onclick();assert.equal(ids['library-pane'].hidden,false);timers[0]();assert.equal(calls,2);
+data.stages.local.items=Array.from({length:103},(_,i)=>({id:String(i),title:'File '+i}));timers[0]();await new Promise(r=>setImmediate(r));
+let current=ids['activity-stages'].children[0],box=current.children[current.children.length-1],list=box.children[1],controls=box.children[0];assert.equal(list.children.length,50);controls.children[2].onclick();assert.equal(list.children.length,50);controls.children[2].onclick();assert.equal(list.children.length,3);assert.equal(controls.children[2].disabled,true);
+timers[0]();await new Promise(r=>setImmediate(r));current=ids['activity-stages'].children[0];box=current.children[current.children.length-1];assert.equal(box.children[1].children.length,3);
+ids['library-tab'].onclick();assert.equal(ids['library-pane'].hidden,false);timers[0]();assert.equal(calls,4);
 process.stdout.write('Activity tab, safe details and 30-second refresh passed');});'''
         result = subprocess.run(['node', '-e', driver], input=json.dumps(script), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
