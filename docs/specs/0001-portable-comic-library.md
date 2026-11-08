@@ -440,3 +440,34 @@ ordinary identification/conversion path; a second cycle creates no duplicate;
 parent bytes remain unchanged. Isolated tests cover traversal, duplicate names,
 links, encryption/multipart, recursive or mixed content, declared/actual limits,
 interrupted extraction, changed parent/child and identical mirrored children.
+
+## Accepted AllDebrid-first download amendment — 8 November 2026
+
+the operator explicitly chose AllDebrid first, with other mirrors retained as fallback.
+Keep collecting every URL. This replaces the earlier requirement to start every
+hoster link automatically, not the requirement to preserve the captured links.
+
+- Prefer one complete hoster set supported and currently available through
+  AllDebrid. Preserve every member of that set; one link is not assumed to be
+  a whole album or bundle. Prefer 1Fichier when it is available in that list.
+- Retain other hoster sets in the captured source as fallback. Release one
+  complete fallback set after confirmed technical failure or unavailability of
+  the primary set. Bibliographic uncertainty is not a download failure.
+- Preserve failed originals before a fallback could reuse their filenames.
+  Do not overwrite evidence or restart every hoster in a loop.
+- For existing packages, preserve all IDs and links. Once every primary input
+  is technically valid or is an exact proven duplicate, move the package to
+  pyLoad's collector. Stop only its remaining active redundant jobs and verify
+  their exit. The library and collector read both pyLoad destinations so these
+  packages and their files remain visible. Do not change Lunii packages.
+- New submissions enqueue the complete primary set only. Saved source URLs
+  remain the fallback authority. Journal fallback addition and reconcile URLs
+  before retrying an uncertain API write. Never duplicate an add_files call.
+- Restore the same package destination/order for rollback. Keep the single
+  downloader and source files. Hoster availability comes from the current
+  provider response, not an assumption that every mirror is supported.
+
+The existing pyLoad transfer byte count can exceed its final file size for
+segmented downloads. It is transport metadata, not an integrity proof. Retain
+reported/local sizes and warning provenance; validate stable completed bytes
+through the full existing archive/PDF reader before further processing.
