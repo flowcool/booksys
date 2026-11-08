@@ -28,6 +28,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
     state = store.read()
     packages = {int(p['pid']): p for p in queue}
     inspected = 0
+    bundle_preparations = 0
     submissions = list(journal.get('submissions', {}).items())
     if incremental:
         def priority(entry: tuple[str, Any]) -> tuple[bool, int]:
@@ -103,6 +104,25 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             'observed_at': origin['observed_at'], 'transfer_status': 0,
                             'transfer_error': bool(item.get('error'))}
                         continue
+                    if (path.suffix.lower() in ('.zip', '.rar') or previous.get('bundle') or
+                            (previous.get('availability') == 'pending' and 'Nested container' in previous.get('reason', ''))):
+                        from library.bundles import receive_bundle
+                        from library.bundle_worker import POLICY
+                        if (incremental and not previous.get('bundle') and previous.get('fingerprint') == stamp
+                                and previous.get('availability') == 'rejected' and previous.get('bundle_policy') == POLICY and previous.get('reason') != 'Isolated bundle worker failed'):
+                            state['origins'][oid] = {**previous, 'observed_at': origin['observed_at']}
+                            continue
+                        if not previous.get('bundle') and (bundle_preparations >= 1 or
+                                (inspection_limit is not None and inspected >= inspection_limit)):
+                            origin['reason'] = 'Intake budget deferred'
+                            state['origins'][oid] = origin
+                            continue
+                        bundle_preparations += not bool(previous.get('bundle'))
+                        origin.update(fingerprint=stamp, bundle_policy=POLICY)
+                        inspected += receive_bundle(state, store.directory, path, oid, origin,
+                            captured['items'][source], budget=max(0, (inspection_limit if inspection_limit is not None else 8) - inspected),
+                            stable_seconds=stable_seconds)
+                        continue
                     temporary = any(text in previous.get('reason', '').lower() for text in
                         ('isolated reader failed', 'resource limit exceeded', 'timed out', 'reader policy differs'))
                     retry_due = (temporary and int(previous.get('intake_attempts', 1)) < 3
@@ -111,7 +131,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         previous.get('reason') in ('Multipart representation',
                             'LibraryError: Active PDF content or attachment',
                             'LibraryError: Nested container or unauthorized archive content',
-                            'Multiple image groups: possible multi-work archive'))
+                            'Multiple image groups: possible multi-work archive',
+                            'Reader policy differs from controller'))
                     if (incremental and not retry_due and not policy_retry and previous.get('fingerprint') == stamp
                             and previous.get('path') == origin['path']
                             and previous.get('availability') in ('validated', 'rejected', 'pending')):
@@ -125,7 +146,20 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         continue
                     inspected += 1
                     result = inspect_file(path, stable_seconds=stable_seconds)
-                    count = int(previous.get('intake_attempts', 0)) + 1 if previous.get('fingerprint') == stamp else 1
+                    if result['status'] == 'pending' and 'Nested container' in result.get('reason', ''):
+                        from library.bundles import receive_bundle
+                        inspected -= 1
+                        if bundle_preparations >= 1:
+                            origin['reason'] = 'Intake budget deferred'
+                            state['origins'][oid] = origin
+                            continue
+                        bundle_preparations += 1
+                        inspected += receive_bundle(state, store.directory, path, oid, origin,
+                            captured['items'][source], budget=max(0, (inspection_limit if inspection_limit is not None else 8) - inspected),
+                            stable_seconds=stable_seconds)
+                        continue
+                    count = (int(previous.get('intake_attempts', 0)) + 1
+                             if previous.get('fingerprint') == stamp and previous.get('reader_policy') == READER_POLICY else 1)
                     origin.update(intake_attempts=count, intake_next_attempt=time.time() + (300 if count == 1 else 900))
                     if list(fingerprint(path)) == stamp:
                         origin['fingerprint'] = stamp

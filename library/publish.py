@@ -166,16 +166,8 @@ class Publisher:
             raise
 
     def resolve_origin(self, state: dict[str, Any], asset_id: str) -> Path:
-        asset = state['assets'][asset_id]
-        for key in asset['origins']:
-            origin = state['origins'][key]
-            if origin['sha256'] != asset_id or origin['availability'] != 'validated':
-                continue
-            path = self.reception / origin['path']
-            path = reception_path(self.reception, str(Path(origin['path']).parent), Path(origin['path']).name)
-            if path.exists() and sha256(path) == asset_id:
-                return path
-        raise LibraryError('No origin with matching pyLoad IDs, path and asset hash is available')
+        from library.origins import resolve_asset
+        return resolve_asset(self.store, self.reception, state, asset_id)
 
     def publish(self, asset_id: str, *, replace: bool = False) -> dict[str, Any]:
         with lock(self.store.directory / 'library-copy.lock', blocking=False):
@@ -224,7 +216,7 @@ class Publisher:
             operation = {'schema': 1, 'id': uuid.uuid4().hex, 'kind': 'replace' if previous else 'create',
                 'asset': asset_id, 'edition': identity['edition'], 'target': target.name,
                 'manifest': expected, 'previous': previous, 'catalogue_revision': state['revision'],
-                'source': str(source.relative_to(self.reception)), 'created_at': now(), 'export_version': export_version,
+                'source': next(key for key in asset['origins'] if state['origins'][key].get('availability') == 'validated'), 'created_at': now(), 'export_version': export_version,
                 'artifact_format': 'cbz' if xml else 'pdf'}
             self.transition(operation, 'intent')
             stage = self.staging / operation['id']

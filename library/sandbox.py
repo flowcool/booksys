@@ -49,7 +49,7 @@ def native_prefix(source: Path, *, output: Path | None = None, ocr: bool = False
             path = Path(value).resolve()
             if path.is_file() and os.access(path, os.X_OK):
                 command.extend(['--ro-bind', str(path), target])
-    if source.suffix.lower() == '.cbr':
+    if source.suffix.lower() in ('.cbr', '.rar'):
         tool(os.environ.get('BOOKSYS_UNRAR') or shutil.which('unrar'), '/runtime/tools/unrar')
         command += ['--setenv', 'BOOKSYS_UNRAR', '/runtime/tools/unrar']
     if source.suffix.lower() == '.pdf' and (ocr or output is not None):

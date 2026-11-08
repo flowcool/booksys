@@ -114,6 +114,8 @@ def build_projection(root: Path) -> dict[str, Any]:
         hints = list(asset.get('captured_hints', {}).values()) or [captured.get(origin['source'], {})]
         title = overrides.get('title') or work.get('title') or next((hint.get('title') for hint in hints
             if isinstance(hint, dict) and hint.get('title')), Path(origin['path']).name)
+        if origin.get('parent_origin') and not identity:
+            title = origin.get('member', title)
         automation = asset.get('automation', {})
         result = asset.get('identity_result', {})
         reason = origin.get('reason') if origin.get('availability') != 'validated' else (
@@ -135,6 +137,12 @@ def build_projection(root: Path) -> dict[str, Any]:
                'publication': 'published' if published else 'pending', 'reason': operator_reason(reason),
                'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
                'fiche': '/fiche/' + oid}
+        row['kind'] = 'bundle' if origin.get('bundle') else 'bundle_member' if origin.get('parent_origin') else 'file'
+        row['parent'] = origin.get('parent_origin', '')
+        if origin.get('bundle'):
+            row.update(title='Lot : ' + bounded(title), publication='not applicable', identity='not applicable', ocr='not applicable')
+        elif origin.get('parent_origin'):
+            row['title'] = 'Membre : ' + row['title']
         row['status'] = 'rejected' if row['intake'] == 'rejected' else 'published' if published else 'pending'
         rows.append(row)
         assertions = []
@@ -173,12 +181,19 @@ def build_projection(root: Path) -> dict[str, Any]:
             'assertions': assertions, 'candidates': candidate_projection, 'cover': cover_url,
             'cover_provenance': 'First page of the local file; not a publisher cover',
             'pipeline': {key: row[key] for key in ('transfer', 'intake', 'ocr', 'identity', 'publication', 'reason', 'observed_at', 'attempt_at')},
-            'technical': {**fields(origin, ('pid', 'fid', 'path', 'sha256')),
+            'technical': {**fields(origin, ('pid', 'fid', 'path', 'sha256', 'parent_origin', 'parent_sha256', 'member', 'member_sha256')),
                           **fields(asset, ('format', 'size', 'pages', 'disposition', 'contested')),
                           **fields(automation, ('attempts', 'outcome', 'next_attempt', 'updated_at'))},
             'source_categories': sorted({urlsplit(origin['source']).path.strip('/').split('/')[0]}),
             'category_provenance': 'Captured Bookys URL path only; subcategories not collected',
             'unknowns': 'Missing fields are unknown. Candidate records are not validated identity. No new source was queried for this page.'}
+    for oid, origin in state['origins'].items():
+        if origin.get('bundle'):
+            fiches[oid]['bundle_children'] = [{'member': bounded(child.get('member')), 'fiche': '/fiche/' + cid,
+                'validation': bounded(child.get('availability')), 'reason': operator_reason(child.get('reason'))}
+                for cid, child in state['origins'].items() if child.get('parent_origin') == oid][:64]
+        if origin.get('parent_origin'):
+            fiches[oid]['bundle_parent'] = '/fiche/' + origin['parent_origin']
     return {'schema': 1, 'generated_at': now(), 'catalogue_revision': state['revision'],
             'source': 'saved queue and catalogue snapshots; not live pyLoad',
             'cycle': {key: cycle[key] for key in ('status', 'started_at', 'finished_at', 'duration_seconds',
@@ -203,6 +218,15 @@ def fiche_html(fiche: dict[str, Any]) -> str:
     body: str = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Booksys fiche</title>'
     body += '<style>body{font:16px system-ui;max-width:65em;margin:2em auto;padding:1em}dt{font-weight:bold;margin-top:.5em}dd{white-space:pre-wrap;overflow-wrap:anywhere}img{max-width:16em}details{margin:2em 0}</style>'
     body += '<a href="/">Library</a><h1>' + html.escape(fiche['title']) + '</h1>'
+    parent = fiche.get('bundle_parent', '')
+    if re.fullmatch(r'/fiche/[0-9a-f]{64}', parent):
+        body += '<p><a href="' + parent + '">Lot source</a></p>'
+    if fiche.get('bundle_children'):
+        body += '<h2>Membres du lot</h2>'
+        for child in fiche['bundle_children']:
+            url = child.get('fiche', '')
+            if re.fullmatch(r'/fiche/[0-9a-f]{64}', url):
+                body += '<p><a href="' + url + '">' + html.escape(child['member']) + '</a> — ' + html.escape(child['validation']) + ': ' + html.escape(child['reason']) + '</p>'
     if fiche.get('cover'):
         body += '<img src="' + html.escape(fiche['cover'], quote=True) + '" alt="Local first page"><p>' + html.escape(fiche['cover_provenance']) + '</p>'
     body += '<h2>Pipeline and blockers</h2>' + table(fiche['pipeline'])

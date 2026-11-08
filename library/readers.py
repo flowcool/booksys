@@ -15,7 +15,7 @@ from typing import Any
 from library.catalog import LibraryError
 
 MAX_FILE = 1024 ** 3
-READER_POLICY = 'single-comic-2'
+READER_POLICY = 'single-comic-3'
 
 
 def sha256(path: Path) -> str:

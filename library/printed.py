@@ -156,17 +156,11 @@ def read_printed(path: Any, inspection: dict[str, Any]) -> dict[str, Any]:
 
 def scan_printed(store: Any, asset_id: str, reception: Any) -> dict[str, Any]:
     from library.catalog import LibraryError
-    from library.intake import reception_path
     from pathlib import Path
+    from library.origins import resolve_asset
     state = store.read()
     asset = state['assets'][asset_id]
-    origins = [state['origins'][oid] for oid in asset['origins']
-               if state['origins'][oid].get('availability') == 'validated']
-    if not origins:
-        raise LibraryError('No validated origin for printed evidence')
-    origin = origins[0]
-    relative = Path(origin['path'])
-    result = read_printed(reception_path(Path(reception), str(relative.parent), relative.name), asset)
+    result = read_printed(resolve_asset(store, Path(reception), state, asset_id), asset)
     asset.setdefault('printed_attempts', []).append({k: v for k, v in result.items() if k != 'pages'})
     asset['printed_attempts'] = asset['printed_attempts'][-10:]
     if result['status'] == 'ok':

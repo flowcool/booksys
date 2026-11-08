@@ -121,6 +121,13 @@ def validate(state: Any) -> None:
         path = Path(origin['path'])
         if path.is_absolute() or '..' in path.parts:
             raise LibraryError('Unsafe origin path')
+        if origin.get('parent_origin'):
+            parent = state['origins'].get(origin['parent_origin'])
+            if (not parent or origin.get('parent_sha256') != parent.get('sha256')
+                    or origin.get('member_sha256') != origin['sha256']
+                    or not isinstance(origin.get('member'), str)
+                    or not origin['path'].startswith('bundle-inputs/' + str(parent['sha256']) + '/')):
+                raise LibraryError('Invalid bundle child provenance')
         if origin['sha256'] is not None and not re.fullmatch('[0-9a-f]{64}', origin['sha256']):
             raise LibraryError('Invalid origin hash')
     for edition_id, edition in state['editions'].items():
