@@ -174,8 +174,8 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
             save('attempt_created')
         attempt_pid = operation['attempt_pid']
         attempt_package = client.call('get_package_data', package_id=attempt_pid)
-        if (attempt_package['name'] != attempt or Counter(item['url'] for item in attempt_package['links']) !=
-                Counter(operation['fallback_links'])):
+        if (attempt_package['name'] != attempt or Counter(link_identity(item['url']) for item in attempt_package['links']) !=
+                Counter(link_identity(url) for url in operation['fallback_links'])):
             raise CollectionError('Fallback complete-set readback differs')
         if any(item['fid'] in {fid for fid, _ in operation['original_files']} for item in attempt_package['links']):
             raise CollectionError('Fallback reused original file IDs')

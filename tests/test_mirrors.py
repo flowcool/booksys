@@ -57,7 +57,8 @@ class MirrorTests(unittest.TestCase):
             client = Native()
             entry = {'name': client.package['name'], 'package_id': 1, 'status': 'queued',
                      'links': [item['url'] for item in client.package['links']],
-                     'primary_links': [item['url'] for item in client.package['links'][:2]]}
+                     # Captured affiliate URLs differ from native pyLoad URLs.
+                     'primary_links': [item['url'] + '&af=987' for item in client.package['links'][:2]]}
             origins = {'one': {'source': NEW, 'pid': 1, 'fid': 1, 'availability': 'validated'},
                        'two': {'source': NEW, 'pid': 1, 'fid': 2, 'availability': 'pending'}}
             state = {'origins': origins}
@@ -100,7 +101,7 @@ class MirrorTests(unittest.TestCase):
             failed = root/'downloads/original/album.cbz'; failed.write_bytes(b'corrupt retained bytes')
             client = Native()
             entry = {'name': client.packages[0]['name'], 'package_id': 1, 'status': 'queued',
-                     'primary_host': '1fichier', 'links': ['https://1fichier.com/?broken']}
+                     'primary_host': '1fichier', 'links': ['https://1fichier.com/?broken&af=987']}
             record = {'downloads': {'a': {'hoster': '1fichier', 'urls': entry['links']},
                                     'b': {'hoster': 'fallback', 'urls': ['https://other.example/a', 'https://other.example/b']}}}
             state = {'origins': {'old': {'source': NEW, 'pid': 1, 'fid': 10, 'availability': 'rejected', 'reason': 'BadZipFile: Bad CRC'}}}
@@ -112,6 +113,8 @@ class MirrorTests(unittest.TestCase):
             self.assertEqual(client.packages[0]['dest'], 0)
             self.assertEqual(client.packages[1]['dest'], 1)
             self.assertEqual(len(client.packages[1]['links']), 2)
+            self.assertEqual({item['url'] for item in client.packages[1]['links']},
+                             set(record['downloads']['b']['urls']))
             self.assertEqual(failed.read_bytes(), b'corrupt retained bytes')
             operation = yaml.safe_load(journal.read_text())['packages']['1']
             self.assertEqual(operation['attempt_pid'], 2)
@@ -146,6 +149,35 @@ class MirrorTests(unittest.TestCase):
             self.assertEqual(attempt['mirror_source'], NEW)
             self.assertEqual(attempt['mirror_original_pid'], 1)
             self.assertEqual(original['links'][0]['input_folder'], 'original')
+
+    def test_fallback_readback_accepts_native_affiliate_removal(self):
+        from mirror_routing import route_package
+        class Native(MemoryDownloader):
+            def __init__(self):
+                super().__init__()
+                self.packages = [{'pid': 1, 'name': 'Booksys-owned Album', 'folder': 'original', 'dest': 1,
+                    'links': [{'fid': 10, 'url': 'https://other.example/broken', 'name': 'album.cbz', 'status': 0}]}]
+            def call(self, method, *, write=False, **values):
+                if method == 'status_downloads': return []
+                if method == 'add_package':
+                    self.packages.append({'pid': 2, 'name': values['name'], 'folder': 'attempt', 'dest': 0,
+                        'links': [{'fid': 20, 'url': 'https://1fichier.com/?alternative', 'name': 'album.cbz', 'status': 3}]})
+                    return 2
+                return super().call(method, write=write, **values)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); reception = root/'downloads'; (reception/'original').mkdir(parents=True)
+            (reception/'original/album.cbz').write_bytes(b'corrupt retained bytes')
+            client = Native()
+            entry = {'package_id': 1, 'name': client.packages[0]['name'],
+                     'primary_links': ['https://other.example/broken']}
+            record = {'downloads': {'primary': {'hoster': 'other', 'urls': entry['primary_links']},
+                'fallback': {'hoster': '1fichier', 'urls': ['https://1fichier.com/?alternative&af=987']}}}
+            state = {'origins': {'old': {'source': NEW, 'pid': 1, 'fid': 10,
+                'availability': 'rejected', 'reason': 'Bad CRC'}}}
+            result = route_package(client, NEW, entry, record, state, reception, root/'routing.yaml', apply=True)
+            self.assertEqual(result['outcome'], 'fallback_active')
+            self.assertEqual(client.packages[1]['dest'], 1)
+            self.assertEqual(record['downloads']['fallback']['urls'], ['https://1fichier.com/?alternative&af=987'])
 
     def test_identity_and_local_reader_failures_do_not_trigger_fallback(self):
         from mirror_routing import technical
