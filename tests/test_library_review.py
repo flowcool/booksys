@@ -20,6 +20,8 @@ class ReviewTests(unittest.TestCase):
             state['editions'] = {}
             state['variants'] = {}
             state['assets'][asset].pop('identity')
+            state['assets'][asset]['contested'] = True
+            state['assets'][asset]['assertions'] = [{'field': 'identity', 'raw': 'contradictory source'}]
             self.assertEqual(state['assets'][asset]['embedded'], {})
             store.save(state, expected=state['revision'])
             case = next(v for v in report(store)['cases'].values() if v.get('asset') == asset)
@@ -30,6 +32,8 @@ class ReviewTests(unittest.TestCase):
                     'evidence': {'source': 'https://publisher.example/edition/1', 'operator': 'flowcool',
                                  'basis': 'publisher edition and title page agree'}}}}
             self.assertEqual(decide(store, [request], author='flowcool')[0]['status'], 'applied')
+            self.assertFalse(store.read()['assets'][asset]['contested'])
+            self.assertEqual(len(store.read()['assets'][asset]['assertions']), 1)
             case = next(v for v in report(store)['cases'].values() if v.get('asset') == asset)
             select = {'request_id': 'manual-selection', 'case': case['id'], 'version': case['version'],
                       'action': 'select', 'values': {}}
@@ -41,6 +45,24 @@ class ReviewTests(unittest.TestCase):
                 self.assertEqual(xml.findtext('Title'), 'Operator confirmed album')
                 self.assertEqual(xml.findtext('Publisher'), 'Confirmed publisher')
             self.assertEqual(len(store.ledger()), 2)
+            state = store.read()
+            state['assets'][asset]['contested'] = True
+            state['assets'][asset]['identity_result'] = {'reason': 'new conflicting edition evidence'}
+            store.save(state, expected=state['revision'])
+            self.assertTrue(store.replay()['assets'][asset]['contested'])
+
+    def test_invalid_identity_never_enters_immutable_ledger(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, _, _, asset = setup_library(Path(folder))
+            case = next(v for v in report(store)['cases'].values() if v.get('asset') == asset)
+            request = {'request_id': 'invalid-selected', 'case': case['id'], 'version': case['version'],
+                'action': 'identify', 'values': {'work_id': 'work', 'edition_id': 'edition',
+                'work': {'title': 'Album'}, 'edition': {'language': 'fr', 'publisher': 'Publisher',
+                    'evidence': {'operator': 'labelled'}, 'selected': 'missing'}}}
+            results = decide(store, [request, None], author='flowcool')
+            self.assertEqual([r['status'] for r in results], ['rejected', 'rejected'])
+            self.assertEqual(store.ledger(), [])
+            store.replay()
 
     def test_batch_is_versioned_immutable_and_idempotent(self):
         with tempfile.TemporaryDirectory() as folder:

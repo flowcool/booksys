@@ -223,6 +223,10 @@ def apply_effect(state: dict[str, Any], decision: dict[str, Any], *, replay: boo
         state['variants'][vid] = {'edition': eid, 'asset': target}
         asset['identity'] = {'work': wid, 'edition': eid, 'variant': vid, 'evidence': edition['evidence']}
         asset['disposition'] = 'pending'
+        conflict_inputs = digest({'identity_result': asset.get('identity_result'),
+                                  'assertions': asset.get('assertions', [])})
+        if not replay or decision.get('resolution_inputs') == conflict_inputs:
+            asset['contested'] = False
     elif action == 'override':
         asset.setdefault('overrides', {}).update(values)
     elif action in ('exclude', 'defer'):

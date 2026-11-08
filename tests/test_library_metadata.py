@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 import yaml
 
-from library.metadata import identify, parse_bdtheque, parse_mangadex, Providers
+from library.metadata import enrich, identify, parse_bdtheque, parse_mangadex, Providers
 
 
 EMBEDDED = {'ISBN': '9781569319017', 'Title': 'One Piece, Vol. 1', 'Writer': 'Eiichiro Oda',
@@ -17,6 +17,25 @@ CANDIDATE = {'isbn': '9781569319017', 'title': 'One Piece, Vol. 1', 'author': 'E
 
 
 class IdentityTests(unittest.TestCase):
+    def test_validated_number_reaches_generated_comicinfo(self):
+        from test_library_publish import setup_library
+        from library.xmlmetadata import comicinfo
+        from xml.etree import ElementTree
+        class QualifiedFixtureProvider:
+            def discover(self, title):
+                return {'status': 'ok', 'candidates': []}
+            def edition(self, code):
+                return {'status': 'ok', 'candidate': CANDIDATE}
+        with tempfile.TemporaryDirectory() as folder:
+            store, _, _, asset = setup_library(Path(folder))
+            state = store.read()
+            state['works'], state['editions'], state['variants'] = {}, {}, {}
+            state['assets'][asset].pop('identity')
+            state['assets'][asset]['embedded'] = EMBEDDED
+            store.save(state, expected=state['revision'])
+            state = enrich(store, asset, QualifiedFixtureProvider(), [])
+            self.assertEqual(ElementTree.fromstring(comicinfo(state, asset)).findtext('Number'), '1')
+
     def test_labelled_calibration_has_zero_false_automatic_admissions(self):
         fixture = yaml.safe_load((Path(__file__).parent / 'fixtures/library_identity_calibration.yaml').read_text())
         admissions = 0

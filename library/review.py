@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any
 
-from library.catalog import Catalog, LibraryError, apply_effect, digest, lock, now
+from library.catalog import Catalog, LibraryError, apply_effect, digest, lock, now, validate
 
 ACTIONS = {'identify', 'override', 'select', 'exclude', 'defer', 'merge_work', 'separate_edition'}
 
@@ -75,6 +75,21 @@ def validate_request(request: Any, author: str) -> None:
             raise LibraryError('Invalid stable identity')
         if not isinstance(values['work'], dict) or not isinstance(values['edition'], dict):
             raise LibraryError('Invalid identity records')
+        if (set(values['work']) - {'title', 'series', 'author', 'number', 'summary', 'genres', 'public'} or
+                set(values['edition']) - {'language', 'publisher', 'date', 'revision', 'evidence'}):
+            raise LibraryError('Unsupported identity record fields')
+        for field, value in values['work'].items():
+            if field == 'genres':
+                if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                    raise LibraryError('Identity genres must be text values')
+            elif not isinstance(value, str):
+                raise LibraryError('Identity work fields must be text')
+        for field, value in values['edition'].items():
+            if field == 'evidence':
+                if not isinstance(value, dict) or not value:
+                    raise LibraryError('Identity evidence must be a nonempty record')
+            elif not isinstance(value, str):
+                raise LibraryError('Identity edition fields must be text')
     if action in ('merge_work', 'separate_edition'):
         expected = {'work_id', 'evidence'} | ({'work'} if action == 'separate_edition' else {'source_work_id'})
         if set(values) != expected or not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', str(values['work_id'])):
@@ -86,7 +101,7 @@ def decide(store: Catalog, requests: list[dict[str, Any]], *, author: str) -> li
     # Serializes batch decisions, not hashing, copies, network or the collector.
     with lock(store.directory / 'decisions.lock'):
         for request in requests:
-            result = {'request_id': request.get('request_id'), 'status': 'rejected'}
+            result = {'request_id': request.get('request_id') if isinstance(request, dict) else None, 'status': 'rejected'}
             try:
                 validate_request(request, author)
                 records = store.ledger()
@@ -116,9 +131,13 @@ def decide(store: Catalog, requests: list[dict[str, Any]], *, author: str) -> li
                 payload = {'request_id': request['request_id'], 'request': copy.deepcopy(request),
                     'target': case['asset'], 'action': request['action'], 'values': request['values'],
                     'author': author, 'time': now(), 'case_version': case['version']}
+                if request['action'] == 'identify':
+                    payload['resolution_inputs'] = digest({'identity_result': state['assets'][case['asset']].get('identity_result'),
+                                                          'assertions': state['assets'][case['asset']].get('assertions', [])})
                 # Verify effects on a copy before committing canonical evidence.
                 proposed = copy.deepcopy(state)
                 apply_effect(proposed, payload)
+                validate(proposed)
                 record = store.append_decision(payload)
                 proposed['ledger'].append(record['id'])
                 store.save(proposed, expected=state['revision'])

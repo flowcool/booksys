@@ -281,7 +281,7 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
             asset['contested'] = True
         elif not existing:
             apply_effect(state, {'action': 'identify', 'target': asset_id, 'values': {
-                'work_id': wid, 'edition_id': eid, 'work': {'title': candidate['title'], 'author': candidate['author']},
+                'work_id': wid, 'edition_id': eid, 'work': {'title': candidate['title'], 'author': candidate['author'], 'number': candidate['number']},
                 'edition': {'language': candidate['language'], 'publisher': candidate['publisher'],
                             'date': candidate['date'], 'revision': candidate['revision'], 'evidence': result['evidence']}}})
             state['editions'][eid].setdefault('selected', asset['identity']['variant'])
