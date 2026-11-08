@@ -73,6 +73,7 @@ Do not delete or rename packages involved in an unfinished submission.
 | `/data/booksys/state/state.yaml` | Completed collection records, keyed by source URL |
 | `/data/booksys/state/monitor.yaml` | Per-category watermark and submission journal |
 | `/data/booksys/state/backfill.yaml` | Ten-page capture and submission progress |
+| `/data/booksys/state/fiches.yaml` | Per-source offline-fiche progress and retries |
 | pyLoad config and database | Queue, accounts, plugin configuration and download progress |
 | Host filesystem | Downloaded bytes and free space |
 | Beads project `booksys` | Active work and delivery evidence |
@@ -81,6 +82,36 @@ Do not delete or rename packages involved in an unfinished submission.
 They are not submission journals. Reimporting them can create duplicates downstream.
 File locks serialize each state directory. Atomic file replacement prevents a partial YAML write.
 These mechanisms do not replace backups or coordinate manual edits with running services.
+
+## Offline reference
+
+`booksys.extract_page` reads the source's `mainEntity`, `abstract`, detail rows
+and `item-cover` selectors. It preserves supplied text and fields in each item's
+`page` record. It does not infer authors or editions from prose.
+`fiches.py` generates escaped French Markdown beside each package's files.
+Cover requests use Byparr's solved cookies and user agent, restricted to the
+same Bookys host and `/storage/items/`. Redirects are validated before forwarding
+cookies. Raster MIME/signature and an 8 MiB limit are checked. Covers need no
+second browser or external solver. Cookies stay in memory.
+
+The worker's download-root mount is used only for managed fiche/cover writes.
+Unsafe package paths, symlinks and existing unmanaged fiche/cover files are
+rejected. Random temporary files and atomic replacement protect writes.
+Personal annotations belong outside these generated files.
+
+Existing queued entries are enriched during the monitor's idle period, under
+the pipeline lock. Page metadata is saved before cover transfer. Cover errors
+retry after 15 minutes; browser-fetch failures stop browser work for that pause
+and defer the affected entry for an hour. Other eligible entries can proceed
+on later cycles. One in-flight item can extend the next monitor deadline.
+No existing package is re-enqueued. Future packages receive text before queue
+transfer. Completed documents refresh when pyLoad filenames change or a managed
+file disappears. A manually removed pyLoad package requires intervention.
+
+`catalogue.yaml` is a derived central export for LLMs. Source URLs are its keys.
+It contains captured metadata, package/relative paths and a dated pyLoad file
+snapshot. It is not a second authoritative queue or a live completion guarantee.
+Source prose remains untrusted input to any consuming LLM.
 
 ## Validation boundary
 

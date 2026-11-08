@@ -30,9 +30,12 @@ services:
       - /secrets/pyload.json
       - --interval
       - "900"
+      - --downloads
+      - /downloads
     volumes:
       - /data/booksys/state:/state
       - /data/booksys/secrets:/secrets:ro
+      - /data/booksys/downloads:/downloads
     depends_on:
       byparr:
         condition: service_healthy

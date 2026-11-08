@@ -11,10 +11,12 @@ import re
 import sys
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urljoin, urlsplit
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 import yaml
 from bs4 import BeautifulSoup
@@ -43,6 +45,10 @@ class CollectionError(Exception):
     """A fetch or document failed validation. No automatic retry."""
 
 
+class BrowserError(CollectionError):
+    """Stop browser work for this cycle after a solver or page-shape failure."""
+
+
 def site_url(url: str, origin: str) -> str:
     candidate, base = urlsplit(url), urlsplit(origin)
     if (candidate.scheme != "https" or candidate.netloc != base.netloc
@@ -68,6 +74,7 @@ class Byparr:
             raise CollectionError("Byparr must use a local HTTP endpoint")
         self.endpoint, self.delay, self.timeout = endpoint, delay, timeout
         self.last_request = 0.0
+        self.session: dict[str, Any] = {}
 
     def __call__(self, url: str) -> str:
         time.sleep(max(0, self.delay - (time.monotonic() - self.last_request)))
@@ -87,9 +94,52 @@ class Byparr:
             if not isinstance(html, str):
                 raise CollectionError("Byparr returned no HTML")
             document(html)
+            self.session = {k: solution.get(k) for k in ["url", "cookies", "userAgent"]}
             return html
+        except (OSError, ValueError, CollectionError) as exc:
+            raise BrowserError(str(exc)) from exc
         finally:
             self.last_request = time.monotonic()
+
+    def cover(self, url: str, source: str) -> tuple[bytes, str]:
+        """Fetch only same-site Bookys covers using the solved browser identity."""
+        def validate(target: str) -> None:
+            site_url(target, source)
+            if (not re.fullmatch(r"www\d*\.bookys-ebooks\.com", urlsplit(target).hostname or "")
+                    or not urlsplit(target).path.startswith("/storage/items/")):
+                raise CollectionError("Cover must use Bookys item storage")
+        validate(url)
+        if urlsplit(str(self.session.get("url", ""))).netloc != urlsplit(source).netloc:
+            self(source)
+
+        class Redirect(HTTPRedirectHandler):
+            def redirect_request(self, req: Any, fp: Any, code: Any, msg: Any, headers: Any, newurl: str) -> Any:
+                validate(newurl)
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+        host = urlsplit(source).hostname or ""
+        cookies = [c for c in (self.session.get("cookies") or [])
+                   if host == c["domain"].lstrip(".") or host.endswith("." + c["domain"].lstrip("."))]
+        if not self.session.get("userAgent"):
+            raise CollectionError("Browser returned no cover identity")
+        headers = {"User-Agent": self.session["userAgent"], "Referer": source,
+                   "Cookie": "; ".join(c["name"] + "=" + c["value"] for c in cookies)}
+        try:
+            with build_opener(Redirect()).open(Request(url, headers=headers), timeout=30) as response:
+                data = response.read(8 * 1024**2 + 1)
+                mime = response.headers.get_content_type()
+        except HTTPError as exc:
+            if exc.code == 403:
+                self.session = {}  # Solve again on a later retry, not an endless stale-cookie loop.
+            raise
+        signatures = {"image/jpeg": (".jpg", data.startswith(b"\xff\xd8\xff")),
+                      "image/png": (".png", data.startswith(b"\x89PNG\r\n\x1a\n")),
+                      "image/gif": (".gif", data[:6] in {b"GIF87a", b"GIF89a"}),
+                      "image/webp": (".webp", data[:4] == b"RIFF" and data[8:12] == b"WEBP")}
+        extension, valid = signatures.get(mime, ("", False))
+        if not valid or len(data) > 8 * 1024**2:
+            raise CollectionError("Invalid or oversized cover image")
+        return data, extension
 
 
 def catalogue(html: str, url: str) -> tuple[dict[str, str], str | None]:
@@ -116,6 +166,28 @@ def catalogue(html: str, url: str) -> tuple[dict[str, str], str | None]:
     return items, next_url
 
 
+def extract_page(content: str, source: str) -> dict[str, Any]:
+    soup = document(content)
+    entity = soup.select_one('[itemprop="mainEntity"]')
+    abstract = soup.select_one('[itemprop="abstract"], [itemprop="description"]')
+    if entity is None or abstract is None:
+        raise BrowserError("Source description structure missing")
+    details = {}
+    for item in entity.select("li"):
+        label = item.select_one("b")
+        if label and label.get_text(strip=True) != "Vues":
+            details[label.get_text(strip=True)] = item.get_text(" ", strip=True).split(":", 1)[-1].strip()
+    for name in ["author", "publisher", "datePublished", "inLanguage"]:
+        node = entity.select_one(f'[itemprop="{name}"]')
+        if node:
+            details[name] = str(node.get("content") or node.get_text(" ", strip=True))
+    image = soup.select_one("#item-cover")
+    cover = urljoin(source, str(image.get("data-src") or image.get("src"))) if image else None
+    return {"description": abstract.get_text("\n", strip=True), "details": details,
+            "cover_url": cover, "captured_at": datetime.now(timezone.utc).isoformat()}
+
+
+
 def resolve(html: str, url: str, hosters: set[str] | None, fetch: Callable[[str], str]) -> dict[str, Any]:
     soup = document(html)
     downloads = {}
@@ -139,8 +211,11 @@ def resolve(html: str, url: str, hosters: set[str] | None, fetch: Callable[[str]
         raise CollectionError(f"No selected hoster links found on {url}")
     heading = soup.select_one("h1")
     assert heading is not None
-    return {"title": heading.get_text(" ", strip=True), "downloads": downloads,
-            "complete_hosters": sorted(hosters) if hosters is not None else ["*"]}
+    result = {"title": heading.get_text(" ", strip=True), "downloads": downloads,
+              "complete_hosters": sorted(hosters) if hosters is not None else ["*"]}
+    if soup.select_one('[itemprop="mainEntity"]'):
+        result["page"] = extract_page(html, url)
+    return result
 
 
 def atomic_write(path: Path, content: str) -> None:

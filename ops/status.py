@@ -25,6 +25,7 @@ result = {
     "categories": monitor["categories"],
     "submitted_items": len(monitor["submissions"]),
     "backfill": backfill_summary,
+    "fiches": None,
     "package_count": len(queue),
     "packages": [{"pid": p["pid"], "name": p["name"], "destination": p["dest"],
         "files": [{k: f[k] for k in ["fid", "name", "plugin", "status", "statusmsg", "error", "size"]}
@@ -32,4 +33,11 @@ result = {
     "downloaded_files": [{"name": str(p.relative_to(root / "downloads")), "bytes": p.stat().st_size}
                          for p in sorted((root / "downloads").rglob("*")) if p.is_file()][:50],
 }
+fiche_path = root / "state/fiches.yaml"
+if fiche_path.exists():
+    from collections import Counter
+    progress = yaml.safe_load(fiche_path.read_text())
+    result["fiches"] = {"tracked": len(progress["items"]),
+                        "total": sum(e["status"] == "queued" for e in monitor["submissions"].values()),
+                        "states": dict(Counter(e["status"] for e in progress["items"].values()))}
 print(json.dumps(result, indent=2, ensure_ascii=False))
