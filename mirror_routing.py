@@ -14,7 +14,7 @@ from booksys import CollectionError
 from library.catalog import atomic_yaml, lock, now
 from library.intake import reception_path
 from library.readers import fingerprint, sha256
-from mirrors import host_sets
+from mirrors import host_sets, link_identity
 
 
 def package_signature(package: dict[str, Any]) -> list[list[Any]]:
@@ -88,7 +88,8 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
                 _, primary = select_primary(record, availability)
             except CollectionError as exc:
                 return {'outcome': 'pending', 'reason': str(exc)}
-        by_url = {item['url']: item for item in package['links']}
+        by_url = {link_identity(item['url']): item for item in package['links']}
+        primary = [link_identity(url) for url in primary]
         if len(by_url) != len(package['links']):
             raise CollectionError('Duplicate URLs in tracked package')
         if any(url not in by_url for url in primary):
@@ -104,7 +105,7 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
         if operation and operation.get('source') != source:
             raise CollectionError('Routing operation source changed')
         if not operation:
-            candidate = next(((host, urls) for host, urls in sets.items() if set(urls) != set(primary)), None) if failed else None
+            candidate = next(((host, urls) for host, urls in sets.items() if {link_identity(url) for url in urls} != set(primary)), None) if failed else None
             if failed and not candidate:
                 return {'outcome': 'pending', 'reason': 'No retained alternative complete host set'}
             operation = {'source': source, 'pid': pid, 'name': package['name'], 'phase': 'intent',

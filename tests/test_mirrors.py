@@ -9,6 +9,17 @@ import yaml
 
 
 class MirrorTests(unittest.TestCase):
+    def test_onefichier_affiliate_normalization_preserves_file_identity(self):
+        from mirrors import link_identity
+        self.assertEqual(link_identity('https://1fichier.com/?abc123&af=987'),
+                         link_identity('https://1fichier.com/?abc123'))
+        self.assertNotEqual(link_identity('https://1fichier.com/?abc123'),
+                            link_identity('https://1fichier.com/?different'))
+        self.assertNotEqual(link_identity('https://1fichier.com/?abc123&password=x'),
+                            link_identity('https://1fichier.com/?abc123'))
+        self.assertNotEqual(link_identity('https://other.example/?abc123&af=987'),
+                            link_identity('https://other.example/?abc123'))
+
     def test_submit_preserves_all_primary_parts_and_retains_other_urls(self):
         downloader = MemoryDownloader()
         downloader.host_availability = lambda: {'hosts': {'one': {'status': True, 'domains': ['1fichier.com']},

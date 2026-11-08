@@ -10,6 +10,16 @@ from urllib.request import Request, urlopen
 from booksys import CollectionError
 
 
+def link_identity(url: str) -> str:
+    """Match pyLoad's observed 1Fichier affiliate removal; preserve other semantics."""
+    parts = urlsplit(url)
+    if parts.hostname == '1fichier.com':
+        from urllib.parse import urlunsplit
+        query = '&'.join(token for token in parts.query.split('&') if token.split('=', 1)[0] != 'af')
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    return url
+
+
 def public_hosts() -> dict[str, Any]:
     request = Request('https://api.alldebrid.com/v4/hosts?agent=booksys', headers={'User-Agent': 'Booksys/0.1'})
     with urlopen(request, timeout=15) as response:
