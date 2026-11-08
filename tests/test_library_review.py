@@ -51,6 +51,66 @@ class ReviewTests(unittest.TestCase):
             store.save(state, expected=state['revision'])
             self.assertTrue(store.replay()['assets'][asset]['contested'])
 
+    def test_source_hint_discovers_reviewable_editions_without_embedded_identity(self):
+        import json
+        from urllib.parse import urlsplit
+        from library.metadata import Providers, enrich
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store, reception, _, asset = setup_library(root)
+            state = store.read()
+            state['works'], state['editions'], state['variants'] = {}, {}, {}
+            state['assets'][asset].pop('identity')
+            state['assets'][asset]['captured_hints'] = {'https://bookys-ebooks.com/item': {'title': 'One Piece'}}
+            store.save(state, expected=state['revision'])
+            calls = []
+            def fetch(url):
+                calls.append(url)
+                path = urlsplit(url).path
+                if path == '/search.json':
+                    return 200, json.dumps({'docs': [{'title': 'One Piece', 'edition_key': ['OL8692999M']}]})
+                if path == '/books/OL8692999M.json':
+                    return 200, json.dumps({'type': {'key': '/type/edition'}, 'key': '/books/OL8692999M',
+                        'title': 'One Piece, Vol. 1', 'authors': [{'key': '/authors/OL123A'}],
+                        'languages': [{'key': '/languages/eng'}], 'publishers': ['SHONEN JUMP'],
+                        'publish_date': '2003', 'edition_name': '1 edition',
+                        'works': [{'key': '/works/OL8215661W'}]})
+                if path == '/authors/OL123A.json':
+                    return 200, json.dumps({'name': 'Eiichiro Oda'})
+                self.fail('Unexpected provider request: ' + url)
+            providers = Providers(root / 'cache', fetch=fetch, interval=0, budget=4)
+            state = enrich(store, asset, providers, [])
+            self.assertNotIn('identity', state['assets'][asset])
+            case = next(v for v in report(store)['cases'].values() if v.get('asset') == asset)
+            candidate = case['candidates'][0]
+            self.assertEqual(candidate['edition_ref'], '/books/OL8692999M')
+            self.assertEqual(len(calls), 3)
+            request = {'request_id': 'review-discovered', 'case': case['id'], 'version': case['version'],
+                'action': 'identify', 'values': {'work_id': 'review-work', 'edition_id': 'review-edition',
+                'work': {k: candidate[k] for k in ('title', 'author', 'number')},
+                'edition': {**{k: candidate[k] for k in ('language', 'publisher', 'date', 'revision')},
+                    'evidence': {'operator': 'flowcool', 'source': candidate['url'],
+                                 'basis': 'fixture operator checked source against title page'}}}}
+            self.assertEqual(decide(store, [request], author='flowcool')[0]['status'], 'applied')
+            case = next(v for v in report(store)['cases'].values() if v.get('asset') == asset)
+            self.assertEqual(decide(store, [{'request_id': 'review-select', 'case': case['id'],
+                'version': case['version'], 'action': 'select', 'values': {}}], author='flowcool')[0]['status'], 'applied')
+            state = enrich(store, asset, providers, [])
+            self.assertFalse(state['assets'][asset].get('contested', False))
+            from library.review import render_report
+            rendered = render_report(report(store))
+            for text in ('One Piece, Vol. 1', 'Eiichiro Oda', 'SHONEN JUMP', '2003', '/books/OL8692999M'):
+                self.assertIn(text, rendered)
+            Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0)).publish(asset)
+            class ChangedEdition(Providers):
+                def edition(self, reference):
+                    result = super().edition(reference)
+                    if result['status'] == 'ok':
+                        result['candidate']['publisher'] = 'Conflicting publisher'
+                    return result
+            changed = ChangedEdition(root / 'cache', fetch=fetch, interval=0)
+            self.assertTrue(enrich(store, asset, changed, [])['assets'][asset]['contested'])
+
     def test_invalid_identity_never_enters_immutable_ledger(self):
         with tempfile.TemporaryDirectory() as folder:
             store, _, _, asset = setup_library(Path(folder))

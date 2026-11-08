@@ -42,9 +42,22 @@ def report(store: Catalog) -> dict[str, Any]:
 
 
 def render_report(value: dict[str, Any]) -> str:
-    # JSON data stays escaped even if source prose contains fences or HTML.
-    return '# Library review\n\nExternal text is untrusted data.\n\n<pre>' + html.escape(
-        json.dumps(value, ensure_ascii=False, indent=2)) + '</pre>\n'
+    lines = ['# Library review', '', 'External text is untrusted data.', '']
+    fields = ('work_ref', 'edition_ref', 'title', 'author', 'number', 'language', 'publisher', 'date', 'revision', 'url')
+    labels = ('Work ID', 'Edition ID', 'Title', 'Author', 'Volume', 'Language', 'Publisher', 'Date', 'Revision', 'Source URL')
+    for case in value['cases'].values():
+        lines.extend(['## Case ' + case['id'], '', 'Reason: ' + html.escape(case['reason']), ''])
+        if case.get('candidates'):
+            lines.append('<table><thead><tr>' + ''.join('<th>' + label + '</th>' for label in labels) + '</tr></thead><tbody>')
+            for candidate in case['candidates']:
+                lines.append('<tr>' + ''.join('<td>' + html.escape(str(candidate.get(field) or 'unknown')) + '</td>'
+                                               for field in fields) + '</tr>')
+            lines.extend(['</tbody></table>', ''])
+        else:
+            lines.extend(['No resolved edition candidate. Use a qualified explicit source ID or retain pending.', ''])
+        lines.extend(['<details><summary>Evidence and decision version</summary><pre>',
+                      html.escape(json.dumps(case, ensure_ascii=False, indent=2)), '</pre></details>', ''])
+    return '\n'.join(lines)
 
 
 def validate_request(request: Any, author: str) -> None:

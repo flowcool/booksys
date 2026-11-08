@@ -24,6 +24,8 @@ class IdentityTests(unittest.TestCase):
         class QualifiedFixtureProvider:
             def discover(self, title):
                 return {'status': 'ok', 'candidates': []}
+            def resolve_discovery(self, discovery):
+                return []
             def edition(self, code):
                 return {'status': 'ok', 'candidate': CANDIDATE}
         with tempfile.TemporaryDirectory() as folder:
@@ -84,6 +86,23 @@ class ProviderTests(unittest.TestCase):
         result = parse_mangadex({'id': 'id', 'attributes': {'title': {'en': 'Manga'}, 'contentRating': 'erotica'}})
         self.assertEqual(result['public'], 'erotica')
         self.assertEqual(result['genres'], [])
+
+    def test_malformed_edition_does_not_hide_later_discovery_candidates(self):
+        import json
+        def fetch(url):
+            if '/books/OL1M.json' in url:
+                return 200, json.dumps({'type': None, 'authors': [None]})
+            if '/books/OL2M.json' in url:
+                return 200, json.dumps({'type': {'key': '/type/edition'}, 'key': '/books/OL2M',
+                                       'title': 'Album', 'authors': [None]})
+            if '/books/OL3M.json' in url:
+                return 200, json.dumps({'type': {'key': '/type/edition'}, 'key': '/books/OL3M', 'title': 'Album'})
+            self.fail(url)
+        with tempfile.TemporaryDirectory() as folder:
+            providers = Providers(Path(folder), fetch=fetch, interval=0)
+            results = providers.resolve_discovery({'candidates': [
+                {'edition_key': ['OL1M']}, {'edition_key': ['OL2M']}, {'edition_key': ['OL3M']}]})
+            self.assertEqual([item['status'] for item in results], ['unavailable', 'unavailable', 'ok'])
 
     def test_cache_request_budget_and_source_failures(self):
         calls = []

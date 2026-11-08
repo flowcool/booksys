@@ -173,30 +173,70 @@ class Providers:
             return response
         try:
             data = json.loads(response['body'])
-            if not isinstance(data.get('docs'), list):
+            if not isinstance(data, dict) or not isinstance(data.get('docs'), list):
                 raise LibraryError('Unexpected OpenLibrary search response')
             return {'status': 'ok', 'candidates': data['docs'][:5], 'url': url,
                     'retrieved_at': response['retrieved_at']}
         except (ValueError, LibraryError, TypeError) as exc:
             return {'status': 'unavailable', 'reason': str(exc), 'url': url}
 
-    def edition(self, code: str) -> dict[str, Any]:
-        if not isbn13(code):
-            raise LibraryError('Invalid ISBN-13')
-        url = f'https://openlibrary.org/isbn/{code}.json'
+    def resolve_discovery(self, discovery: dict[str, Any]) -> list[dict[str, Any]]:
+        """Resolve at most three search hits. Search titles never establish identity."""
+        attempts = []
+        seen = set()
+        for hit in discovery.get('candidates', [])[:5]:
+            if not isinstance(hit, dict):
+                continue
+            references = hit.get('edition_key', [])
+            if not isinstance(references, list):
+                continue
+            for reference in references:
+                if isinstance(reference, str) and re.fullmatch(r'OL\d+M', reference) and reference not in seen:
+                    seen.add(reference)
+                    attempts.append(self.edition(reference))
+                    break
+            if len(attempts) == 3:
+                break
+        return attempts
+
+    def edition(self, reference: str) -> dict[str, Any]:
+        code = isbn13(reference)
+        if code:
+            url = f'https://openlibrary.org/isbn/{code}.json'
+        elif re.fullmatch(r'OL\d+M', reference):
+            url = f'https://openlibrary.org/books/{reference}.json'
+        else:
+            raise LibraryError('Invalid OpenLibrary edition reference')
         response = self.get(url)
         if response['status'] != 'ok':
             return response
         try:
             data = json.loads(response['body'])
-            if data.get('type', {}).get('key') != '/type/edition' or code not in data.get('isbn_13', []):
+            if not isinstance(data, dict) or not isinstance(data.get('type'), dict):
+                raise LibraryError('Malformed OpenLibrary edition record')
+            for field in ('authors', 'languages', 'works'):
+                if not isinstance(data.get(field, []), list) or any(not isinstance(item, dict)
+                        or not isinstance(item.get('key'), str) for item in data.get(field, [])):
+                    raise LibraryError('Malformed OpenLibrary edition links')
+            for field in ('publishers', 'isbn_13', 'source_records'):
+                if not isinstance(data.get(field, []), list) or any(not isinstance(item, str)
+                        for item in data.get(field, [])):
+                    raise LibraryError('Malformed OpenLibrary edition values')
+            if any(not isinstance(data.get(field, ''), str) for field in ('title', 'publish_date', 'edition_name', 'key')):
+                raise LibraryError('Malformed OpenLibrary edition fields')
+            if (data.get('type', {}).get('key') != '/type/edition' or
+                    (code and code not in data.get('isbn_13', [])) or
+                    (not code and data.get('key') != '/books/' + reference)):
                 raise LibraryError('Unexpected OpenLibrary edition response')
             authors = data.get('authors', [])
             author = ''
             if len(authors) == 1 and re.fullmatch(r'/authors/OL\d+A', authors[0].get('key', '')):
                 result = self.get('https://openlibrary.org' + authors[0]['key'] + '.json')
                 if result['status'] == 'ok':
-                    author = json.loads(result['body']).get('name', '')
+                    author_data = json.loads(result['body'])
+                    if not isinstance(author_data, dict) or not isinstance(author_data.get('name', ''), str):
+                        raise LibraryError('Malformed OpenLibrary author')
+                    author = author_data.get('name', '')
             languages = data.get('languages', [])
             language = languages[0]['key'].split('/')[-1] if len(languages) == 1 else ''
             language = {'eng': 'en', 'fre': 'fr', 'fra': 'fr', 'jpn': 'ja'}.get(language, language)
@@ -204,7 +244,8 @@ class Providers:
             works = data.get('works', [])
             volume = re.search(r'\b(?:vol(?:ume)?\.?|tome)\s*(\d+)\b', data['title'], re.I)
             candidate = {'source': 'openlibrary', 'upstream': 'openlibrary', 'url': url,
-                'retrieved_at': response['retrieved_at'], 'isbn': code, 'title': data['title'],
+                'retrieved_at': response['retrieved_at'], 'isbn': code or next((value for value in
+                    data.get('isbn_13', []) if isinstance(value, str) and isbn13(value)), None), 'title': data['title'],
                 'author': author, 'number': volume.group(1) if volume else '',
                 'language': language, 'publisher': publishers[0] if len(publishers) == 1 else '',
                 'date': data.get('publish_date', ''), 'revision': data.get('edition_name', ''),
@@ -215,6 +256,8 @@ class Providers:
             return {'status': 'unavailable', 'reason': str(exc), 'url': url}
 
     def source(self, provider: str, reference: str) -> dict[str, Any]:
+        if provider == 'openlibrary':
+            return self.edition(reference)
         if provider == 'bdtheque' and re.fullmatch(r'\d+/[a-z0-9-]+', reference):
             url = f'https://www.bdtheque.com/series/{reference}'
             parser = parse_bdtheque
@@ -257,19 +300,35 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
     state = store.read()
     asset = state['assets'][asset_id]
     # All external work happens on the snapshot, outside catalogue locks.
+    candidates = []
     for provider, ref in references:
-        add_assertions(asset, providers.source(provider, ref))
+        response = providers.source(provider, ref)
+        add_assertions(asset, response)
+        if response['status'] == 'ok' and 'candidate' in response:
+            candidates.append(response['candidate'])
     embedded = asset.get('embedded', {})
     code = isbn13(str(embedded.get('ISBN', embedded.get('GTIN', ''))))
-    candidates = []
     title = str(embedded.get('Title', ''))
+    hint_source = 'embedded:Title'
+    if not title:
+        for source, hint in sorted(asset.get('captured_hints', {}).items()):
+            if isinstance(hint, dict) and isinstance(hint.get('title'), str) and hint['title'].strip():
+                title, hint_source = hint['title'], source
+                break
     if title:
+        asset['discovery_hint'] = {'title': title, 'source': hint_source, 'validation': 'discovery_only'}
         asset['discovery'] = providers.discover(title)
+        attempts = providers.resolve_discovery(asset['discovery'])
+        asset['discovery']['edition_attempts'] = attempts
+        candidates.extend(attempt['candidate'] for attempt in attempts
+                          if attempt['status'] == 'ok' and 'candidate' in attempt)
     if code:
         response = providers.edition(code)
         asset.setdefault('source_attempts', []).append({k: v for k, v in response.items() if k != 'body'})
         if response['status'] == 'ok':
             candidates.append(response['candidate'])
+    candidates = list({(candidate['source'], candidate['edition_ref']): candidate
+                       for candidate in candidates}.values())
     result = identify(embedded, candidates)
     asset['identity_result'] = result
     if result['status'] == 'identified':
@@ -286,6 +345,18 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
                             'date': candidate['date'], 'revision': candidate['revision'], 'evidence': result['evidence']}}})
             state['editions'][eid].setdefault('selected', asset['identity']['variant'])
     elif asset.get('identity') and candidates:
-        asset['contested'] = True
+        # Search alternatives or insufficient evidence do not contradict an
+        # operator decision. Only a refreshed record for its cited edition does.
+        identity = asset['identity']
+        edition = state['editions'][identity['edition']]
+        work = state['works'][identity['work']]
+        evidence = edition.get('evidence', {})
+        cited = {value for key, value in evidence.items() if key in ('url', 'source') and isinstance(value, str)}
+        for candidate in candidates:
+            if candidate['url'] in cited and any(candidate.get(field) and known.get(field) and
+                    normalized(candidate[field]) != normalized(known[field])
+                    for known, fields in ((work, ('title', 'author', 'number')),
+                                          (edition, ('language', 'publisher', 'date', 'revision'))) for field in fields):
+                asset['contested'] = True
     store.save(state, expected=state['revision'])
     return store.read()
