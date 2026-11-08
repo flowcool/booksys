@@ -28,6 +28,8 @@ def proof() -> dict[str, Any]:
     history = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (collector / 'backfill-history').glob('*.yaml')}
     retirements = read_yaml(collector / 'package-retirement.yaml').get('acquisitions', {})
     catalogue = read_yaml(Path('/data/booksys/library-lab/state/library.yaml'), max_bytes=128 * 1024 * 1024)
+    if not isinstance(catalogue.get('origins'), dict) or not isinstance(catalogue.get('assets'), dict):
+        raise RuntimeError('Canonical catalogue observation unavailable')
     origins = {k: {'sha256': v.get('sha256'), 'source': hashlib.sha256(v.get('source', '').encode()).hexdigest()}
                for k, v in catalogue.get('origins', {}).items()}
     output = subprocess.run(['docker', 'inspect', '--format', '{{.Name}} {{.Id}} {{.Image}} {{.State.Running}}',
@@ -64,6 +66,8 @@ def main() -> None:
         raise RuntimeError('Shared observer did not refresh')
     if any(v['freshness'] != 'current' for v in samples[1]['resources'].values()):
         raise RuntimeError('Resource observations are not current')
+    if any(samples[1]['stages'][name]['queue_freshness'] != 'current' for name in ('local', 'identity')):
+        raise RuntimeError('Library queue observations are not current')
     before = json.loads((args.evidence / 'preservation-before.json').read_text())
     after = proof()
     for field in ('submission_ids', 'backfill_history', 'origins'):
@@ -73,7 +77,7 @@ def main() -> None:
         raise RuntimeError('Terminal retirement evidence changed')
     (args.evidence / 'preservation-after.json').write_text(json.dumps(after, indent=2))
     (args.evidence / 'acceptance.json').write_text(json.dumps({'refreshed': True, 'resources_current': True,
-        'old_submissions_preserved': True, 'old_origins_preserved': True, 'history_preserved': True}, indent=2))
+        'library_queues_current': True, 'old_submissions_preserved': True, 'old_origins_preserved': True, 'history_preserved': True}, indent=2))
     print('Activity refresh, resources and canonical preservation passed')
 
 
