@@ -9,4 +9,7 @@
 library/__pycache__/
 !mirrors.py
 !mirror_routing.py
+!ops/
+!ops/byparr/
+!ops/byparr/session_api.py
 !retirement_history.py

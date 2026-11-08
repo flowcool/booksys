@@ -1,7 +1,10 @@
 name: booksys
 services:
   byparr:
-    image: ghcr.io/thephaseless/byparr@sha256:c66fa161187b8fa527bfad7eefa2647ea1c553f77df68cbffd6fe83366d1787b
+    build:
+      context: .
+      dockerfile: Dockerfile.byparr
+    image: booksys-byparr:local
     restart: unless-stopped
     shm_size: 512m
     mem_limit: 1536m
@@ -9,8 +12,8 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      # Upstream /health launches a browser against Google. Readiness only needs HTTP.
-      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8191/docs"]
+      # Booksys /health checks the local session manager without navigation.
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8191/health"]
       interval: 10s
       timeout: 3s
       retries: 6

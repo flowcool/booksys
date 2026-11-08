@@ -42,6 +42,45 @@ The initial comparison and the decision to keep pyLoad-ng are in [README](../REA
 `compose.shared.yaml` owns the existing downloader and connects it to the collector network.
 The worker image reuses the pinned Byparr base. Only the `byparr` service starts its browser API.
 
+## Bookys browser session
+
+`Dockerfile.byparr` adds `ops/byparr/session_api.py` to the pinned Byparr image.
+The upstream revision checked on 8 November 2026 was
+[`d28db93`](https://github.com/ThePhaseless/Byparr/tree/d28db932dd99bb0d56d1ddaff5ee0da1ac39ba14).
+Its `/v1` handler still creates a new browser context for each request and has no
+session parameter. Booksys keeps its browser factory and Cloudflare handler. A
+small local entrypoint owns their lifetime. No second browser solver is added.
+
+The runtime API retains one browser, context and page for the exact Bookys origin
+`https://www7.bookys-ebooks.com`. Only `request.get` HTML requests are accepted.
+Main-frame navigation to another origin is blocked. Covers keep their existing
+same-site HTTP path. Cookies and browser storage stay in the transient browser
+context. No persistent profile volume or exported cookie file is added. The response contract stays
+compatible with `booksys.Byparr`, including the cookies needed for covers.
+
+One caller can use the page at a time. Another caller receives HTTP 429 rather
+than navigating the shared page. The collector retains its two-second pause.
+Upstream media routes are replaced per request, so handlers cannot accumulate.
+The browser is renewed after 256 successful requests, one hour of age, 30 minutes
+without a request, or cgroup memory reaching 80% of its limit. These bounds are
+local resource controls; they do not represent Cloudflare cookie expiry. A real
+expired clearance can trigger the normal solver inside the retained context.
+
+A timeout, solver failure or invalid HTML discards the context and fails the
+request. There is no immediate retry or downloader resend. The next ordinary
+collector cycle starts a fresh context and uses its existing journals. The total
+request budget includes browser launch and is at most 60 seconds. Cleanup has a
+five-second limit. Failed cleanup makes the service unavailable until restart.
+`/health` reports local session-manager state without browsing an external site.
+Logs contain generation, request count, duration and reset reasons, never cookie
+values. Docker's 1536 MiB memory cap remains the hard limit.
+
+The standalone manual `compose.yaml` keeps upstream Byparr. Only
+`compose.runtime.yaml` selects the Booksys session image. Tests for `/v1` run in
+the pinned image without network or live mounts. The ordinary host suite skips
+those image-specific tests. The bounded comparison script parses real catalogue,
+item and link pages, but never follows an outgoing hoster URL or calls pyLoad.
+
 ## Collection and watermark
 
 1. A new monitor reads the first catalogue page and records its maximum item ID.
