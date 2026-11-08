@@ -73,13 +73,15 @@ def run_sample(image: str, mode: str, output: Path, repeat: int) -> dict[str, An
         return {"image_id": image_id, "requests": len(rows), "seconds": round(sum(r["seconds"] for r in rows), 3),
                 "memory_samples": [r["memory_bytes"] for r in rows]}
     finally:
-        # Docker writes application logs to stderr too.
-        captured = subprocess.run(["docker", "logs", name], capture_output=True, text=True, check=True)
-        logs = captured.stdout + captured.stderr
-        (output / (mode + ".log")).write_text(logs)
-        (output / (mode + "-challenges.json")).write_text(json.dumps({
-            "challenges": logs.count("Challenge detected, waiting for it to clear...")}))
-        docker("stop", "--timeout", "10", name)
+        try:
+            # Docker writes application logs to stderr too.
+            captured = subprocess.run(["docker", "logs", name], capture_output=True, text=True, check=True)
+            logs = captured.stdout + captured.stderr
+            (output / (mode + ".log")).write_text(logs)
+            (output / (mode + "-challenges.json")).write_text(json.dumps({
+                "challenges": logs.count("Challenge detected, waiting for it to clear...")}))
+        finally:
+            docker("stop", "--timeout", "10", name)
 
 
 def main() -> None:

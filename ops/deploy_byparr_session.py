@@ -86,6 +86,12 @@ def main() -> None:
         service = compose["services"]["byparr"]
         service.pop("build", None)
         service["image"] = old_image
+        health = browser["Config"]["Healthcheck"]
+        service["healthcheck"] = {"test": health["Test"], "retries": health["Retries"]}
+        for source, target in [("Interval", "interval"), ("Timeout", "timeout"),
+                               ("StartPeriod", "start_period")]:
+            if health.get(source):
+                service["healthcheck"][target] = str(health[source]) + "ns"
         (recovery / "rollback.json").write_text(json.dumps(compose, indent=2))
         service["image"] = candidate
         service["healthcheck"]["test"][-1] = "http://127.0.0.1:8191/health"

@@ -52,8 +52,8 @@ small local entrypoint owns their lifetime. No second browser solver is added.
 The runtime API retains one browser, context and page for the exact Bookys origin
 `https://www7.bookys-ebooks.com`. Only `request.get` HTML requests are accepted.
 Main-frame navigation to another origin is blocked. Covers keep their existing
-same-site HTTP path. Cookies and browser storage remain in the browser's transient
-context; no profile volume or cookie file is created. The response contract stays
+same-site HTTP path. Cookies and browser storage stay in the transient browser
+context. No persistent profile volume or exported cookie file is added. The response contract stays
 compatible with `booksys.Byparr`, including the cookies needed for covers.
 
 One caller can use the page at a time. Another caller receives HTTP 429 rather
