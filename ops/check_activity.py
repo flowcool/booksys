@@ -71,8 +71,15 @@ def main() -> None:
     before = json.loads((args.evidence / 'preservation-before.json').read_text())
     after = proof()
     for field in ('submission_ids', 'backfill_history', 'origins'):
-        if any(after[field].get(k) != v for k, v in before[field].items()):
-            raise RuntimeError('Prior ' + field + ' changed; inspect evidence')
+        for key, old in before[field].items():
+            if key not in after[field]:
+                raise RuntimeError('Prior ' + field + ' disappeared; inspect evidence')
+            current = after[field][key]
+            # Normal processing can assign a previously unknown package/hash.
+            changed = (any(v is not None and current.get(k) != v for k, v in old.items())
+                       if field == 'origins' else old is not None and current != old)
+            if changed:
+                raise RuntimeError('Prior known ' + field + ' changed; inspect evidence')
     if any(after['retirements'].get(k) != 'retired' for k, v in before['retirements'].items() if v == 'retired'):
         raise RuntimeError('Terminal retirement evidence changed')
     (args.evidence / 'preservation-after.json').write_text(json.dumps(after, indent=2))
