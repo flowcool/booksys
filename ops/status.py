@@ -12,7 +12,8 @@ root = Path("/data/booksys")
 credentials = json.loads((root / "secrets/pyload.json").read_text())
 api = Pyload("http://127.0.0.1:8000", credentials["api_key"])
 monitor = yaml.safe_load((root / "state/monitor.yaml").read_text())
-queue = api.call("get_queue_data")
+from mirrors import logical_snapshot
+queue = logical_snapshot(api, root / "state/mirror-routing.yaml")
 backfill_path = root / "state/backfill.yaml"
 backfill = yaml.safe_load(backfill_path.read_text()) if backfill_path.exists() else None
 backfill_summary = None if backfill is None else {

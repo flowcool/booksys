@@ -15,7 +15,8 @@ class ServiceTests(unittest.TestCase):
             root = Path(folder);setup_library(root)
             with patch('sys.argv', ['service', '--root', str(root), '--credentials', str(root/'secret'),
                                    '--listen', '127.0.0.1', '--port', '0']), \
-                 patch.object(module.subprocess, 'run', side_effect=OSError('fixture launch failure')):
+                 patch.object(module.subprocess, 'run', side_effect=OSError('fixture launch failure')) as launch:
                 with self.assertRaisesRegex(RuntimeError, 'cycle thread failed'):
                     module.main()
+            self.assertIn('--route-mirrors', launch.call_args.args[0])
             self.assertEqual(module.read_yaml(root/'evidence/cycle.yaml')['status'], 'blocked')

@@ -7,3 +7,5 @@
 !library/
 !library/**
 library/__pycache__/
+!mirrors.py
+!mirror_routing.py

@@ -59,7 +59,7 @@ uv run python booksys.py --pages 1 --max-items 2
 This manual command includes existing entries. It does not use the new-entry watermark.
 Default output directory: `data/`. Use `--category` repeatedly for several categories.
 `--pages 0` follows all pages. `--max-items 0` has no item limit.
-The default collects every hoster. `--hoster <label>` is an optional exact lowercase filter.
+The default collects every hoster. Automatic submission selects one complete currently supported AllDebrid hoster set. `--hoster <label>` is an optional exact lowercase filter.
 Requests are sequential, with a two second pause between them.
 The collector extracts hoster URLs but never visits them itself.
 The automatic downloader does visit and download those URLs.

@@ -54,8 +54,8 @@ class FicheTests(unittest.TestCase):
         package = {"folder": "example", "pid": 8, "links": [{"fid": 9, "name": "example.cbz", "statusmsg":"finished", "plugin":"Host", "size":3}]}
         class Api:
             def call(self, method, **kwargs):
-                assert method == "get_queue_data" and not kwargs, "Enrichment must never write to pyLoad"
-                return [package]
+                assert method in ("get_queue_data", "get_collector_data") and not kwargs, "Enrichment must never write to pyLoad"
+                return [package] if method == "get_queue_data" else []
         class Browser:
             calls = 0
             image_calls = 0
@@ -148,7 +148,7 @@ class FicheTests(unittest.TestCase):
             downloader=Downloader();downloader.downloads=Path(tmp)
             downloader.fetch_image=lambda u,s:(JPEG,".jpg")
             record={"title":"Example","page":extract_page(HTML,SOURCE),
-                    "downloads":{"x":{"metadata":"CBZ","urls":["https://host.example/file"]}}}
+                    "downloads":{"x":{"hoster":"fixture","metadata":"CBZ","urls":["https://host.example/file"]}}}
             from pipeline import save
             journal={"submissions":{}}
             self.assertEqual(downloader.submit(SOURCE,record,journal,Path(tmp)/"monitor.yaml"),1)
@@ -159,7 +159,7 @@ class FicheTests(unittest.TestCase):
         from pipeline import run_fiche_once, save
         class Api:
             def call(self,method):
-                return [{"pid":8,"folder":"example","links":[]}]
+                return [{"pid":8,"folder":"example","links":[]}] if method == "get_queue_data" else []
         class Browser:
             def __init__(self,stage):self.stage=stage
             def __call__(self,source):return '<h1>Unexpected page</h1>' if self.stage=="page" else HTML

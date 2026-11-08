@@ -44,7 +44,7 @@ def main() -> None:
             started = time.monotonic()
             # The child holds the whole-cycle lock. This single thread never overlaps children.
             result = subprocess.run([sys.executable, str(Path(__file__).with_name('library_cycle.py')),
-                '--root', str(args.root), '--credentials', str(args.credentials), '--auto', '--budget', '50'],
+                '--root', str(args.root), '--credentials', str(args.credentials), '--auto', '--route-mirrors', '--budget', '50'],
                 capture_output=True, text=True)
             (evidence / 'automatic-cycle.stdout').write_text(result.stdout)
             (evidence / 'automatic-cycle.stderr').write_text(result.stderr)

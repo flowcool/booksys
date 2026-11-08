@@ -30,6 +30,7 @@ def main() -> int:
     parser.add_argument('--printed', action='store_true', help='Bounded OCR on selected assets only')
     parser.add_argument('--budget', type=int, default=2, help='Total provider request budget for this cycle')
     parser.add_argument('--auto', action='store_true', help='Bounded new-input processing; uncertain identities are not retried')
+    parser.add_argument('--route-mirrors', action='store_true', help='Apply one journaled native mirror routing operation after intake')
     args = parser.parse_args()
     inputs = (args.captured, args.submissions, *(p for p in (args.queue, args.credentials) if p))
     try:
@@ -69,7 +70,8 @@ def cycle(args: argparse.Namespace) -> int:
         else:
             from pipeline import Pyload
             client = Pyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'])
-            value = client.call('get_queue_data')
+            from mirrors import logical_snapshot
+            value = logical_snapshot(client, args.submissions.parent / 'mirror-routing.yaml')
             if not isinstance(value, list):
                 raise LibraryError('Unexpected queue snapshot')
             atomic_yaml(snapshots / 'queue.yaml', value)
@@ -96,6 +98,27 @@ def cycle(args: argparse.Namespace) -> int:
         if args.auto:
             from library.automatic import process_assets
             automatic = process_assets(store, args.reception, library, providers)
+        mirror_results = []
+        if getattr(args, 'route_mirrors', False):
+            if not args.credentials:
+                raise LibraryError('Mirror routing requires controller credentials')
+            from pipeline import Pyload
+            client = Pyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'])
+            from mirror_routing import route_package
+            from mirrors import public_hosts
+            from library.cli import load
+            availability = public_hosts()
+            records, submissions = load(snapshots / 'captured.yaml')['items'], load(snapshots / 'submissions.yaml')['submissions']
+            routing_path = args.submissions.parent / 'mirror-routing.yaml'
+            for source, entry in submissions.items():
+                if entry.get('status') != 'queued' or source not in records:
+                    continue
+                result = route_package(client, source, entry, records[source], store.read(), args.reception,
+                                       routing_path, apply=True, availability=availability)
+                mirror_results.append(result)
+                if result['outcome'] in ('parked', 'fallback_active'):
+                    break
+            atomic_yaml(evidence / 'mirror-routing-cycle.yaml', {'created_at': now(), 'results': mirror_results})
         for asset in dict.fromkeys(args.asset if not args.auto else []):
             if asset not in store.read()['assets']:
                 raise LibraryError('Selected asset is absent from tracked intake')
@@ -126,7 +149,7 @@ def cycle(args: argparse.Namespace) -> int:
             origin_counts[kind] += 1
         intake_backlog = sum(o.get('reason') == 'Intake budget deferred' for o in current['origins'].values())
         summary = {'status': 'lab', 'started_at': started_at, 'finished_at': now(),
-                   'duration_seconds': round(time.monotonic() - started, 3), **automatic,
+                   'duration_seconds': round(time.monotonic() - started, 3), **automatic, 'mirror_outcomes': len(mirror_results),
                    'intake_backlog': intake_backlog, 'assets': len(current['assets']), 'origins': len(current['origins']),
                    'published': len(published), 'pending_assets': len(set(current['assets']) - published),
                    'origin_counts': origin_counts, 'report': str(evidence / 'review.md'),

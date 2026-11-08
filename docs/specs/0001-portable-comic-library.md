@@ -461,8 +461,11 @@ hoster link automatically, not the requirement to preserve the captured links.
   their exit. The library and collector read both pyLoad destinations so these
   packages and their files remain visible. Do not change Lunii packages.
 - New submissions enqueue the complete primary set only. Saved source URLs
-  remain the fallback authority. Journal fallback addition and reconcile URLs
-  before retrying an uncertain API write. Never duplicate an add_files call.
+  remain the fallback authority. Create one separate attempt package for one
+  complete fallback hoster set. Keep the original package, IDs and files in the
+  collector. Use a distinct attempt directory. Journal creation and reconcile
+  the exact name and complete URL set after an uncertain API write. Never resend
+  an unconfirmed create. This native choice avoids waking all legacy mirrors.
 - Restore the same package destination/order for rollback. Keep the single
   downloader and source files. Hoster availability comes from the current
   provider response, not an assumption that every mirror is supported.

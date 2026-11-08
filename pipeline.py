@@ -1,4 +1,4 @@
-"""Watch new category entries and submit every collected link to local pyLoad."""
+"""Watch new category entries and submit the available AllDebrid primary host set to local pyLoad."""
 
 from __future__ import annotations
 
@@ -55,6 +55,10 @@ class Pyload:
             raise CollectionError(f"pyLoad rejected {method}")
         return result
 
+    def host_availability(self) -> dict[str, Any]:
+        from mirrors import public_hosts
+        return public_hosts()
+
     def submit(self, source: str, record: dict[str, Any], journal: dict[str, Any], path: Path) -> int:
         """Create in collector, verify all links, then move to the download queue.
 
@@ -67,7 +71,13 @@ class Pyload:
             return int(entry["package_id"])
         marker = "Booksys-" + hashlib.sha256(source.encode()).hexdigest()[:16]
         name = f"{marker} {record['title']}"
-        links = sorted({link for download in record["downloads"].values() for link in download["urls"]})
+        from mirrors import host_sets, select_primary
+        all_links = sorted({url for urls in host_sets(record).values() for url in urls})
+        if entry:
+            links = entry['links']
+            host = entry.get('primary_host')
+        else:
+            host, links = select_primary(record, self.host_availability())
         if not links:
             raise CollectionError("Refusing to submit an empty item")
         packages = self.call("get_queue") + self.call("get_collector")
@@ -79,15 +89,17 @@ class Pyload:
         elif entry:
             raise CollectionError(f"Unconfirmed pyLoad write for {marker}; no automatic resend")
         else:
-            submissions[source] = {"status": "creating", "name": name, "links": links}
+            submissions[source] = {"status": "creating", "name": name, "links": links, "all_links": all_links,
+                                   "primary_host": host, "primary_selected_at": datetime.now(timezone.utc).isoformat()}
             save(path, journal)
             result = self.call("add_package", write=True, name=name, links=links, dest=0)
             if type(result) is not int:
                 raise CollectionError("pyLoad returned an invalid package ID")
             package_id = result
         package = self.call("get_package_data", package_id=package_id)
-        actual = {file["url"] for file in package["links"]}
-        if actual != set(links):
+        from collections import Counter
+        actual = Counter(file["url"] for file in package["links"])
+        if actual != Counter(links):
             raise CollectionError(f"pyLoad link readback differs for {marker}; queue unchanged")
         if self.downloads is not None:
             try:
@@ -96,7 +108,8 @@ class Pyload:
                 if isinstance(exc, BrowserError):
                     raise
                 logging.warning("Text fiche saved; cover pending for %s: %s", source, exc)
-        submissions[source] = {"status": "moving", "name": name, "links": links, "package_id": package_id}
+        submissions[source] = {**submissions.get(source, {}), "status": "moving", "name": name, "links": links,
+                               "all_links": all_links, "primary_host": host, "primary_links": links, "package_id": package_id}
         save(path, journal)
         if package["dest"] != 1:
             self.call("move_package", write=True, destination=1, package_id=package_id)
@@ -117,6 +130,8 @@ def export_catalogue(directory: Path, records: dict[str, Any], journal: dict[str
             continue
         package = packages.get(entry["package_id"])
         record = records.get(source, {})
+        attempts = [p for p in packages.values() if p.get("mirror_source") == source]
+        represented = ([package] if package else []) + attempts
         page = record.get("page", {})
         items[source] = {"title": record.get("title"), "metadata": page,
                          "package_id": entry["package_id"],
@@ -124,8 +139,9 @@ def export_catalogue(directory: Path, records: dict[str, Any], journal: dict[str
                          "fiche_status": progress["items"].get(source, {}).get("status", "pending"),
                          "fiche_relative": progress["items"].get(source, {}).get("fiche_relative"),
                          "cover_relative": progress["items"].get(source, {}).get("cover_relative"),
-                         "files": [{k: f.get(k) for k in ["fid", "name", "url", "plugin", "statusmsg", "size"]}
-                                   for f in package["links"]] if package else []}
+                         "attempt_packages": [{"pid": p["pid"], "folder": p["folder"], "dest": p.get("dest")} for p in attempts],
+                         "files": [{**{k: f.get(k) for k in ["fid", "name", "url", "plugin", "statusmsg", "size"]}, "package_id": p["pid"], "folder": f.get("input_folder", p["folder"])}
+                                   for p in represented for f in p["links"]]}
     save(directory / "catalogue.yaml", {"version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
          "source_text_is_untrusted": True, "paths_relative_to": "package download root",
          "items": items})
@@ -144,7 +160,8 @@ def run_fiche_once(directory: Path, browser: Byparr, downloader: Pyload, root: P
         progress = yaml.safe_load(path.read_text()) if path.exists() else {"version": 1, "items": {}}
         if progress.get("version") != 1:
             raise CollectionError("Unsupported fiche progress")
-        packages = {p["pid"]: p for p in downloader.call("get_queue_data")}
+        from mirrors import logical_snapshot
+        packages = {p["pid"]: p for p in logical_snapshot(downloader, directory / "mirror-routing.yaml")}
         attempted = False
         for source, entry in journal["submissions"].items():
             if entry["status"] != "queued":

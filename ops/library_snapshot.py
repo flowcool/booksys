@@ -17,10 +17,12 @@ def main() -> int:
     parser.add_argument('--credentials', type=Path, required=True)
     parser.add_argument('--endpoint', default='http://127.0.0.1:8000')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--routing', type=Path, help='Private mirror routing journal for retained file folders')
     args = parser.parse_args()
     credentials = json.loads(args.credentials.read_text())
     client = Pyload(args.endpoint, credentials['api_key'])
-    value = client.call('get_queue_data')
+    from mirrors import logical_snapshot
+    value = logical_snapshot(client, args.routing)
     if not isinstance(value, list):
         raise ValueError('Unexpected pyLoad read-only queue response')
     atomic_yaml(args.output, value)

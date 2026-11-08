@@ -160,7 +160,7 @@ class CLITests(unittest.TestCase):
                 capture_output=True, text=True)
             server.shutdown()
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls, ['/api/get_queue_data'])
+            self.assertEqual(calls, ['/api/get_queue_data', '/api/get_collector_data'])
             self.assertNotIn('fixture-key', result.stdout)
     def test_tool_lifecycle_and_safe_preview(self):
         with tempfile.TemporaryDirectory() as folder:

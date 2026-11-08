@@ -31,6 +31,11 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
     inspected = 0
     bundle_preparations = 0
     submissions = list(journal.get('submissions', {}).items())
+    for attempt_package in queue:
+        attempt_source = attempt_package.get('mirror_source')
+        owner = journal.get('submissions', {}).get(attempt_source, {})
+        if isinstance(attempt_source, str) and owner.get('package_id') == attempt_package.get('mirror_original_pid'):
+            submissions.append((attempt_source, {'status': 'queued', 'package_id': attempt_package['pid'], 'name': attempt_package['name']}))
     if incremental:
         def priority(entry: tuple[str, Any]) -> tuple[bool, int]:
             source, submission = entry
@@ -61,14 +66,14 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             if name == 'fiche.md' or name.startswith('couverture.'):
                 continue
             origin = {'source': source, 'pid': pid, 'fid': fid,
-                      'path': str(Path(package['folder']) / name),
+                      'path': str(Path(item.get('input_folder', package['folder'])) / name),
                       'sha256': state['origins'].get(oid, {}).get('sha256'),
                       'observed_at': now(), 'availability': 'pending',
                       'transfer_status': item.get('status'),
                       'transfer_error': bool(item.get('error')),
                       'reported_size': item.get('size'), 'local_size': None, 'size_warning': ''}
             try:
-                path = reception_path(root, package['folder'], name)
+                path = reception_path(root, item.get('input_folder', package['folder']), name)
                 # Exact pinned pyLoad status: core/datatypes/pyfile.py: finished = 0.
                 if type(item.get('status')) is not int or item['status'] != 0:
                     origin['reason'] = 'Transfer is not confirmed finished'

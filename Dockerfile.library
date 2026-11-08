@@ -5,7 +5,7 @@ RUN printf 'deb http://deb.debian.org/debian trixie non-free\n' > /etc/apt/sourc
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv==0.9.9 && uv sync --frozen --no-dev
-COPY booksys.py pipeline.py fiches.py ./
+COPY booksys.py pipeline.py fiches.py mirrors.py mirror_routing.py ./
 COPY library ./library
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER 1001:1001

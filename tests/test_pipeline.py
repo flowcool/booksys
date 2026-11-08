@@ -23,6 +23,10 @@ class MemoryDownloader(Pyload):
         self.lose_response = False
         self.modify_links = False
 
+    def host_availability(self):
+        return {'hosts': {'fixture': {'status': True, 'domains': ['1fichier.com', 'nitroflare.com',
+            'rapidgator.net', 'example.com', 'example.org', 'host.test', 'host.example']}}}
+
     def call(self, method, *, write=False, **parameters):
         if method == "status_server":
             return {"pause": False, "download": True}
@@ -140,7 +144,7 @@ class PipelineTests(unittest.TestCase):
             server.server_close()
             thread.join()
 
-    def test_initialize_then_queue_new_entry_with_all_links_once(self):
+    def test_initialize_then_queue_new_entry_with_primary_host_set_once(self):
         current = [FIRST]
         calls = []
         def fetch(url):
@@ -161,14 +165,14 @@ class PipelineTests(unittest.TestCase):
             result = run_once(directory, fetch, downloader, minimum_free=0)
             self.assertEqual(result["queued"], 1)
             self.assertEqual(downloader.packages[0]["dest"], 1)
-            self.assertEqual(len(downloader.packages[0]["links"]), 2)
+            self.assertEqual(len(downloader.packages[0]["links"]), 1)
             run_once(directory, fetch, downloader, minimum_free=0)
             self.assertEqual(downloader.creates, 1)
             self.assertNotIn(FIRST, calls)
 
     def test_lost_create_response_is_reconciled_without_resend(self):
         downloader = MemoryDownloader()
-        record = {"title": "New", "downloads": {"x": {"urls": ["https://host.example/a"]}}}
+        record = {"title": "New", "downloads": {"x": {"hoster": "fixture", "urls": ["https://host.example/a"]}}}
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "monitor.yaml"
             journal = {"submissions": {}}
@@ -183,7 +187,7 @@ class PipelineTests(unittest.TestCase):
     def test_mismatched_readback_does_not_start_download(self):
         downloader = MemoryDownloader()
         downloader.modify_links = True
-        record = {"title": "New", "downloads": {"x": {"urls": ["https://host.example/a"]}}}
+        record = {"title": "New", "downloads": {"x": {"hoster": "fixture", "urls": ["https://host.example/a"]}}}
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(CollectionError):
                 downloader.submit(NEW, record, {"submissions": {}}, Path(temporary) / "journal.yaml")
