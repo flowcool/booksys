@@ -1,5 +1,10 @@
 # Architecture
 
+The separate portable-library component is described in
+library qualification and library tools.
+It reads captured state and known submission origins. It never writes the collector
+state, existing URL-keyed catalogue or downloader queue.
+
 ## Scope
 
 The operator selected new entries in the Bookys **bandes dessinées / new** category.

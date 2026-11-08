@@ -1,0 +1,24 @@
+name: booksys-library
+services:
+  library:
+    profiles: [library]
+    build:
+      context: .
+      dockerfile: Dockerfile.library
+    image: booksys-library:local
+    user: "1001:1001"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 1
+    pids_limit: 64
+    tmpfs: [/tmp:size=64m,mode=1777]
+    volumes:
+      - /data/booksys/downloads:/reception:ro
+      - /data/booksys/library:/library
+      - /data/booksys/library-state:/state
+    # This service inspects local state. The host controller uses bubblewrap or
+    # separate Docker reader one-offs. Never mount the Docker socket here.
+    command: [--state, /state, status]

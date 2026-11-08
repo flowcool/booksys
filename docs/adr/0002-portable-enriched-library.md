@@ -15,7 +15,7 @@ les corrections manuelles prioritaires. Les fiches sont des exports de ce catalo
 Le catalogue par URL Bookys existant reste un export de collecte séparé.
 
 La réception conserve les originaux. La bibliothèque `/data/booksys/library/bd/`
-reçoit des copies indépendantes des PDF, CBZ et CBR Booksys validés. Un fichier
+reçoit des PDF inchangés et des CBZ indépendants des fichiers Booksys validés. Un fichier
 identique n'y apparaît qu'une fois. Une seule variante de chaque édition est exposée
 par défaut. Les variantes non choisies restent référencées dans la réception.
 Les lots à décomposer, les cas incertains et les fichiers Lunii restent hors bibliothèque.
@@ -35,6 +35,14 @@ après contrôle de sa version et conservent l'ancienne révision pour le retour
 
 Nous écartons les liens physiques, car leurs modifications touchent aussi l'original.
 Nous différons le référentiel détenu par Kavita, car le lecteur final reste à choisir.
-Nous différons aussi l'écriture dans les archives et la classification par LLM.
-La V1 conserve les métadonnées hors archives, sans promettre leur import automatique
-par un futur lecteur. Les connecteurs MetaKavita restent des candidats à qualifier.
+Amendement accepté par the operator le 8 novembre 2026 : convertir les copies CBR en
+CBZ et générer ComicInfo.xml dans tous les CBZ publiés depuis le catalogue validé.
+CBR et CBZ peuvent tous deux contenir ComicInfo. ZIP permet une écriture ouverte
+et plus simple à maintenir. Les images gardent leurs octets, noms et ordre.
+Les PDF restent PDF avec fiche externe. Aucune rasterisation n'est prévue.
+La fiche externe et le catalogue restent conservés. Le lecteur reste remplaçable.
+La V1 journalise la transformation et distingue empreinte source et artefact.
+La classification par LLM reste exclue. Les connecteurs restent à qualifier.
+Références : [Kavita metadata](https://wiki.kavitareader.com/guides/metadata/general/),
+[Kavita comics](https://wiki.kavitareader.com/guides/metadata/comics/),
+[ComicTagger](https://github.com/comictagger/comictagger).

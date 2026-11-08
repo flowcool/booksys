@@ -13,7 +13,10 @@ epic Beads `private-work-item`. La création du suivi ne lance pas l'implémenta
 Créer une bibliothèque BD locale qui reste utilisable sans Bookys ni lecteur donné.
 Conserver une fiche par ouvrage et distinguer ses éditions et ses variantes.
 Préparer une future utilisation dans Kavita ou un équivalent.
-Kavita, sa synchronisation et l'écriture de métadonnées dans les archives sont hors V1.
+Kavita et sa synchronisation restent hors V1.
+Amendement validé par the operator le 8 novembre 2026 : la bibliothèque convertit les
+copies CBR en CBZ et écrit ComicInfo.xml dans toutes ses copies CBZ.
+Les originaux restent intacts. Les PDF restent PDF avec métadonnées externes.
 
 ```mermaid
 flowchart TD
@@ -45,7 +48,8 @@ flowchart TD
 | Corrections | Une correction manuelle reste prioritaire, champ par champ. |
 | Revue | Rapport local et décisions par lots dans la conversation. Pas d'interface dédiée en V1. |
 | Destination | `/data/booksys/library/bd/`. |
-| Fiches | Métadonnées hors des archives : catalogue central, fiche et couverture locale. |
+| Fiches | Catalogue central, fiche et couverture locale ; ComicInfo.xml dans les copies CBZ. |
+| Archives publiées | CBZ uniquement. Conversion automatique des copies CBR ; mise à jour des CBZ depuis le catalogue validé. |
 
 ## Modèle et propriété des données
 
@@ -168,6 +172,20 @@ Une décision manuelle antérieure reste prioritaire ; la nouvelle assertion res
 
 ## Copies et variantes
 
+Les formats de réception restent PDF, CBZ et CBR. Les archives BD publiées sont
+des CBZ avec ComicInfo.xml généré depuis le catalogue validé. Les PDF restent
+des PDF, sans conversion en images ni ajout de métadonnées internes.
+Les images des CBR et CBZ conservent leurs octets, noms et ordre de lecture.
+Vérifier le nombre de pages et leurs empreintes avant et après transformation.
+Un ordre ambigu impose une attente. Ne pas réencoder les images.
+Conserver les métadonnées sources comme assertions avec leur provenance.
+Un ComicInfo source en conflit ne remplace jamais une valeur validée ou corrigée.
+Valider le XML généré contre le schéma ComicInfo qualifié et relire le CBZ produit.
+L'empreinte de l'asset source et celle de l'artefact publié peuvent différer.
+Journaliser la transformation, sa version, le manifeste des pages et les deux
+empreintes. Dédupliquer les sources identiques et les artefacts générés séparément.
+Cette déduplication ne fusionne jamais deux éditions.
+
 L'exposition au lecteur se limite à `/data/booksys/library/bd/`.
 Ne pas exposer la réception ni le répertoire d'état.
 Proposition de rangement : un dossier par édition, avec identifiants stables et
@@ -177,8 +195,9 @@ Chaque dossier exposé contient le fichier sélectionné, `fiche.md` et sa couve
 locale disponible. La fiche reste compréhensible si le site source disparaît.
 
 Préparer le dossier complet hors de l'arbre exposé, sur le même système de fichiers.
-Le nom temporaire référence une opération durable. Vérifier que l'empreinte copiée
-égale celle de l'asset identifié, pas seulement celle du chemin source courant.
+Le nom temporaire référence une opération durable. Vérifier l'asset source contre
+son empreinte identifiée. Pour un PDF, vérifier aussi l'égalité de la copie.
+Pour un CBZ généré, vérifier les images, l'ordre et le XML puis son empreinte propre.
 Un changement de contenu impose un nouvel examen. Publier le dossier complet
 atomiquement, avec interdiction d'écraser une destination existante.
 Synchroniser les fichiers et les répertoires sur disque avant validation finale.
@@ -306,6 +325,10 @@ Conserver les preuves et les sauvegardes nécessaires au retour arrière.
 | Contradiction après admission | Cas contesté visible ; aucun retrait automatique. |
 | Copie publiée modifiée hors gestion | Dérive signalée ; chemin protégé contre réécriture ou suppression. |
 | Saturation concurrente avec pyLoad | Arrêt des copies, respect de la réserve dans l'enveloppe qualifiée. |
+| CBR solid converti en copie CBZ | Même nombre, noms, ordre et empreintes des images ; source inchangée. |
+| CBZ avec ComicInfo contradictoire | XML régénéré depuis le catalogue validé ; assertions sources conservées. |
+| Transformation interrompue | Aucun artefact partiel exposé ; reprise journalisée sans perte des originaux. |
+| PDF après promotion | Octets PDF identiques ; fiche externe ; aucune rasterisation. |
 | Enrichissement lent pendant un cycle de collecte | Aucun verrou long ne bloque le collecteur. |
 
 Les essais isolés comparent un inventaire haché complet de la réception de test

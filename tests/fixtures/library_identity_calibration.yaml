@@ -1,0 +1,48 @@
+schema: 1
+description: Labelled adversarial policy calibration, not a statistical corpus sample.
+base_embedded:
+  ISBN: '9781569319017'
+  Title: One Piece, Vol. 1
+  Writer: Eiichiro Oda
+  Number: '1'
+  Publisher: SHONEN JUMP
+  LanguageISO: en
+base_candidate:
+  isbn: '9781569319017'
+  title: One Piece, Vol. 1
+  author: Eiichiro Oda
+  number: '1'
+  publisher: SHONEN JUMP
+  language: en
+  date: June 2003
+  revision: 1 edition
+  work_ref: /works/OL8215661W
+  edition_ref: /books/OL8692999M
+  source: openlibrary
+  upstream: openlibrary
+  url: https://openlibrary.org/books/OL8692999M
+cases:
+  consistent_manga_edition: {expected: identified}
+  similar_title: {candidate: {title: One Pieces, Vol. 1}, expected: pending}
+  integral: {candidate: {title: One Piece Integral 1-3}, expected: pending}
+  special_issue: {candidate: {number: HS1}, expected: pending}
+  next_volume: {candidate: {number: '2'}, expected: pending}
+  translation: {candidate: {language: fr}, expected: pending}
+  competing_publisher: {candidate: {publisher: Glenat}, expected: pending}
+  unknown_publisher: {candidate: {publisher: ''}, expected: pending}
+  unknown_edition_revision: {candidate: {revision: ''}, expected: pending}
+  unknown_edition_date: {candidate: {date: ''}, expected: pending}
+  author_romanization_requires_review: {candidate: {author: 尾田栄一郎}, expected: pending}
+  source_title_only: {embedded: {ISBN: '', Writer: '', Publisher: '', LanguageISO: '', Number: ''}, expected: pending}
+  wrong_isbn_checksum: {embedded: {ISBN: '9781569319018'}, expected: pending}
+  revised_edition_contradiction: {second_candidate: {edition_ref: revised, revision: revised}, expected: pending}
+  correlated_sources_without_id: {embedded: {ISBN: ''}, second_candidate: {source: mirror}, expected: pending}
+  french_bd_similar_title:
+    embedded: {Title: Astérix le Gaulois, Writer: René Goscinny, LanguageISO: fr, Publisher: Dargaud}
+    candidate: {title: Astérix le Gaulois, author: René Goscinny, language: fr, publisher: Dargaud, isbn: '9781569319017'}
+    second_candidate: {title: Le Livre d’Astérix le Gaulois, author: René Goscinny, language: fr, publisher: Dargaud}
+    expected: pending
+  french_integral_is_separate_work:
+    embedded: {Title: Blueberry Intégrale 1, Writer: Jean-Michel Charlier, LanguageISO: fr, Publisher: Dargaud}
+    candidate: {title: Blueberry Tome 1, author: Jean-Michel Charlier, language: fr, publisher: Dargaud}
+    expected: pending

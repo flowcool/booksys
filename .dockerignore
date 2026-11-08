@@ -2,3 +2,8 @@
 !booksys.py
 !pipeline.py
 !fiches.py
+!pyproject.toml
+!uv.lock
+!library/
+!library/**
+library/__pycache__/
