@@ -126,12 +126,25 @@ def cycle(args: argparse.Namespace) -> int:
             records, submissions = load(snapshots / 'captured.yaml')['items'], load(snapshots / 'submissions.yaml')['submissions']
             routing_path = args.submissions.parent / 'mirror-routing.yaml'
             routing_catalogue = store.read()  # Whole-cycle lock makes this snapshot stable for routing.
-            for source, entry in submissions.items():
-                if entry.get('status') != 'queued' or source not in records:
-                    continue
+            cursor_path = state / 'library-mirror-cursor.yaml'
+            sources = sorted(s for s, e in submissions.items()
+                             if e.get('status') == 'queued' and s in records)
+            cursor_record = load(cursor_path) if cursor_path.exists() else {}
+            if (not isinstance(cursor_record, dict)
+                    or (cursor_record.get('source') is not None and not isinstance(cursor_record['source'], str))):
+                raise LibraryError('Invalid mirror routing cursor')
+            cursor = cursor_record.get('source')
+            if cursor in sources:
+                index = sources.index(cursor) + 1
+                sources = sources[index:] + sources[:index]
+            # Bound native API reads as well as writes. A full catalogue scan
+            # exceeds the shared downloader's per-client rate limit.
+            for source in sources[:8]:
+                entry = submissions[source]
                 result = route_package(client, source, entry, records[source], routing_catalogue, args.reception,
                                        routing_path, apply=True, availability=availability)
                 mirror_results.append(result)
+                atomic_yaml(cursor_path, {'source': source})
                 if result['outcome'] in ('parked', 'fallback_active'):
                     break
             atomic_yaml(evidence / 'mirror-routing-cycle.yaml', {'created_at': now(), 'results': mirror_results})
