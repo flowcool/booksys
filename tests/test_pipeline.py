@@ -122,6 +122,39 @@ class PipelineTests(unittest.TestCase):
             self.assertIsNone(run_backfill(directory, fetch, downloader, minimum_free=0))
             self.assertEqual(downloader.creates, 10)
 
+    def test_fifty_page_backfill_deduplicates_prior_batch_and_preserves_watermark(self):
+        downloader = MemoryDownloader()
+        catalogue_calls = []
+        def fetch(url):
+            if url == FIRST:
+                self.fail("Previously queued source must not be resolved again")
+            if "/dl/" in url:
+                return '<h1>Download</h1><a class="bys-link bys-host" href="https://host.example/a">Get</a>'
+            if url == DEFAULT_CATEGORY or "?page=" in url:
+                catalogue_calls.append(url)
+                page = int(url.split("?page=")[1]) if "?page=" in url else 1
+                return (f'<h1>Catalogue</h1><div class="bys-items-container">'
+                        f'<a class="bys-item" href="{FIRST}">Old</a>'
+                        f'<a class="bys-item" href="/bandes-dessinees/{1000-page}-item">Item</a></div>'
+                        f'<a href="?page={page+1}">Next</a>')
+            return '<h1>Item</h1><a href="/item/dl/1">Host</a>'
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            monitor = {"version": 1, "categories": {DEFAULT_CATEGORY: {"after_id": 9999}},
+                       "submissions": {FIRST: {"status": "queued", "package_id": 100}}}
+            save(directory / "monitor.yaml", monitor)
+            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 50, "next_page": DEFAULT_CATEGORY,
+                 "pages": {}, "items": {}, "status": "pending", "submitted": 0})
+            result = run_backfill(directory, fetch, downloader, minimum_free=0)
+            self.assertEqual(result, {"pages": 50, "items": 51, "queued": 51})
+            self.assertEqual(len(catalogue_calls), 50)
+            self.assertEqual(downloader.creates, 50)
+            current = yaml.safe_load((directory / "monitor.yaml").read_text())
+            self.assertEqual(current['categories'], monitor['categories'])
+            self.assertEqual(current['submissions'][FIRST], monitor['submissions'][FIRST])
+            self.assertIsNone(run_backfill(directory, fetch, downloader, minimum_free=0))
+            self.assertEqual(downloader.creates, 50)
+
     def test_pyload_get_has_no_json_content_type_and_keeps_query_parameters(self):
         received = []
         class Handler(BaseHTTPRequestHandler):

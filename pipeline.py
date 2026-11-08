@@ -273,7 +273,8 @@ def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyloa
         except BlockingIOError as exc:
             raise CollectionError("Another pipeline is running") from exc
         job = yaml.safe_load(path.read_text())
-        if job.get("version") != 1 or not 1 <= job.get("pages_requested", 0) <= 10:
+        if (job.get("version") != 1 or type(job.get("pages_requested")) is not int
+                or not 1 <= job["pages_requested"] <= 50):
             raise CollectionError("Invalid bounded backfill request")
         if job["status"] == "complete":
             return None
