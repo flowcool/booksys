@@ -1,3 +1,5 @@
+# Historical definition. Do not start: booksys-pyload was retired on 2026-11-10.
+# Current downloader: booksys-pyload, /data/booksys/stack/compose.yaml.
 name: booksys-shared
 services:
   pyload:
