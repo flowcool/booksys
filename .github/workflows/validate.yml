@@ -1,0 +1,55 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  worker-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.11.33"
+          python-version: "3.11"
+          enable-cache: true
+          cache-suffix: worker-tests
+      - name: Install the locked development environment
+        run: |
+          echo "BEADS_DIR=$RUNNER_TEMP/nonexistent-test-beads" >> "$GITHUB_ENV"
+          uv sync --locked --extra dev
+      - name: Run existing worker tests and artifact gate tests
+        run: |
+          uv run --no-sync python -m unittest discover -s tests -p test_collector.py -v
+          uv run --no-sync python -m unittest discover -s tests -p test_pipeline.py -v
+          uv run --no-sync python -m unittest discover -s tests -p test_fiches.py -v
+          uv run --no-sync python -m unittest discover -s tests -p test_image_validation.py -v
+      - name: Run existing type checks and artifact helper check
+        run: uv run --no-sync mypy booksys.py pipeline.py fiches.py ops/image_validation.py
+      - name: Validate workflow syntax and security
+        run: |
+          bash ops/install_validation_tools.sh "$RUNNER_TEMP/validation-tools"
+          "$RUNNER_TEMP/validation-tools/actionlint"
+          "$RUNNER_TEMP/validation-tools/zizmor" --offline --no-progress .github/workflows/
+  worker-image:
+    # Both syntaxes bind reusable workflows to this commit. actionlint 1.7.12
+    # does not yet accept the newer $/ spelling.
+    uses: ./.github/workflows/image-validation.yml # zizmor: ignore[self-repository]
+    with:
+      image: worker
+      dockerfile: Dockerfile
