@@ -2,6 +2,7 @@
 
 import importlib.util
 import asyncio
+import json
 import threading
 import struct
 import traceback
@@ -138,6 +139,9 @@ class SessionApiTests(unittest.TestCase):
                                 continue
                             stream.seek(directory)
                             entries = stream.read(count * 12)
+                            locations = {kind: (length, position) for kind, length, position in
+                                struct.iter_unpack('<III', entries) if position + length <= size}
+                            instruction = None
                             for offset in range(0, len(entries), 12):
                                 kind, length, position = struct.unpack_from('<III', entries, offset)
                                 if kind != 6 or length < 32 or position + 32 > size:
@@ -147,6 +151,42 @@ class SessionApiTests(unittest.TestCase):
                                 print("Browser minidump exception:", {"file": dump.name, "size": size,
                                     "code": struct.unpack_from('<I', record, 8)[0],
                                     "address": hex(struct.unpack_from('<Q', record, 24)[0])}, flush=True)
+                                # Exact Mozilla AMD64 context: RIP is at byte 248.
+                                # Read register metadata only, never stack/memory streams.
+                                if length >= 168 and 7 in locations:
+                                    stream.seek(locations[7][1])
+                                    architecture = struct.unpack('<H', stream.read(2))[0]
+                                    stream.seek(position + 160)
+                                    context_size, context_position = struct.unpack('<II', stream.read(8))
+                                    if architecture == 9 and context_size >= 256 and context_position + context_size <= size:
+                                        stream.seek(context_position + 248)
+                                        instruction = struct.unpack('<Q', stream.read(8))[0]
+                                        print("Browser crash instruction:", {"thread": struct.unpack_from('<I', record)[0],
+                                            "rip": hex(instruction)}, flush=True)
+                            if instruction is not None and 4 in locations:
+                                module_size, module_position = locations[4]
+                                stream.seek(module_position)
+                                module_count = struct.unpack('<I', stream.read(4))[0]
+                                if module_count <= 4096 and 4 + module_count * 108 <= module_size:
+                                    for index in range(module_count):
+                                        stream.seek(module_position + 4 + index * 108)
+                                        module = stream.read(108)
+                                        base, extent = struct.unpack_from('<QI', module)
+                                        if base <= instruction < base + extent:
+                                            name_position = struct.unpack_from('<I', module, 20)[0]
+                                            if name_position + 4 <= size:
+                                                stream.seek(name_position)
+                                                name_size = struct.unpack('<I', stream.read(4))[0]
+                                                if name_size <= 4096 and name_position + 4 + name_size <= size:
+                                                    name = stream.read(name_size).decode('utf-16-le', errors='replace')
+                                                    print("Browser crash module:", {"name": Path(name).name,
+                                                        "offset": hex(instruction - base)}, flush=True)
+                        extra = dump.with_suffix('.extra')
+                        if extra.is_file() and extra.stat().st_size <= 65536:
+                            annotations = json.loads(extra.read_text())
+                            print("Browser crash annotations:", {key: str(annotations[key])[:512]
+                                for key in ('ProcessType', 'MozCrashReason', 'StartupCrash')
+                                if key in annotations}, flush=True)
                     except (OSError, ValueError, struct.error) as error:
                         print("Minidump metadata unavailable:", type(error).__name__, flush=True)
             finally:
@@ -155,6 +195,15 @@ class SessionApiTests(unittest.TestCase):
         def retain_output(output, stream):
             output_init(output, stream)
             outputs.append(output)
+
+        launch = InvisiblePlaywright.__aenter__
+
+        async def report_launch(session):
+            print("Pinned browser launch contract:", {"seed": session.seed,
+                "headless": session._headless, "extra_args": session._extra_args,
+                "locale_requested": session._locale_requested,
+                "timezone": session._timezone, "persistent_profile": session._profile_dir is not None}, flush=True)
+            return await launch(session)
 
         def firefox_pids():
             result = set()
@@ -207,6 +256,7 @@ class SessionApiTests(unittest.TestCase):
             return await browser.page.goto(request.url)
 
         with (patch.object(connection, '_spawn_posix', new=retain_process),
+              patch.object(InvisiblePlaywright, '__aenter__', new=report_launch),
               patch.object(InvisiblePlaywright, '_teardown', new=report_before_cleanup),
               patch.object(ProcessOutput, 'KEEP', 2000),
               patch.object(ProcessOutput, '__init__', new=retain_output),
