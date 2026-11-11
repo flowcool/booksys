@@ -27,3 +27,12 @@ scan is an inventory aid; neither proves license permission.
 
 Do not infer rights to comics, covers, source-site content or user downloads from
 this repository's MIT license. The operator must have the necessary rights.
+
+## Native runtime notices
+
+The exact standalone Python build and uv license texts are retained under
+[third_party/native](third_party/native/manifest.json). The manifest records each
+upstream revision URL and SHA256. The qpdf notice matches version12.4.2.
+Distribution and wheel notices remain in each image. The reviewed source ledger
+is [release/sources.lock.json](release/sources.lock.json); release qualification
+compares it with the exact built inventory and retains full corresponding source.
