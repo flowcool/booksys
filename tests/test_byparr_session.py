@@ -2,6 +2,8 @@
 
 import importlib.util
 import asyncio
+import base64
+import hashlib
 import json
 import threading
 import struct
@@ -181,6 +183,17 @@ class SessionApiTests(unittest.TestCase):
                                                     name = stream.read(name_size).decode('utf-16-le', errors='replace')
                                                     print("Browser crash module:", {"name": Path(name).name,
                                                         "offset": hex(instruction - base)}, flush=True)
+                                                    # Retain only the delivered ELF, never mapped memory.
+                                                    if Path(name).name == 'libmozsandbox.so':
+                                                        module_path = Path(name)
+                                                        module_length = module_path.stat().st_size
+                                                        print("Browser module file:", {"name": module_path.name,
+                                                            "size": module_length, "limit": 1048576}, flush=True)
+                                                        if module_length <= 1048576:
+                                                            binary = module_path.read_bytes()
+                                                            if len(binary) == module_length and binary.startswith(b'\x7fELF'):
+                                                                print("BOOKSYS_SANDBOX_ELF_SHA256=" + hashlib.sha256(binary).hexdigest(), flush=True)
+                                                                print("BOOKSYS_SANDBOX_ELF_BASE64=" + base64.b64encode(binary).decode('ascii'), flush=True)
                         extra = dump.with_suffix('.extra')
                         if extra.is_file() and extra.stat().st_size <= 65536:
                             annotations = json.loads(extra.read_text())
