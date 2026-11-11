@@ -138,6 +138,11 @@ invalid external-origin input and checks that session generation remains zero.
 It rejects browser processes. Health readiness means the adapter accepts requests;
 it does not prove a browser can navigate or solve a challenge.
 Logs and container inspection are saved before the owned server stops.
+The readiness container has no automatic removal on exit, so startup failures
+keep their logs. Cleanup checks each result and always attempts the owned stop.
+It removes the container only after evidence capture and stop succeed. Otherwise
+it retains the container for recovery and fails validation. The original probe
+failure remains the exit result. Command fixtures verify these failure paths.
 
 A second isolated container loads the delivered `/app/session_api.py` and streams
 `tests/test_byparr_session.py` into unittest. Missing upstream dependencies,

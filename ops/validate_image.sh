@@ -22,17 +22,44 @@ loaded_id=$(docker image inspect --format '{{.Id}}' "$image_id")
 docker image inspect "$image_id" > "$reports/inspect.json"
 if [[ "$image" == byparr ]]; then
   # The adapter is a server: --help would start it. Probe its actual tini entrypoint.
-  container=$(docker run -d --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  container=$(docker run -d --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m "$image_id")
   finish_readiness() {
-    docker logs "$container" > "$reports/entrypoint.log" 2>&1
-    docker inspect "$container" > "$reports/container-inspect.json"
-    docker stop --time 10 "$container" > "$reports/stop.log"
+    local status=0 command_status
+    # Keep an exited container until evidence is saved. Always attempt its stop.
+    if docker logs "$container" > "$reports/entrypoint.log" 2>&1; then :; else
+      command_status=$?; echo "Readiness logs failed: exit $command_status" >&2; status=1
+    fi
+    if docker inspect "$container" > "$reports/container-inspect.json"; then :; else
+      command_status=$?; echo "Readiness inspection failed: exit $command_status" >&2; status=1
+    fi
+    if docker stop --time 10 "$container" > "$reports/stop.log" 2>&1; then :; else
+      command_status=$?; echo "Readiness stop failed: exit $command_status" >&2; status=1
+    fi
+    if (( status == 0 )); then
+      if docker rm "$container" > "$reports/remove.log" 2>&1; then :; else
+        command_status=$?; echo "Readiness removal failed: exit $command_status" >&2; status=1
+      fi
+    else
+      echo "Retained owned readiness container for recovery: $container" >&2
+    fi
+    return "$status"
   }
-  trap finish_readiness EXIT
+  readiness_exit() {
+    local original_status=$? cleanup_status
+    trap - EXIT
+    if finish_readiness; then cleanup_status=0; else cleanup_status=$?; fi
+    if (( original_status != 0 )); then exit "$original_status"; fi
+    exit "$cleanup_status"
+  }
+  trap readiness_exit EXIT
   docker exec -i "$container" "$interpreter" - readiness < tests/probes/byparr.py > "$reports/readiness.log" 2>&1
-  finish_readiness
-  trap - EXIT
+  if finish_readiness; then
+    trap - EXIT
+  else
+    trap - EXIT
+    exit 1
+  fi
   docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
     --env BEADS_DIR=/tmp/nonexistent-test-beads --entrypoint "$interpreter" "$image_id" -c "$(cat tests/probes/byparr.py)" sessions \
