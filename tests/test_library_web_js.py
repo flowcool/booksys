@@ -8,8 +8,8 @@ from library.web import PAGE
 
 
 class WebJavaScriptTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which('node'), 'Node is required for the actual vanilla-JS event test')
     def test_real_script_search_filters_sort_and_refresh_events(self):
+        self.assertIsNotNone(shutil.which('node'), 'Required test prerequisite missing: node')
         script = re.search(r'<script>(.*?)</script>', PAGE, re.S).group(1)
         rows = [dict(id='a',title='Zebra',author='Writer',isbn='9780000000001',series='Series',reason='Unknown edition',status='pending',transfer='finished',intake='validated',identity='pending',publication='pending',ocr='ok',fiche='/fiche/a'),
                 dict(id='b',title='Album',author='Other',isbn='123',series='Other series',reason='Published',status='published',transfer='finished',intake='validated',identity='identified',publication='published',ocr='ok',fiche='/fiche/b')]

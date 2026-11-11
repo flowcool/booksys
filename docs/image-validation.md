@@ -3,13 +3,17 @@
 Validation uses GitHub-hosted runners and read-only repository tokens. It does
 not log into a registry, publish an image or access an installation. PRs,
 `main` pushes, manual validation and the weekly run use the same image workflow.
-This first slice runs worker checks for every change, including documentation.
+Worker and library checks run for every change, including documentation.
 Later scope filtering must preserve check completion and include renamed paths.
 
 Install the locked dev environment with `uv sync --locked --extra dev`.
 The workflow declares Python 3.11, which is the existing minimum; it does not
 change the runtime interpreter or the application's Python declaration.
 Worker tests use synthetic responses, including loopback HTTP servers.
+The library test job explicitly installs Node, Bubblewrap, UnRAR, Poppler,
+Tesseract with English/French data, and the test fonts. Missing Node fails the
+actual JavaScript tests. Missing native executables fail native reader tests;
+they are not optional acceptance cases.
 No hoster, downloader or real browser session is a test prerequisite.
 
 ## Retained artifact boundary
@@ -81,3 +85,38 @@ References: [Docker OCI exporter](https://docs.docker.com/build/exporters/oci-do
 [Docker attestations](https://docs.docker.com/build/metadata/attestations/),
 [GitHub secure Actions](https://docs.github.com/en/actions/reference/security/secure-use),
 [Trivy image inputs](https://trivy.dev/docs/latest/target/container_image/).
+
+## Library image and native confinement
+
+Use the same build and validation commands with `Dockerfile.library`,
+`library` and distinct archive/report paths. The image retains its pinned
+Python 3.14 base and runtime role. All declared archive/PDF/OCR package pins
+are installed by the build. `zlib1g` includes the fixed Debian security version.
+Build-only pip and uv are removed after the frozen runtime installation.
+No scan exception is used.
+
+`tests/probes/library.py` runs inside the exact image with the common Docker
+restrictions. It creates its own synthetic CBZ, stored RAR4 and vector PDF in
+an ephemeral tmpfs. It requires actual UnRAR, Poppler, Tesseract and eng/fra
+language data. It invokes the existing reader and printed worker entrypoints,
+transforms each format to CBZ, checks output page hashes and unchanged inputs,
+and verifies readable OCR text. The vector PDF forces Poppler rendering.
+Corrupt RAR and active PDF content must be rejected. Tool versions and results
+are saved in the probe log. No captured archive or document is redistributed.
+
+This is the existing Docker reader boundary used by the host controller with
+`BOOKSYS_READER_IMAGE`. It proves a non-root worker with no effective capabilities,
+no new privileges, no network route, a read-only image root and no installation
+mounts or Docker socket. It does not run nested Bubblewrap or prove a deployment.
+
+The separate host tests exercise the native alternative through
+`library.sandbox.native_prefix`: an empty root, unshared namespaces, cleared
+environment, one read-only synthetic input and one explicit output grant.
+They verify that controller files, sibling inputs, the controller environment
+and Docker socket stay absent, and that trusted code/input stay read-only.
+Run `test_library_sandbox.py` with user namespaces available. A denied namespace
+fails the test; do not disable seccomp, AppArmor or application isolation to make
+it pass. Native host proof records the host tools/environment separately from
+the image proof. The GitHub runner's native confinement remains subject to
+observed CI execution. These checks change neither the host controller nor any
+running image reference or reader retention policy.

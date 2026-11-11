@@ -238,8 +238,7 @@ class ResolutionTests(unittest.TestCase):
         import shutil
         import subprocess
         from library.resolution_ui import PANEL
-        if not shutil.which('node'):
-            self.skipTest('Node is needed for actual form event execution')
+        self.assertIsNotNone(shutil.which('node'), 'Required test prerequisite missing: node')
         script = re.search(r'<script>(.*?)</script>', PANEL, re.S).group(1)
         driver = r'''
 const vm=require('vm'),assert=require('assert');let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',async()=>{

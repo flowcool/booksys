@@ -53,3 +53,35 @@ jobs:
     with:
       image: worker
       dockerfile: Dockerfile
+  library-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.11.33"
+          python-version: "3.11"
+          enable-cache: true
+          cache-suffix: library-tests
+      - name: Install required native and JavaScript test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap unrar tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra poppler-utils fonts-dejavu-core nodejs
+          for tool in bwrap unrar tesseract pdftoppm node; do command -v "$tool"; done
+      - name: Install the locked development environment
+        run: |
+          echo "BEADS_DIR=$RUNNER_TEMP/nonexistent-test-beads" >> "$GITHUB_ENV"
+          uv sync --locked --extra dev
+      - name: Run existing native reader, format, confinement and UI tests
+        run: |
+          for suite in readers sandbox pdf formats_ops web_js resolution; do
+            uv run --no-sync python -m unittest discover -s tests -p "test_library_$suite.py" -v
+          done
+  library-image:
+    uses: ./.github/workflows/image-validation.yml # zizmor: ignore[self-repository]
+    with:
+      image: library
+      dockerfile: Dockerfile.library

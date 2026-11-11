@@ -6,7 +6,7 @@ archive=$(realpath "${2:?}")
 revision=${3:?}
 reports=${4:?}
 case "$image" in
-  worker) interpreter=/app/.venv/bin/python ;;
+  worker|library) interpreter=/app/.venv/bin/python ;;
   *) echo "Unsupported image: $image" >&2; exit 2 ;;
 esac
 [[ "$revision" =~ ^[a-f0-9]{40}$ ]] || exit 2
