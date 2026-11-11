@@ -8,10 +8,12 @@ import unittest
 
 from booksys_core.parsing import catalogue, source_plan
 import psycopg
+from psycopg import pq
 import supervisor
 
 assert sys.version_info[:2] == (3, 14)
 assert psycopg.__version__ == "3.3.8"
+assert pq.__impl__ == "c"
 assert os.getuid() == 1000
 assert Path("/usr/local/bin/docker").is_file()
 for forbidden in ("/var/run/docker.sock", "/secrets", "/data/booksys", "/root/.ssh"):
