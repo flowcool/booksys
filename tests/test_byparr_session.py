@@ -3,6 +3,7 @@
 import importlib.util
 import asyncio
 import threading
+import traceback
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -117,7 +118,11 @@ class SessionApiTests(unittest.TestCase):
         async def browser():
             generator = upstream.get_browser()
             try:
-                native = await anext(generator)
+                try:
+                    native = await anext(generator)
+                except Exception:
+                    traceback.print_exc()
+                    raise
                 browser_pids.append(firefox_pids())
                 yield native
             finally:
