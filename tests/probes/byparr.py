@@ -45,6 +45,13 @@ elif sys.argv[1] == "sessions":
     # Import the delivered adapter, not a second source copy. Stream only tests.
     import session_api
     assert importlib.util.find_spec("src") is not None
+    # Dotted mock targets import parent packages before resolving the adapter.
+    ops = types.ModuleType("ops")
+    byparr = types.ModuleType("ops.byparr")
+    ops.byparr = byparr
+    byparr.session_api = session_api
+    sys.modules["ops"] = ops
+    sys.modules["ops.byparr"] = byparr
     sys.modules["ops.byparr.session_api"] = session_api
     module = types.ModuleType("synthetic_sessions")
     exec(compile(sys.stdin.read(), "test_byparr_session.py", "exec"), module.__dict__)
