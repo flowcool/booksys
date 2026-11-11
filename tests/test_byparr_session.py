@@ -5,6 +5,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import threading
 import struct
 import traceback
@@ -115,14 +116,56 @@ class SessionApiTests(unittest.TestCase):
         processes = []
         spawn = connection._spawn_posix
         teardown = InvisiblePlaywright._teardown
+        wait_for_ready = ProcessOutput.wait_for_ready
+        startup_send = connection.Connection.startup_send
+        launch_paths = set()
 
-        def retain_process(*args, **kwargs):
-            result = spawn(*args, **kwargs)
+        def report_ready(output, process, timeout):
+            print("Browser readiness enter", flush=True)
+            result = wait_for_ready(output, process, timeout)
+            print("Browser readiness return:", result, flush=True)
+            return result
+
+        def report_startup(channel, method, params=None):
+            print("Browser startup command:", method if method in (
+                'Browser.enable', 'Browser.setBrowserProxy') else 'other', flush=True)
+            result = startup_send(channel, method, params)
+            print("Browser startup command returned", flush=True)
+            return result
+
+        def retain_process(executable, argv, env):
+            known = []
+            for index, value in enumerate(argv):
+                if value in ('-no-remote', '-headless', '-wait-for-browser',
+                             '-foreground', '-juggler-pipe', '-silent'):
+                    known.append(value)
+                elif value == '-profile' and index + 1 < len(argv):
+                    profile = argv[index + 1]
+                    known.extend((value, profile))
+                    launch_paths.add(profile)
+            paths = {key: env[key] for key in (
+                'HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'DISPLAY') if key in env}
+            if env.get('TMPDIR'):
+                launch_paths.add(env['TMPDIR'])
+            print("Browser resolved launcher:", {"known_argv": known,
+                "path_variables": paths}, flush=True)
+            result = spawn(executable, argv, env)
             processes.append(result[2])
             return result
 
         async def report_before_cleanup(session):
             try:
+                for name in sorted(launch_paths)[:4]:
+                    path = Path(name)
+                    try:
+                        space = os.statvfs(path)
+                        print("Browser launch path:", {"path": name,
+                            "free_bytes": space.f_bavail * space.f_frsize,
+                            "readonly": bool(space.f_flag & os.ST_RDONLY),
+                            "writable": os.access(path, os.W_OK),
+                            "entries": sorted(entry.name[:80] for _, entry in zip(range(32), path.iterdir()))}, flush=True)
+                    except OSError as error:
+                        print("Browser launch path:", {"path": name, "errno": error.errno}, flush=True)
                 for process in processes:
                     code = process.poll()
                     print("Browser before cleanup:", {"pid": process.pid, "returncode": code,
@@ -269,6 +312,8 @@ class SessionApiTests(unittest.TestCase):
             return await browser.page.goto(request.url)
 
         with (patch.object(connection, '_spawn_posix', new=retain_process),
+              patch.object(ProcessOutput, 'wait_for_ready', new=report_ready),
+              patch.object(connection.Connection, 'startup_send', new=report_startup),
               patch.object(InvisiblePlaywright, '__aenter__', new=report_launch),
               patch.object(InvisiblePlaywright, '_teardown', new=report_before_cleanup),
               patch.object(ProcessOutput, 'KEEP', 2000),
