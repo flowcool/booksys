@@ -100,9 +100,16 @@ class SessionApiTests(unittest.TestCase):
     def test_pinned_browser_slow_cleanup_recovers_after_request_timeout(self):
         import invisible_core
         import src.utils as upstream
+        from invisible_core.juggler.connection import ProcessOutput
 
         closed = []
         browser_pids = []
+        outputs = []
+        output_init = ProcessOutput.__init__
+
+        def retain_output(output, stream):
+            output_init(output, stream)
+            outputs.append(output)
 
         def firefox_pids():
             result = set()
@@ -122,6 +129,19 @@ class SessionApiTests(unittest.TestCase):
                     native = await anext(generator)
                 except BaseException:
                     traceback.print_exc()
+                    for output in outputs:
+                        print("Browser startup output:", output.tail(), flush=True)
+                    for pid in sorted(firefox_pids()):
+                        status = Path('/proc', pid, 'status')
+                        try:
+                            print("Browser process:", [line for line in status.read_text().splitlines()
+                                if line.startswith(('Name:', 'State:', 'VmRSS:', 'Threads:'))], flush=True)
+                        except FileNotFoundError:
+                            pass
+                    for name in ('memory.events', 'pids.events'):
+                        events = Path('/sys/fs/cgroup', name)
+                        if events.is_file():
+                            print(name, events.read_text(), flush=True)
                     raise
                 browser_pids.append(firefox_pids())
                 yield native
@@ -141,7 +161,8 @@ class SessionApiTests(unittest.TestCase):
                 status=200, content_type='text/html', body='<h1>Local fixture</h1>'))
             return await browser.page.goto(request.url)
 
-        with (patch.object(upstream, 'warm_up', new=AsyncMock()),
+        with (patch.object(ProcessOutput, '__init__', new=retain_output),
+              patch.object(upstream, 'warm_up', new=AsyncMock()),
               patch.object(upstream, 'get_browser_geo', new=AsyncMock(
                   return_value=upstream.BrowserGeo('UTC', 'en-US'))),
               patch('invisible_playwright.async_api.prepare_session_geo',
