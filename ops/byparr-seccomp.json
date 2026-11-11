@@ -927,7 +927,8 @@
       "names": [
         "clone",
         "setns",
-        "unshare"
+        "unshare",
+        "chroot"
       ],
       "action": "SCMP_ACT_ALLOW",
       "comment": "Allow user namespace creation for the unprivileged Firefox sandbox; retain all other Docker29.9.0 rules."

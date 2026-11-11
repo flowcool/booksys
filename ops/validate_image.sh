@@ -36,6 +36,36 @@ if [[ "$image" == byparr ]]; then
   fi
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --entrypoint /usr/bin/unshare "$image_id" -Ur /bin/true > "$reports/namespace-profile.log" 2>&1
+  # Retain the exact prior profile to prove the chroot denial before the exception.
+  baseline_profile="$reports/seccomp-before-chroot.json"
+  python3 - "$baseline_profile" <<'PYPROFILE'
+import hashlib
+import json
+from pathlib import Path
+import sys
+profile = json.loads(Path("ops/byparr-seccomp.json").read_text())
+rule = profile["syscalls"][-1]
+assert rule["names"] == ["clone", "setns", "unshare", "chroot"]
+rule["names"].remove("chroot")
+payload = (json.dumps(profile, indent=2) + "\n").encode()
+assert hashlib.sha256(payload).hexdigest() == "dfa51b13977961193954ffe3a4968b715d8f27093b9459061674551ebee3f731"
+Path(sys.argv[1]).write_bytes(payload)
+PYPROFILE
+  if docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+      --env LC_ALL=C --security-opt "seccomp=$baseline_profile" --entrypoint /usr/bin/unshare \
+      "$image_id" -Ur /usr/sbin/chroot / /bin/true > "$reports/chroot-baseline.log" 2>&1; then
+    echo "Baseline unexpectedly allowed chroot" >&2
+    exit 1
+  else
+    chroot_status=$?
+    echo "exit=$chroot_status" >> "$reports/chroot-baseline.log"
+    [[ "$chroot_status" == 1 ]]
+    grep -F 'chroot:' "$reports/chroot-baseline.log"
+    grep -F 'Operation not permitted' "$reports/chroot-baseline.log"
+  fi
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --env LC_ALL=C --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --entrypoint /usr/bin/unshare \
+    "$image_id" -Ur /usr/sbin/chroot / /bin/true > "$reports/chroot-profile.log" 2>&1
   # The adapter is a server: --help would start it. Probe its actual tini entrypoint.
   container=$(docker run -d --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --pids-limit 1024 --memory 1536m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
