@@ -157,3 +157,17 @@ class YieldIdentityTests(unittest.TestCase):
             state=store.read();state['assets'][asset].pop('identity');state['assets'][asset]['embedded']['EditionDate']='2004'
             store.save(state,expected=state['revision'])
             self.assertEqual(enrich(store,asset,Provider(),[])['assets'][asset]['identity_result']['status'],'pending')
+
+
+class ProviderReferenceTests(unittest.TestCase):
+    def test_bdtheque_reference_language_and_long_invalid_prefix(self):
+        from unittest.mock import Mock
+        from library.primitives import LibraryError
+        provider = object.__new__(Providers)
+        provider.get = Mock(return_value={'status': 'unavailable'})
+        for value in ('123/a-slug0', '٠١/a', '0' * 10000 + '/a'):
+            self.assertEqual(provider.source('bdtheque', value)['status'], 'unavailable')
+        for value in ('0' * 100000 + '!', '1/A', '1/a/b', '/a', '1/'):
+            with self.assertRaises(LibraryError):
+                provider.source('bdtheque', value)
+        self.assertEqual(provider.get.call_count, 3)

@@ -371,7 +371,10 @@ class Providers:
                         'reason': str(exc), 'url': url}
         if provider == 'openlibrary':
             return self.edition(reference)
-        if provider == 'bdtheque' and re.fullmatch(r'\d+/[a-z0-9-]+', reference):
+        # Parse the separator once; adjacent unbounded repetitions can backtrack.
+        series_number, separator, series_slug = reference.partition('/')
+        if (provider == 'bdtheque' and separator and series_number.isdecimal()
+                and re.fullmatch(r'[a-z0-9-]+', series_slug)):
             url = f'https://www.bdtheque.com/series/{reference}'
             parser = parse_bdtheque
         elif provider == 'mangadex' and re.fullmatch(r'[0-9a-f-]{36}', reference):
