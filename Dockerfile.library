@@ -1,7 +1,7 @@
 FROM ghcr.io/thephaseless/byparr@sha256:c66fa161187b8fa527bfad7eefa2647ea1c553f77df68cbffd6fe83366d1787b AS qualified-python
 
 FROM python:3.14-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS dependencies
-COPY --from=qualified-python /home/operator/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu /opt/python
+COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu /opt/python
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv==0.9.9 && uv sync --frozen --no-dev --no-install-project --python /opt/python/bin/python3.14
@@ -10,7 +10,7 @@ FROM python:3.14-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138
 ARG BOOKSYS_REVISION
 LABEL org.opencontainers.image.revision=$BOOKSYS_REVISION
 WORKDIR /app
-COPY --from=qualified-python /home/operator/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu /opt/python
+COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu /opt/python
 COPY --from=dependencies /app/.venv /app/.venv
 RUN /opt/python/bin/python3.14 -m pip uninstall -y pip && python -m pip uninstall -y pip
 RUN /app/.venv/bin/python -c 'import psycopg,sys; assert sys.version_info[:2] == (3,14) and psycopg.__version__ == "3.3.8"'
