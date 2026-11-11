@@ -53,19 +53,19 @@ Path(sys.argv[1]).write_bytes(payload)
 PYPROFILE
   if docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
       --env LC_ALL=C --security-opt "seccomp=$baseline_profile" --entrypoint /usr/bin/unshare \
-      "$image_id" -Ur /usr/sbin/chroot / /bin/true > "$reports/chroot-baseline.log" 2>&1; then
+      "$image_id" -Ur "$interpreter" -c "import os; os.chroot('/'); os.execv('/bin/true', ['/bin/true'])" > "$reports/chroot-baseline.log" 2>&1; then
     echo "Baseline unexpectedly allowed chroot" >&2
     exit 1
   else
     chroot_status=$?
     echo "exit=$chroot_status" >> "$reports/chroot-baseline.log"
     [[ "$chroot_status" == 1 ]]
-    grep -F 'chroot:' "$reports/chroot-baseline.log"
+    grep -F 'PermissionError: [Errno 1]' "$reports/chroot-baseline.log"
     grep -F 'Operation not permitted' "$reports/chroot-baseline.log"
   fi
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --env LC_ALL=C --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --entrypoint /usr/bin/unshare \
-    "$image_id" -Ur /usr/sbin/chroot / /bin/true > "$reports/chroot-profile.log" 2>&1
+    "$image_id" -Ur "$interpreter" -c "import os; os.chroot('/'); os.execv('/bin/true', ['/bin/true'])" > "$reports/chroot-profile.log" 2>&1
   # The adapter is a server: --help would start it. Probe its actual tini entrypoint.
   container=$(docker run -d --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --pids-limit 1024 --memory 1536m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
