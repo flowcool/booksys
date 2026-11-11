@@ -120,7 +120,7 @@ class SessionApiTests(unittest.TestCase):
             try:
                 try:
                     native = await anext(generator)
-                except Exception:
+                except BaseException:
                     traceback.print_exc()
                     raise
                 browser_pids.append(firefox_pids())
