@@ -14,6 +14,10 @@ The three public images have these roles:
 
 PostgreSQL and pyLoad are separate upstream dependencies. Keep one existing
 downloader. The worker includes the Docker client for the restricted launcher.
+The retained pyLoad needs the NAS guard extension from Dockerfile.pyload.
+Build that extension locally, or retain an already qualified exact image.
+It is not a fourth published Booksys package and is not qualified by the three
+Booksys image jobs. Never replace an existing downloader through publication.
 Only that launcher receives a Docker socket. The other roles receive no Docker
 authority. The web receives read-only typed IPC, not database credentials.
 

@@ -15,11 +15,15 @@ Weekly and manual validation run all slices and publish nothing.
 
 `ops/ci_scope.py` compares complete local Git ranges. PRs use the merge base and
 both PR SHAs, not a paginated file API. Renames include old and new paths. Shared
-modules, CI files, locks and unknown paths select every slice. Library-only and
-Byparr-only files select their image. Any selected slice runs the complete offline
+modules, CI files, locks and unknown paths select every slice. Library modules
+select both application and reader images. Byparr-only files select its image.
+Any selected slice runs the complete offline
 suite once. Each selected image uses the common exact-artifact probe/scan workflow.
 The suite installs native archive/PDF/OCR tools and Node explicitly. The existing
-three-module type check stays in place. No Python compatibility migration is implied.
+core and library type checks run on Python 3.14, the current runtime interpreter.
+The declared source compatibility remains >=3.11. The suite uses a pinned,
+temporary PostgreSQL 18.6 service and a private synthetic DSN file. It cannot
+select an operator database. No local stack is needed for these CI prerequisites.
 
 Gitleaks scans every tracked current file through `git archive`, including Markdown,
 and the complete reachable history, including merge-result diffs. This catches unchanged content moved into a new

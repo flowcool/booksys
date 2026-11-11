@@ -1,0 +1,7 @@
+FROM lscr.io/linuxserver/pyload-ng@sha256:222f1486954e052f61d3361ab2ad5e97e17f698d65c3a199e4689a3268a68a64
+ARG BOOKSYS_REVISION
+LABEL org.opencontainers.image.revision=$BOOKSYS_REVISION
+COPY ops/pyload_python /opt/booksys-python
+ENV PYTHONPATH=/opt/booksys-python
+
+ENTRYPOINT ["/lsiopy/bin/python3", "/opt/booksys-python/nas_guard.py"]
