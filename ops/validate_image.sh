@@ -23,7 +23,8 @@ docker image inspect "$image_id" > "$reports/inspect.json"
 if [[ "$image" == byparr ]]; then
   # The adapter is a server: --help would start it. Probe its actual tini entrypoint.
   container=$(docker run -d --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-    --pids-limit 1024 --memory 1536m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m "$image_id")
+    --pids-limit 1024 --memory 1536m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+    --tmpfs /cache/invisible-playwright/fonts:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 "$image_id")
   finish_readiness() {
     local status=0 command_status
     # Keep an exited container until evidence is saved. Always attempt its stop.
@@ -62,6 +63,7 @@ if [[ "$image" == byparr ]]; then
   fi
   docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 1024 --memory 1536m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+    --tmpfs /cache/invisible-playwright/fonts:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 \
     --env BEADS_DIR=/tmp/nonexistent-test-beads --entrypoint "$interpreter" "$image_id" -c "$(cat tests/probes/byparr.py)" sessions \
     < tests/test_byparr_session.py > "$reports/probe.log" 2>&1
 else
