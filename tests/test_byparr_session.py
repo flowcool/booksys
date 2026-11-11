@@ -3,6 +3,7 @@
 import importlib.util
 import asyncio
 import threading
+import struct
 import traceback
 import unittest
 from pathlib import Path
@@ -101,11 +102,55 @@ class SessionApiTests(unittest.TestCase):
         import invisible_core
         import src.utils as upstream
         from invisible_core.juggler.connection import ProcessOutput
+        from invisible_core.juggler import connection
+        from invisible_playwright.async_api import InvisiblePlaywright
 
         closed = []
         browser_pids = []
         outputs = []
         output_init = ProcessOutput.__init__
+        processes = []
+        spawn = connection._spawn_posix
+        teardown = InvisiblePlaywright._teardown
+
+        def retain_process(*args, **kwargs):
+            result = spawn(*args, **kwargs)
+            processes.append(result[2])
+            return result
+
+        async def report_before_cleanup(session):
+            try:
+                for process in processes:
+                    code = process.poll()
+                    print("Browser before cleanup:", {"pid": process.pid, "returncode": code,
+                        "signal": -code if code is not None and code < 0 else None}, flush=True)
+                # Mozilla FIREFOX_159_0_RELEASE minidump_format.h: stream 6,
+                # MDRawExceptionStream. Read metadata, never process memory.
+                for dump in list(Path('/tmp').rglob('*.dmp'))[:8]:
+                    try:
+                        size = dump.stat().st_size
+                        with dump.open('rb') as stream:
+                            header = stream.read(32)
+                            if len(header) != 32:
+                                continue
+                            signature, _, count, directory = struct.unpack_from('<IIII', header)
+                            if signature != 0x504d444d or count > 128 or directory + count * 12 > size:
+                                continue
+                            stream.seek(directory)
+                            entries = stream.read(count * 12)
+                            for offset in range(0, len(entries), 12):
+                                kind, length, position = struct.unpack_from('<III', entries, offset)
+                                if kind != 6 or length < 32 or position + 32 > size:
+                                    continue
+                                stream.seek(position)
+                                record = stream.read(32)
+                                print("Browser minidump exception:", {"file": dump.name, "size": size,
+                                    "code": struct.unpack_from('<I', record, 8)[0],
+                                    "address": hex(struct.unpack_from('<Q', record, 24)[0])}, flush=True)
+                    except (OSError, ValueError, struct.error) as error:
+                        print("Minidump metadata unavailable:", type(error).__name__, flush=True)
+            finally:
+                await teardown(session)
 
         def retain_output(output, stream):
             output_init(output, stream)
@@ -161,7 +206,9 @@ class SessionApiTests(unittest.TestCase):
                 status=200, content_type='text/html', body='<h1>Local fixture</h1>'))
             return await browser.page.goto(request.url)
 
-        with (patch.object(ProcessOutput, 'KEEP', 2000),
+        with (patch.object(connection, '_spawn_posix', new=retain_process),
+              patch.object(InvisiblePlaywright, '_teardown', new=report_before_cleanup),
+              patch.object(ProcessOutput, 'KEEP', 2000),
               patch.object(ProcessOutput, '__init__', new=retain_output),
               patch.object(upstream, 'warm_up', new=AsyncMock()),
               patch.object(upstream, 'get_browser_geo', new=AsyncMock(
