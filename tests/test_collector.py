@@ -1,4 +1,4 @@
-"""Exercise public collection boundaries with captured HTML and a local API."""
+"""Exercise public collection boundaries with minimized HTML and synthetic outgoing links and a local API."""
 
 import json
 import tempfile
@@ -28,13 +28,13 @@ def captured(url):
 
 
 class CollectorTests(unittest.TestCase):
-    def test_real_catalogues_have_40_distinct_items_and_next_page(self):
+    def test_fixture_catalogues_have_40_distinct_items_and_next_page(self):
         first, next_url = catalogue(captured(DEFAULT_CATEGORY), DEFAULT_CATEGORY)
         second, _ = catalogue(captured(next_url), next_url)
         self.assertEqual((len(first), len(second), len(first.keys() | second.keys())), (20, 20, 40))
         self.assertEqual(next_url, DEFAULT_CATEGORY + "?page=2")
 
-    def test_collect_exports_real_links_and_skips_completed_items_on_restart(self):
+    def test_collect_exports_synthetic_links_and_skips_completed_items_on_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             counts = collect([DEFAULT_CATEGORY], captured, directory,
