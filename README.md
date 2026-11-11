@@ -2,6 +2,39 @@
 
 Local Bookys collector, pyLoad submission pipeline and portable comic-library tools. Source history records the development of the tool; it does not establish a running installation.
 
+## Contributions and images
+
+Original Booksys code uses the [MIT license](LICENSE). Bundled code and data keep
+[their own licenses](THIRD_PARTY_NOTICES.md). Read the [contribution guide](CONTRIBUTING.md)
+and [security policy](SECURITY.md) before opening an issue or PR.
+See [public image examples](docs/public-images.md) and [contribution CI](docs/contribution-ci.md).
+Configuration alone does not prove publication or runtime activation.
+
+Accepted next change: [work identification and metadata](docs/specs/0003-work-identification-and-metadata.md).
+An identified album may be classified with an unknown edition. Valid unidentified
+comics will have a separate CBZ holding area.
+This target is approved; its integrated implementation is not deployed yet.
+The existing running service is described below.
+
+
+Open the operator-configured library page. Example address: **http://192.0.2.10:8768/**.
+Search title, author, ISBN, series or reason. Filter each stage separately and
+click column headers to sort. Each row separates transfer, intake, OCR, identity
+and publication. Every row links to a detailed fiche, including pending inputs.
+These enriched library fiches differ from the collector’s Bookys capture fiches.
+They show collected bibliography, candidates, source assertions, unknowns and
+blockers. Descriptions use a manual correction first, then the matching saved
+Bookys description, then an available bibliographic summary. Provenance is shown. A local cover is labelled as the file’s first page. Technical evidence
+is collapsed. No extra provider is queried for a page. The timestamps
+show the snapshot age, last cycle and next cycle. This is saved state, not a live
+pyLoad interface. Identity resolution adds explicit proof, preview and
+confirmation from a validated file’s fiche. The cycle applies the durable decision;
+there is no publish button. See operator resolution.
+Identity resolution has local activation evidence. Private work records are not part of the public source.
+
+The accepted [Activity dashboard scope](docs/specs/0004-activity-dashboard.md)
+defines current work, queues, waits and a 24-hour event history. Private work records own implementation and activation evidence.
+
 ## Downloader support
 
 Booksys submits collected link sets to pyLoad. The optional AllDebrid integration uses the provider's supported-hoster list; availability and quotas can change. Captcha support depends on pyLoad plugins and the operator's configuration. No provider account, activation, balance or successful challenge is implied.

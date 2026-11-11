@@ -1,0 +1,18 @@
+# Generic examples. These services do not provide a full library installation.
+# Replace version tags with verified digests for operational rollback.
+services:
+  byparr:
+    image: ghcr.io/flowcool/booksys-byparr:0.1.0
+    ports: ["127.0.0.1:8191:8191"]
+    profiles: [collector]
+  worker:
+    image: ghcr.io/flowcool/booksys-worker:0.1.0
+    command: ["--help"]
+    profiles: [collector]
+    # Configure arguments and persistent state for your own downloader.
+  library:
+    image: ghcr.io/flowcool/booksys-library:0.1.0
+    command: ["--help"]
+    profiles: [reader]
+    network_mode: none
+    # The host controller invokes readers with bounded synthetic or owned inputs.

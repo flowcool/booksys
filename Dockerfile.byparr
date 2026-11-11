@@ -8,6 +8,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && runtime_python=$(readlink -f /app/.venv/bin/python) \
     && "$runtime_python" -m pip uninstall --break-system-packages -y pip
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/booksys/
+COPY third_party/ /usr/share/doc/booksys/third_party/
 USER 1000
 COPY ops/byparr/session_api.py /app/session_api.py
 ENTRYPOINT ["tini", "-s", "--", "/app/.venv/bin/python", "/app/session_api.py"]

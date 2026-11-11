@@ -1,0 +1,26 @@
+# Versions and dependency closure remain canonical in uv.lock and the image SBOM.
+python_packages:
+  beautifulsoup4: {license: MIT, source: https://www.crummy.com/software/BeautifulSoup/}
+  soupsieve: {license: MIT, source: https://github.com/facelessuser/soupsieve}
+  typing-extensions: {license: PSF-2.0, source: https://github.com/python/typing_extensions}
+  lxml: {license: BSD-3-Clause, source: https://lxml.de/}
+  pikepdf: {license: MPL-2.0, source: https://github.com/pikepdf/pikepdf}
+  pillow: {license: MIT-CMU, source: https://python-pillow.github.io/}
+  PyYAML: {license: MIT, source: https://pyyaml.org/}
+  rarfile: {license: ISC, source: https://github.com/markokr/rarfile}
+  packaging: {license: Apache-2.0 OR BSD-2-Clause, source: https://github.com/pypa/packaging}
+development_packages:
+  mypy: MIT
+  librt: MIT
+  mypy_extensions: MIT
+  pathspec: MPL-2.0
+  types-PyYAML: Apache-2.0
+  types-beautifulsoup4: Apache-2.0
+  types-html5lib: Apache-2.0
+  types-webencodings: Apache-2.0
+review:
+  source_versions: uv.lock
+  runtime_closure: exact image SBOM and installed metadata
+  native_components: exact package copyright files and source manifest
+  build_and_test_tools: upstream licenses; not part of the Booksys MIT grant
+  publication_gate: docs/redistribution.md

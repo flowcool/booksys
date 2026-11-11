@@ -1,0 +1,18 @@
+name: Bug report
+description: Report a reproducible problem with synthetic data
+body:
+  - type: markdown
+    attributes:
+      value: Do not share secrets, comics, private links or local addresses. Use private vulnerability reporting for security issues. No response-time commitment applies.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction, revision or image digest, and redacted logs
+    validations:
+      required: true

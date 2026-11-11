@@ -14,3 +14,7 @@ library/__pycache__/
 !ops/byparr/session_api.py
 !retirement_history.py
 !activity.py
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!third_party/
+!third_party/**

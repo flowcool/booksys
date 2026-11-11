@@ -14,5 +14,7 @@ RUN apt-get update \
 WORKDIR /collector
 COPY booksys.py pipeline.py fiches.py mirrors.py mirror_routing.py retirement_history.py activity.py ./
 ENV PYTHONUNBUFFERED=1
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/booksys/
+COPY third_party/ /usr/share/doc/booksys/third_party/
 USER 1000:1000
 ENTRYPOINT ["/app/.venv/bin/python", "/collector/pipeline.py"]

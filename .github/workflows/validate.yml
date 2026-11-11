@@ -16,46 +16,43 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  worker-tests:
+  scope:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    outputs:
+      worker: ${{ steps.scope.outputs.worker }}
+      library: ${{ steps.scope.outputs.library }}
+      byparr: ${{ steps.scope.outputs.byparr }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 ops/ci_scope.py "$EVENT_NAME" "$GITHUB_EVENT_PATH" "$GITHUB_OUTPUT"
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-        with:
-          version: "0.11.33"
-          python-version: "3.11"
-          enable-cache: true
-          cache-suffix: worker-tests
-      - name: Install the locked development environment
-        run: |
-          echo "BEADS_DIR=$RUNNER_TEMP/nonexistent-test-beads" >> "$GITHUB_ENV"
-          uv sync --locked --extra dev
-      - name: Run existing worker tests and artifact gate tests
-        run: |
-          uv run --no-sync python -m unittest discover -s tests -p test_collector.py -v
-          uv run --no-sync python -m unittest discover -s tests -p test_pipeline.py -v
-          uv run --no-sync python -m unittest discover -s tests -p test_fiches.py -v
-          uv run --no-sync python -m unittest discover -s tests -p test_image_validation.py -v
-      - name: Run existing type checks and artifact helper check
-        run: uv run --no-sync mypy booksys.py pipeline.py fiches.py ops/image_validation.py
       - name: Validate workflow syntax and security
         run: |
           bash ops/install_validation_tools.sh "$RUNNER_TEMP/validation-tools"
           "$RUNNER_TEMP/validation-tools/actionlint"
           "$RUNNER_TEMP/validation-tools/zizmor" --offline --no-progress .github/workflows/
-  worker-image:
-    # Both syntaxes bind reusable workflows to this commit. actionlint 1.7.12
-    # does not yet accept the newer $/ spelling.
-    uses: ./.github/workflows/image-validation.yml # zizmor: ignore[self-repository]
-    with:
-      image: worker
-      dockerfile: Dockerfile
-  library-tests:
+      - name: Check scope decisions with isolated Git histories
+        run: python3 -m unittest discover -s tests -p test_ci_scope.py -v
+      - name: Validate generic Compose examples
+        run: docker compose -f compose.ghcr.example.yaml config --quiet
+  offline-tests:
+    needs: scope
+    if: needs.scope.outputs.worker == 'true' || needs.scope.outputs.library == 'true' || needs.scope.outputs.byparr == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,7 +62,7 @@ jobs:
           version: "0.11.33"
           python-version: "3.11"
           enable-cache: true
-          cache-suffix: library-tests
+          cache-suffix: offline-tests
       - name: Install required native and JavaScript test tools
         run: |
           sudo apt-get update
@@ -75,18 +72,44 @@ jobs:
         run: |
           echo "BEADS_DIR=$RUNNER_TEMP/nonexistent-test-beads" >> "$GITHUB_ENV"
           uv sync --locked --extra dev
-      - name: Run existing native reader, format, confinement and UI tests
-        run: |
-          for suite in readers sandbox pdf formats_ops web_js resolution; do
-            uv run --no-sync python -m unittest discover -s tests -p "test_library_$suite.py" -v
-          done
+      - name: Run the complete offline suite
+        run: uv run --no-sync python -m unittest discover -s tests -v
+      - name: Run existing type checks
+        run: uv run --no-sync mypy booksys.py pipeline.py fiches.py ops/image_validation.py
+  worker-image:
+    needs: scope
+    if: needs.scope.outputs.worker == 'true'
+    # Both syntaxes bind reusable workflows to this commit. actionlint 1.7.12
+    # does not yet accept the newer $/ spelling.
+    uses: ./.github/workflows/image-validation.yml # zizmor: ignore[self-repository]
+    with:
+      image: worker
+      dockerfile: Dockerfile
   library-image:
+    needs: scope
+    if: needs.scope.outputs.library == 'true'
     uses: ./.github/workflows/image-validation.yml # zizmor: ignore[self-repository]
     with:
       image: library
       dockerfile: Dockerfile.library
   byparr-image:
+    needs: scope
+    if: needs.scope.outputs.byparr == 'true'
     uses: ./.github/workflows/image-validation.yml # zizmor: ignore[self-repository]
     with:
       image: byparr
       dockerfile: Dockerfile.byparr
+  required:
+    name: required
+    if: ${{ always() }}
+    needs: [scope, policy, offline-tests, worker-image, library-image, byparr-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require success or an intentional scope skip
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python3 ops/ci_scope.py --check-results "$RESULTS"
