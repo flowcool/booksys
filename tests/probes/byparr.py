@@ -42,6 +42,9 @@ if sys.argv[1] == "readiness":
     print(json.dumps({"actual_entrypoint": "tini/session_api.py", "health": health,
                       "invalid_origin": 422, "browser_processes": 0, "processes": processes}))
 elif sys.argv[1] == "sessions":
+    # Firefox159 checks this legacy application directory before -profile.
+    Path("/home/byparr/.mozilla/firefox").mkdir(parents=True, exist_ok=True)
+    Path("/cache/mozilla/firefox").mkdir(parents=True, exist_ok=True)
     # Import the delivered adapter, not a second source copy. Stream only tests.
     import session_api
     assert importlib.util.find_spec("src") is not None
