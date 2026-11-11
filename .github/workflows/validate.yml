@@ -85,3 +85,8 @@ jobs:
     with:
       image: library
       dockerfile: Dockerfile.library
+  byparr-image:
+    uses: ./.github/workflows/image-validation.yml # zizmor: ignore[self-repository]
+    with:
+      image: byparr
+      dockerfile: Dockerfile.byparr

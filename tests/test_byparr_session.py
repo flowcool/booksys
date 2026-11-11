@@ -53,6 +53,60 @@ class Context:
 
 @unittest.skipUnless(AVAILABLE, "Run in the pinned Byparr image with /app on PYTHONPATH")
 class SessionApiTests(unittest.TestCase):
+    def test_health_is_lazy_and_rejected_requests_do_not_open_a_browser(self):
+        opened = []
+
+        async def browser():
+            opened.append(True)
+            yield SimpleNamespace(page=Page(), context=Context())
+
+        with TestClient(create_app(browser)) as client:
+            self.assertEqual(client.get("/health").json(),
+                             {"status": "ok", "generation": 0, "requests": 0})
+            self.assertEqual(client.post("/v1", json={"url": "https://outside.example.invalid"}).status_code, 422)
+            self.assertEqual(client.get("/health").json()["generation"], 0)
+        self.assertEqual(opened, [])
+
+    def test_startup_failure_is_not_retried_and_next_request_can_recover(self):
+        attempts = []
+        closed = []
+
+        async def browser():
+            attempts.append(True)
+            try:
+                if len(attempts) == 1:
+                    raise RuntimeError("synthetic startup failure")
+                yield SimpleNamespace(page=Page(), context=Context())
+            finally:
+                closed.append(True)
+
+        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
+            with TestClient(create_app(browser), raise_server_exceptions=False) as client:
+                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 500)
+                self.assertEqual(len(attempts), 1)
+                self.assertEqual(len(closed), 1)
+                self.assertEqual(client.get("/health").json()["generation"], 0)
+                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 200)
+                self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(closed), 2)
+
+    def test_shutdown_releases_a_successful_session_once(self):
+        closed = []
+
+        async def browser():
+            try:
+                yield SimpleNamespace(page=Page(), context=Context())
+            finally:
+                closed.append(True)
+
+        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
+            with TestClient(create_app(browser)) as client:
+                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 200)
+                self.assertEqual(client.get("/health").json(),
+                                 {"status": "ok", "generation": 1, "requests": 1})
+                self.assertEqual(closed, [])
+        self.assertEqual(closed, [True])
+
     def test_successive_requests_reuse_the_browser_page(self):
         async def browser():
             yield SimpleNamespace(page=Page(), context=Context())

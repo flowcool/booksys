@@ -3,7 +3,7 @@
 Validation uses GitHub-hosted runners and read-only repository tokens. It does
 not log into a registry, publish an image or access an installation. PRs,
 `main` pushes, manual validation and the weekly run use the same image workflow.
-Worker and library checks run for every change, including documentation.
+Worker, library and Byparr checks run for every change, including documentation.
 Later scope filtering must preserve check completion and include renamed paths.
 
 Install the locked dev environment with `uv sync --locked --extra dev`.
@@ -120,3 +120,32 @@ it pass. Native host proof records the host tools/environment separately from
 the image proof. The GitHub runner's native confinement remains subject to
 observed CI execution. These checks change neither the host controller nor any
 running image reference or reader retention policy.
+
+## Byparr adapter image
+
+Use the same build and validation commands with `Dockerfile.byparr`,
+`byparr` and distinct archive/report paths. Keep the pinned upstream base,
+Python 3.14 interpreter, uid 1000 and existing `tini` adapter entrypoint.
+The image updates the same inherited Ubuntu apt packages as the worker and
+removes the inherited interpreter's build-only pip installation. The base has
+no pip in its virtual environment. Runtime dependencies
+remain installed; the probe uses their actual FastAPI and upstream request code.
+
+The adapter is a server. It has no CLI help interface. The common helper starts
+its actual entrypoint under the same network-disabled, read-only restrictions.
+`tests/probes/byparr.py` checks `tini`, polls loopback `/health`, submits an
+invalid external-origin input and checks that session generation remains zero.
+It rejects browser processes. Health readiness means the adapter accepts requests;
+it does not prove a browser can navigate or solve a challenge.
+Logs and container inspection are saved before the owned server stops.
+
+A second isolated container loads the delivered `/app/session_api.py` and streams
+`tests/test_byparr_session.py` into unittest. Missing upstream dependencies,
+empty suites, skipped cases or failures fail validation. Browser factories and
+page responses are synthetic. The tests exercise the real pinned upstream
+request path with mocked pages/challenge results. They cover reuse, timeouts,
+solver failure without retry, invalid HTML and origin refusal, busy responses,
+request/age/idle/memory recycling, startup recovery, shutdown cleanup and failed
+cleanup readiness. No browser process, real session or external navigation is
+required. Tests and probe code are inputs, not extra runtime image contents.
+Full image scans and exact-artifact identity checks use the shared mechanism.
