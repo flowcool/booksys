@@ -9,13 +9,21 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
-from src.endpoints import read_item
-from src.models import LinkRequest, LinkResponse
-from src.utils import get_browser, logger
+from fastapi import FastAPI, HTTPException, Request
+from src.endpoints import _navigate_and_solve
+from src.content import build_response_content
+from src.models import LinkRequest, LinkResponse, Solution
+from src.utils import TimeoutTimer, get_browser
+import uuid
+
+from booksys_core.browser_outcomes import retry_after
+from booksys_core.diagnostics import opaque, emit, install_logging
 
 
 ORIGIN = "https://www7.bookys-ebooks.com"
+# Native teardown closes Playwright and reaps the process tree (up to 5s).
+# Leave room for both steps, within the runtime's 30s shutdown grace period.
+CLEANUP_TIMEOUT = 20
 
 
 class PageShape(HTMLParser):
@@ -60,6 +68,7 @@ def memory_pressure() -> bool:
 def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_requests: int = 256,
                clock: Callable[[], float] = time.monotonic,
                memory_pressure: Callable[[], bool] = memory_pressure) -> FastAPI:
+    install_logging('byparr')
     generator: Any = None
     browser: Any = None
     count = 0
@@ -67,18 +76,23 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
     lock = asyncio.Lock()
     broken = False
     generation = 0
+    active_request_id: str | None = None
+
+    def detail(code: str, origin: str, request_id: str, **fields: Any) -> dict[str, Any]:
+        return {'schema': 1, 'code': code, 'origin': origin, 'request_id': request_id,
+                'retry_after_state': 'absent', **fields}
 
     async def close() -> None:
         nonlocal generator, browser, broken
         browser = None
         if generator is not None:
             try:
-                await asyncio.wait_for(generator.aclose(), timeout=5)
+                await asyncio.wait_for(generator.aclose(), timeout=CLEANUP_TIMEOUT)
                 generator = None
             except BaseException:
                 broken = True
-                logger.error("Browser cleanup failed; restart the Byparr service")
-                raise
+                emit(service='byparr', stage='byparr', code='blocked', reason='cleanup_failed')
+                raise HTTPException(503, detail('cleanup_failed', 'local', active_request_id or 'shutdown')) from None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -89,11 +103,50 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
 
     app = FastAPI(lifespan=lifespan)
 
-    async def perform(request: LinkRequest) -> LinkResponse:
+    @app.middleware('http')
+    async def correlation(http: Request, call_next: Any) -> Any:
+        supplied = http.headers.get('X-Booksys-Request-ID')
+        http.state.request_id = supplied if opaque(supplied) else str(uuid.uuid4())
+        response = await call_next(http)
+        response.headers['X-Booksys-Request-ID'] = http.state.request_id
+        return response
+
+    async def perform(request: LinkRequest, request_id: str) -> LinkResponse:
         nonlocal generator, browser, count, opened, last_used, generation
         if (not same_origin(request.url) or request.cmd != "request.get"
                 or request.return_only_cookies or not 1 <= request.max_timeout <= 60):
             raise HTTPException(422, "Expected a Bookys HTML request with a 1-60 second budget")
+        page: Any = None
+        request_ids: set[int] = set()
+        responses: list[Any] = []
+        remote_fields: dict[str, Any] = {}
+        overflow = False
+
+        def navigation(outgoing: Any) -> None:
+            nonlocal overflow
+            if outgoing.is_navigation_request() and outgoing.frame == page.main_frame:
+                if len(request_ids) >= 64:
+                    overflow = True
+                else:
+                    request_ids.add(id(outgoing))
+
+        def response_seen(response: Any) -> None:
+            nonlocal overflow
+            if id(response.request) in request_ids:
+                if len(responses) >= 64:
+                    overflow = True
+                else:
+                    responses.append(response)
+
+        def detach() -> None:
+            nonlocal page
+            if page is not None:
+                detached = page
+                page = None
+                if not detached.is_closed():
+                    detached.remove_listener('request', navigation)
+                    detached.remove_listener('response', response_seen)
+
         try:
             if browser is not None and (count >= max_requests or clock() - opened >= 3600
                                         or clock() - last_used >= 1800):
@@ -104,7 +157,7 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
                 count = 0
                 opened = clock()
                 generation += 1
-                logger.info("Bookys session opened: generation=%d", generation)
+                emit(service='byparr', stage='byparr', code='started', request_id=request_id)
             # Upstream installs media routes per request. Replace them rather than
             # retaining handlers, and keep the top-level origin guard first.
             await browser.page.unroute_all(behavior="wait")
@@ -120,39 +173,83 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
                     await route.continue_()
 
             await browser.page.route("**/*", guard)
-            result = await read_item(request.model_copy(update={"block_media": False}), browser)
+            page = browser.page
+            page.on('request', navigation)
+            page.on('response', response_seen)
+            started = int(time.time() * 1000)
+            timer = TimeoutTimer(duration=request.max_timeout)
+            initial = await _navigate_and_solve(browser, request.model_copy(update={'block_media': False}), timer)
+            final = next((response for response in reversed(responses) if response.url == page.url), None)
+            if overflow or final is None or not same_origin(page.url):
+                raise HTTPException(502, detail('unknown_browser_failure', 'unknown', request_id))
+            status = final.status
+            if status == 429:
+                state, delay = retry_after(final.headers.get('retry-after'), received_at=time.time())
+                remote_fields = {'retry_after_state': state}
+                if delay is not None:
+                    remote_fields['retry_after_seconds'] = delay
+                raise HTTPException(429, detail('remote_rate_limited', 'remote', request_id, **remote_fields))
+            if status != 200:
+                raise HTTPException(502, detail('remote_http_failure', 'remote', request_id))
+            content_type, content = await build_response_content(page, request, initial)
+            cookies = await browser.context.cookies([request.url, page.url])
+            result = LinkResponse(message='Success', start_timestamp=started,
+                solution=Solution(url=page.url, status=status, cookies=cookies, headers={},
+                                  user_agent=final.request.headers.get('user-agent', ''),
+                                  response=content, content_type=content_type))
             shape = PageShape()
             shape.feed(result.solution.response)
             if (not same_origin(result.solution.url) or not shape.heading or shape.challenge
                     or "just a moment" in shape.title or "attention required" in shape.title):
-                raise HTTPException(502, "Unexpected Bookys HTML; session discarded")
+                raise HTTPException(502, detail('invalid_content', 'remote', request_id))
             count += 1
             last_used = clock()
             if memory_pressure():
-                logger.info("Bookys session recycled: memory pressure")
+                emit(service='byparr', stage='byparr', code='completed', request_id=request_id)
+                detach()
                 await close()
+            detach()
             return result
         except BaseException:
-            await close()
+            # Native Playwright cannot update subscriptions after its transport
+            # closes. Detach while it is alive, preserving the original error.
+            try:
+                detach()
+            finally:
+                try:
+                    await close()
+                except HTTPException:
+                    raise HTTPException(503, detail('cleanup_failed', 'local', request_id, **remote_fields)) from None
             raise
+        finally:
+            detach()
 
     @app.post("/v1")
-    async def fetch(request: LinkRequest) -> LinkResponse:
+    async def fetch(request: LinkRequest, http: Request) -> LinkResponse:
+        nonlocal active_request_id
+        request_id = http.state.request_id
         if broken:
-            raise HTTPException(503, "Browser cleanup failed; restart service")
+            raise HTTPException(503, detail('cleanup_failed', 'local', request_id))
         if lock.locked():
-            raise HTTPException(429, "Bookys browser busy; use sequential requests")
+            raise HTTPException(429, detail('browser_busy', 'local', request_id,
+                **({'active_request_id': active_request_id} if active_request_id else {})))
         async with lock:
+            active_request_id = request_id
             started = clock()
             try:
                 # Include browser startup in the caller's budget. Upstream also
                 # passes this limit to navigation and Cloudflare solving.
-                return await asyncio.wait_for(perform(request), timeout=min(60, max(1, request.max_timeout)))
+                return await asyncio.wait_for(perform(request, request_id), timeout=min(60, max(1, request.max_timeout)))
             except TimeoutError as exc:
-                raise HTTPException(408, "Bookys request timed out; session discarded") from exc
+                raise HTTPException(408, detail('browser_timeout', 'local', request_id)) from exc
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(502, detail('unknown_browser_failure', 'unknown', request_id)) from None
             finally:
-                logger.info("Bookys request: generation=%d count=%d seconds=%.3f",
-                            generation, count, clock() - started)
+                active_request_id = None
+                emit(service='byparr', stage='byparr', code='completed', request_id=request_id,
+                     duration_ms=max(0, int((clock() - started) * 1000)))
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -165,4 +262,4 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(create_app(), host="0.0.0.0", port=8191)
+    uvicorn.run(create_app(), host="0.0.0.0", port=8191, access_log=False, log_config=None)

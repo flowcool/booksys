@@ -16,6 +16,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from booksys import CollectionError, DEFAULT_CATEGORY
+from library.primitives import LibraryError
 
 
 def record_request(directory: Path, pages: int, *, archive_completed: bool = False) -> dict[str, Any]:
@@ -24,32 +25,34 @@ def record_request(directory: Path, pages: int, *, archive_completed: bool = Fal
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (directory / 'pipeline.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        target = directory / 'backfill.yaml'
-        if target.is_symlink():
-            raise CollectionError('Backfill request must not be a symlink')
-        archived = None
-        if target.exists():
-            previous = target.read_bytes()
-            job = yaml.safe_load(previous)
-            if (not archive_completed or not isinstance(job, dict) or job.get('version') != 1
-                    or job.get('status') != 'complete'):
+        from library.operational_state import CollectorState
+        state=CollectorState(directory)
+        job=state.backfill()
+        archived=None
+        if job is not None:
+            if not archive_completed or job.get('version')!=1 or job.get('status')!='complete':
                 raise CollectionError('Existing request requires inspection; only completed requests can be archived')
-            history = directory / 'backfill-history'
-            if history.is_symlink():
-                raise CollectionError('Backfill history must not be a symlink')
-            history.mkdir(mode=0o700, exist_ok=True)
-            archived = history / (hashlib.sha256(previous).hexdigest() + '.yaml')
-            if archived.is_symlink():
-                raise CollectionError('Archived request must not be a symlink')
+            previous=yaml.safe_dump(job,sort_keys=False).encode()
+            frozen=directory/'backfill.yaml'
+            if frozen.exists() and not frozen.is_symlink():
+                original=frozen.read_bytes()
+                if {**{'pages':{},'items':{}},**yaml.safe_load(original)}==job:previous=original
+            history=directory/'backfill-history'
+            if history.is_symlink():raise CollectionError('Backfill history must not be a symlink')
+            history.mkdir(mode=0o700,exist_ok=True)
+            archived=history/(hashlib.sha256(previous).hexdigest()+'.yaml')
             if archived.exists():
-                if archived.read_bytes() != previous:
-                    raise CollectionError('Archived request evidence differs')
-            else:
-                _write_atomic(archived, previous, exclusive=True)
+                if archived.is_symlink() or archived.read_bytes()!=previous:raise CollectionError('Archived request evidence differs')
+            else:_write_atomic(archived,previous,exclusive=True)
         request = {'version': 1, 'pages_requested': pages, 'next_page': DEFAULT_CATEGORY,
                    'requested_at': datetime.now(timezone.utc).isoformat(), 'status': 'pending',
                    'pages': {}, 'items': {}, 'submitted': 0}
-        _write_atomic(target, yaml.safe_dump(request, sort_keys=False).encode())
+        raw=yaml.safe_dump(request,sort_keys=False).encode()
+        requests=directory/'backfill-requests'
+        requests.mkdir(mode=0o700,exist_ok=True)
+        target=requests/(hashlib.sha256(raw).hexdigest()+'.yaml')
+        _write_atomic(target,raw,exclusive=True)
+        state.start_backfill(request,replace_completed=archive_completed)
         return {'status': 'recorded', 'pages_requested': pages, 'request': str(target),
                 'previous_request': str(archived) if archived else None}
 
@@ -85,7 +88,7 @@ def main() -> int:
     try:
         print(json.dumps(record_request(args.directory, args.pages, archive_completed=args.archive_completed)))
         return 0
-    except (CollectionError, OSError, ValueError, yaml.YAMLError) as exc:
+    except (LibraryError,CollectionError, OSError, ValueError, yaml.YAMLError) as exc:
         print(json.dumps({'status': 'blocked', 'reason': str(exc)}))
         return 2
 

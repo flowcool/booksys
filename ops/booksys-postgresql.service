@@ -1,0 +1,20 @@
+[Unit]
+Description=Booksys PostgreSQL lab (retained identities)
+Requires=docker.service
+PartOf=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/data/booksys/runtime /mnt/booksys-host/booksys-files /mnt/booksys-host/booksys-library
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=booksys
+WorkingDirectory=/data/booksys/runtime
+ExecStart=/usr/bin/python3 /data/booksys/runtime/stack.py start
+ExecStop=/usr/bin/python3 /data/booksys/runtime/stack.py stop
+TimeoutStartSec=300
+TimeoutStopSec=900
+
+[Install]
+WantedBy=multi-user.target docker.service

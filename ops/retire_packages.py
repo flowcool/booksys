@@ -64,6 +64,8 @@ def main() -> int:
                       (args.captured, args.submissions, args.credentials))
         if not .7 <= args.api_interval <= 60:
             raise LibraryError('API interval must be between 0.7 and 60 seconds')
+        from library.launcher import verify_startup
+        verify_startup(args.root / 'state')
         client = PacedPyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'], args.api_interval)
         service = Retirement(client, Catalog(args.root / 'state'), args.reception,
                              args.submissions, args.captured, scripts=args.pyload_scripts or configured_scripts())

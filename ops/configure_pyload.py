@@ -18,6 +18,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from pipeline import Pyload
+from ops.compose import arguments as compose_arguments
 
 
 def run(*args: str) -> str:
@@ -67,7 +68,7 @@ def main() -> None:
         subprocess.run(["docker", "logs", "booksys-pyload"], stdout=output, stderr=subprocess.STDOUT, check=True)
     print(f"Recovery evidence: {recovery}", flush=True)
     if worker_running:
-        run("docker", "compose", "-f", "compose.runtime.yaml", "stop", "worker")
+        run(*compose_arguments(), "stop", "worker")
     before = {f["fid"] for p in api.call("get_queue_data") for f in p["links"]}
     snapshot["queue_file_ids"] = sorted(before)
     (recovery / "before.json").write_text(json.dumps(snapshot, indent=2))
@@ -76,7 +77,7 @@ def main() -> None:
         actual = api.call("get_config_value", section=section, category=category, option=option)
         assert str(actual).lower() == str(value).lower(), (category, option, actual)
     print("Native retry/debug settings verified; recreating shared downloader", flush=True)
-    run("docker", "compose", "-f", "compose.shared.yaml", "up", "-d", "--force-recreate", "--no-deps", "pyload")
+    run(*compose_arguments(shared=True), "up", "-d", "--force-recreate", "--no-deps", "pyload")
     deadline = time.monotonic() + 90
     while True:
         try:
@@ -92,7 +93,7 @@ def main() -> None:
     after = {f["fid"] for p in api.call("get_queue_data") for f in p["links"]}
     assert before <= after, "Original queue IDs missing; keep collector stopped"
     current = inspect("booksys-pyload")
-    assert current["HostConfig"]["LogConfig"] == {"Type": "json-file", "Config": {"max-size": "20m", "max-file": "5"}}
+    assert current["HostConfig"]["LogConfig"] == {"Type": "json-file", "Config": {"max-size": "10m", "max-file": "3"}}
     floor = run("docker", "exec", "booksys-pyload", "python", "-c",
                 "import logging, sitecustomize; assert logging.root.manager.disable == logging.INFO; print('WARNING floor active')")
     assert "WARNING floor active" in floor
@@ -102,7 +103,7 @@ def main() -> None:
              "status": api.call("status_server")}
     (recovery / "proof.json").write_text(json.dumps(proof, indent=2))
     if worker_running:
-        run("docker", "compose", "-f", "compose.runtime.yaml", "start", "worker")
+        run(*compose_arguments(), "start", "worker")
     print(json.dumps(proof), flush=True)
 
 

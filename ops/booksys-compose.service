@@ -1,0 +1,18 @@
+[Unit]
+Description=Booksys Compose lab
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/data/booksys/stack /mnt/booksys-host/booksys-files /mnt/booksys-host/booksys-library
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/data/booksys/stack
+ExecStart=/usr/bin/docker compose up -d --no-build --pull never
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=180
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

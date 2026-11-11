@@ -9,12 +9,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 NAMES = ["booksys-worker-1", "booksys-byparr-1", "booksys-pyload"]
 
 
@@ -47,6 +49,7 @@ def main() -> None:
     parser.add_argument("--expected-worker", required=True)
     parser.add_argument("--expected-browser", required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--worker-quiesced", action="store_true", help="Keep the already stopped collector stopped")
     args = parser.parse_args()
     os.umask(0o077)
     if run("docker", "info", "--format", "{{.Name}}").strip() != "booksys-host":
@@ -56,14 +59,18 @@ def main() -> None:
     worker, browser, downloader = before
     if worker["Id"] != args.expected_worker or browser["Id"] != args.expected_browser:
         raise RuntimeError("Container target drift; inspect before retrying")
-    if not all(c["State"]["Running"] for c in before):
+    if args.worker_quiesced and worker['State']['Running']:
+        raise RuntimeError('Expected a quiesced collector')
+    if not all(c["State"]["Running"] for c in (before[1:] if args.worker_quiesced else before)):
         raise RuntimeError("All existing services must be running")
     if any(c["Config"]["Labels"].get("com.docker.compose.project") != "booksys" for c in before[:2]):
         raise RuntimeError("Unexpected Compose project")
     mounts = {m["Destination"]: m["Source"] for m in worker["Mounts"]}
     if mounts.get("/state") != "/data/booksys/state":
         raise RuntimeError("Unexpected worker state mount")
-    compose = json.loads(run("docker", "compose", "-p", "booksys", "--project-directory",
+    from ops.compose import COMMON, arguments
+    arguments()  # Check canonical logging settings and shell overrides.
+    compose = json.loads(run("docker", "compose", "--env-file", str(COMMON), "-p", "booksys", "--project-directory",
                             str(args.runtime_root.resolve()), "-f", str(args.runtime_root / "compose.runtime.yaml"),
                             "config", "--format", "json"))
     if compose["services"]["byparr"]["image"] != "booksys-byparr:local":
@@ -99,7 +106,8 @@ def main() -> None:
         service["healthcheck"]["test"][-1] = "http://127.0.0.1:8191/health"
         (recovery / "candidate.json").write_text(json.dumps(compose, indent=2))
         print("Recovery: " + str(recovery), flush=True)
-        run("docker", "stop", "--timeout", "30", worker["Id"])
+        if not args.worker_quiesced:
+            run("docker", "stop", "--timeout", "30", worker["Id"])
         # No independent YAML restore: the downloader and journals must stay in sync.
         shutil.copytree(state, recovery / "state")
         hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in state.glob("*.yaml")}
@@ -113,7 +121,8 @@ def main() -> None:
         if after[0]["Id"] != worker["Id"] or after[2]["Id"] != downloader["Id"]:
             raise RuntimeError("Worker or downloader changed; inspect before resuming")
         run("docker", "image", "tag", candidate, "booksys-byparr:local")
-        run("docker", "start", worker["Id"])
+        if not args.worker_quiesced:
+            run("docker", "start", worker["Id"])
         proof = {"worker_preserved": worker["Id"], "downloader_preserved": downloader["Id"],
                  "candidate_image": candidate, "browser": after[1]["Id"], "journals_unchanged_before_resume": True,
                  "recovery": str(recovery), "previous_tag": previous_tag}

@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import Pyload
@@ -12,6 +13,16 @@ from library.catalog import Catalog, lock, atomic_yaml
 from mirror_routing import route_package, restore_package
 from mirrors import public_hosts
 import yaml
+
+
+def routing_state(catalog: Catalog, source: str) -> dict[str, Any]:
+    backend = catalog.backend()
+    if backend is None:
+        return catalog.read()
+    with backend._database.connection() as db:
+        backend.check(db)
+        origins = [row[0] for row in db.execute('SELECT id FROM origins WHERE source_ref=%s ORDER BY id', (source,))]
+    return backend.working_set('retire', {'origins': origins}, media=False)
 
 
 def main() -> int:
@@ -27,23 +38,26 @@ def main() -> int:
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--rollback', action='store_true')
     args = parser.parse_args()
+    from library.launcher import verify_startup
+    verify_startup(args.library_state)
     client = Pyload(args.endpoint, json.loads(args.credentials.read_text())['api_key'])
-    records = yaml.safe_load(args.captured.read_text())['items']
-    entries = yaml.safe_load(args.submissions.read_text())['submissions']
+    from library.operational_state import CollectorState,NativeHistory
+    records = CollectorState(args.captured.parent).captured()['items']
+    entries = CollectorState(args.submissions.parent).monitor()['submissions']
     entry = entries[args.source]
     if args.rollback:
         if not args.apply:
             parser.error('Rollback requires explicit --apply')
-        operation = yaml.safe_load(args.journal.read_text())['packages'][str(entry['package_id'])]
+        operation = NativeHistory(args.journal.parent).routing()['packages'][str(entry['package_id'])]
         with lock(args.journal.with_suffix('.lock')):
-            value = yaml.safe_load(args.journal.read_text())
+            value = NativeHistory(args.journal.parent).routing()
             operation = value['packages'][str(entry['package_id'])]
             restore_package(client, entry, operation)
             operation['phase'] = 'restored'
-            atomic_yaml(args.journal, value)
+            NativeHistory(args.journal.parent).route(str(entry['package_id']),operation)
         print(json.dumps({'outcome': 'restored', 'pid': entry['package_id']}))
     else:
-        result = route_package(client, args.source, entry, records[args.source], Catalog(args.library_state).read(),
+        result = route_package(client, args.source, entry, records[args.source], routing_state(Catalog(args.library_state), args.source),
                                args.reception, args.journal, apply=args.apply, availability=public_hosts())
         print(json.dumps(result))
     return 0

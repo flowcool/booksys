@@ -16,6 +16,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from ops.compose import arguments as compose_arguments
 UNIT = Path.home() / '.config/systemd/user/booksys-library.service'
 
 
@@ -66,12 +67,12 @@ def main() -> None:
     args.evidence.mkdir(parents=True, mode=0o700, exist_ok=False)
     (args.evidence / 'before.json').write_text(json.dumps(proof, indent=2))
     (args.evidence / 'previous.service').write_bytes(UNIT.read_bytes())
-    rollback = json.loads(run('docker', 'compose', '-f', str(ROOT / 'compose.runtime.yaml'), 'config', '--format', 'json'))
+    rollback = json.loads(run(*compose_arguments(), 'config', '--format', 'json'))
     rollback['services']['worker']['image'] = previous['/booksys-worker-1']['image']
     (args.evidence / 'rollback-compose.json').write_text(json.dumps(rollback, indent=2))
     run('docker', 'image', 'tag', previous['/booksys-worker-1']['image'], 'booksys-worker:before-activity')
     run('docker', 'image', 'tag', worker_image, 'booksys-worker:local')
-    run('docker', 'compose', '-p', 'booksys', '-f', str(ROOT / 'compose.runtime.yaml'),
+    run(*compose_arguments(), '-p', 'booksys',
         'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'worker')
     current = json.loads(run('docker', 'inspect', 'booksys-worker-1', 'booksys-byparr-1', 'booksys-pyload'))
     for c in current:
