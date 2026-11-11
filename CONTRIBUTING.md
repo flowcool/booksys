@@ -27,3 +27,5 @@ require current green checks, an up-to-date base and resolved review threads.
 
 Merges are manual. Dependency PRs follow the same checks. A release publishes images;
 it does not deploy an installation. See [public image examples](docs/public-images.md).
+
+Documentation-only pull requests run the required repository checks.
