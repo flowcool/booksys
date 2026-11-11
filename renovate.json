@@ -19,9 +19,7 @@
   "prHourlyLimit": 2,
   "automerge": false,
   "platformAutomerge": false,
-  "dependencyDashboard": {
-    "enabled": true
-  },
+  "dependencyDashboard": true,
   "minimumReleaseAge": "3 days",
   "minimumReleaseAgeBehaviour": "timestamp-optional",
   "ignoreDeps": [

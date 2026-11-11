@@ -45,8 +45,10 @@ def identity(path: Path, revision: str) -> dict[str, str]:
                     candidates.append((descriptor, document))
 
         index = read("index.json")
-        for descriptor in index["manifests"]:
-            visit(descriptor)
+        if len(index["manifests"]) != 1:
+            raise ValueError("Expected exactly one retained OCI root descriptor")
+        root_descriptor = index["manifests"][0]
+        visit(root_descriptor)
         if len(candidates) != 1:
             raise ValueError("Expected exactly one linux/amd64 runtime image")
         descriptor, manifest = candidates[0]
@@ -59,6 +61,7 @@ def identity(path: Path, revision: str) -> dict[str, str]:
         archive_digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return {"source": SOURCE, "revision": revision, "platform": "linux/amd64",
             "config_digest": image_id, "manifest_digest": str(descriptor["digest"]),
+            "index_digest": str(root_descriptor["digest"]),
             "archive_sha256": "sha256:" + archive_digest}
 
 

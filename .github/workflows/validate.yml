@@ -68,6 +68,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap unrar tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra poppler-utils fonts-dejavu-core nodejs
           for tool in bwrap unrar tesseract pdftoppm node; do command -v "$tool"; done
+      - name: Enable isolated native workers on the ephemeral runner
+        run: |
+          # Ubuntu AppArmor otherwise denies network-namespace loopback setup.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev /bin/true
       - name: Install the locked development environment
         run: |
           echo "BEADS_DIR=$RUNNER_TEMP/nonexistent-test-beads" >> "$GITHUB_ENV"

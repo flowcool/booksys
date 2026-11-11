@@ -13,10 +13,10 @@ esac
 mkdir -p "$reports"
 reports=$(realpath "$reports")
 python3 ops/image_validation.py identity "$archive" "$revision" > "$reports/identity.json"
-# Containerd's image store loads OCI directly and preserves its manifest digest.
+# Containerd's image store loads OCI directly and preserves its root digest.
 # A Docker-archive conversion changes that digest, so it is not a probe input.
 docker load --input "$archive" > "$reports/load.log" 2>&1
-image_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest_digest"])' "$reports/identity.json")
+image_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["index_digest"])' "$reports/identity.json")
 loaded_id=$(docker image inspect --format '{{.Id}}' "$image_id")
 [[ "$loaded_id" == "$image_id" ]] || { echo "Loaded image differs from retained OCI artifact" >&2; exit 1; }
 docker image inspect "$image_id" > "$reports/inspect.json"

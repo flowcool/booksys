@@ -47,6 +47,10 @@ class ImageValidationTests(unittest.TestCase):
             result = identity(path, "a" * 40)
             self.assertEqual(result["config_digest"], config)
             self.assertEqual(result["manifest_digest"], manifest)
+            with tarfile.open(path) as archive:
+                root = json.load(archive.extractfile("index.json"))
+            self.assertEqual(result["index_digest"], root["manifests"][0]["digest"])
+            self.assertNotEqual(result["index_digest"], manifest)
             self.assertTrue(result["archive_sha256"].startswith("sha256:"))
 
     def test_wrong_source_revision_or_platform_refuses_artifact(self):
@@ -108,7 +112,7 @@ elif args[0] == "stop":
 ''')
         docker.chmod(0o755)
         env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                   MANIFEST=manifest, CALLS=str(root / "calls.jsonl"),
+                   MANIFEST=identity(archive, "a" * 40)["index_digest"], CALLS=str(root / "calls.jsonl"),
                    PROBE_RESULT=str(probe), LOGS_RESULT=str(logs),
                    INSPECT_RESULT=str(inspect), STOP_RESULT=str(stop))
         result = subprocess.run(["bash", "ops/validate_image.sh", "byparr", str(archive),
