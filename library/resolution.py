@@ -60,7 +60,7 @@ class Resolution:
         return key
 
     def load_piece(self, key: str) -> dict[str, Any]:
-        identifier(key)
+        key = identifier(key)
         value = read(self.pieces / (key + '.yaml'))
         if digest(value) != key:
             raise LibraryError('Evidence piece missing or altered')

@@ -394,3 +394,15 @@ ids['resolution-candidate'].value='0';ids['resolution-candidate'].onchange();ids
             self.assertEqual(receipt[0],'absent')
             self.assertEqual(tasks.get(task.key).status,'active')
             self.assertNotIn('publication',catalog.get('editions','edition'))
+
+
+class EvidenceIdentifierTests(unittest.TestCase):
+    def test_invalid_identifier_is_rejected_before_path_access(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from library.resolution import Resolution
+        from library.primitives import LibraryError
+        directory = Mock()
+        with self.assertRaises(LibraryError):
+            Resolution.load_piece(SimpleNamespace(pieces=directory), '../outside')
+        self.assertEqual(directory.mock_calls, [])
