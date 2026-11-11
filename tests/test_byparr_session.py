@@ -161,7 +161,8 @@ class SessionApiTests(unittest.TestCase):
                 status=200, content_type='text/html', body='<h1>Local fixture</h1>'))
             return await browser.page.goto(request.url)
 
-        with (patch.object(ProcessOutput, '__init__', new=retain_output),
+        with (patch.object(ProcessOutput, 'KEEP', 2000),
+              patch.object(ProcessOutput, '__init__', new=retain_output),
               patch.object(upstream, 'warm_up', new=AsyncMock()),
               patch.object(upstream, 'get_browser_geo', new=AsyncMock(
                   return_value=upstream.BrowserGeo('UTC', 'en-US'))),
