@@ -36,3 +36,9 @@ upstream revision URL and SHA256. The qpdf notice matches version12.4.2.
 Distribution and wheel notices remain in each image. The reviewed source ledger
 is [release/sources.lock.json](release/sources.lock.json); release qualification
 compares it with the exact built inventory and retains full corresponding source.
+
+The source-built psycopg3.3.8 and psycopg-c3.3.8 licenses, Supervisor4.3.0
+terms and distribution libpq5 notice are retained in the
+[library C-backend notice manifest](third_party/native/library-c-backend-manifest.json).
+The C backend uses the distribution PostgreSQL client library. It does not ship
+the additional native-library bundle from the psycopg-binary wheel.
