@@ -2,13 +2,7 @@
 
 import importlib.util
 import asyncio
-import base64
-import hashlib
-import json
-import os
 import threading
-import struct
-import traceback
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -105,161 +99,9 @@ class SessionApiTests(unittest.TestCase):
     def test_pinned_browser_slow_cleanup_recovers_after_request_timeout(self):
         import invisible_core
         import src.utils as upstream
-        from invisible_core.juggler.connection import ProcessOutput
-        from invisible_core.juggler import connection
-        from invisible_playwright.async_api import InvisiblePlaywright
 
         closed = []
         browser_pids = []
-        outputs = []
-        output_init = ProcessOutput.__init__
-        processes = []
-        spawn = connection._spawn_posix
-        teardown = InvisiblePlaywright._teardown
-        wait_for_ready = ProcessOutput.wait_for_ready
-        startup_send = connection.Connection.startup_send
-        launch_paths = set()
-
-        def report_ready(output, process, timeout):
-            print("Browser readiness enter", flush=True)
-            result = wait_for_ready(output, process, timeout)
-            print("Browser readiness return:", result, flush=True)
-            return result
-
-        def report_startup(channel, method, params=None):
-            print("Browser startup command:", method if method in (
-                'Browser.enable', 'Browser.setBrowserProxy') else 'other', flush=True)
-            result = startup_send(channel, method, params)
-            print("Browser startup command returned", flush=True)
-            return result
-
-        def retain_process(executable, argv, env):
-            known = []
-            for index, value in enumerate(argv):
-                if value in ('-no-remote', '-headless', '-wait-for-browser',
-                             '-foreground', '-juggler-pipe', '-silent'):
-                    known.append(value)
-                elif value == '-profile' and index + 1 < len(argv):
-                    profile = argv[index + 1]
-                    known.extend((value, profile))
-                    launch_paths.add(profile)
-            paths = {key: env[key] for key in (
-                'HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'DISPLAY') if key in env}
-            if env.get('TMPDIR'):
-                launch_paths.add(env['TMPDIR'])
-            print("Browser resolved launcher:", {"known_argv": known,
-                "path_variables": paths}, flush=True)
-            result = spawn(executable, argv, env)
-            processes.append(result[2])
-            return result
-
-        async def report_before_cleanup(session):
-            try:
-                for name in sorted(launch_paths)[:4]:
-                    path = Path(name)
-                    try:
-                        space = os.statvfs(path)
-                        print("Browser launch path:", {"path": name,
-                            "free_bytes": space.f_bavail * space.f_frsize,
-                            "readonly": bool(space.f_flag & os.ST_RDONLY),
-                            "writable": os.access(path, os.W_OK),
-                            "entries": sorted(entry.name[:80] for _, entry in zip(range(32), path.iterdir()))}, flush=True)
-                    except OSError as error:
-                        print("Browser launch path:", {"path": name, "errno": error.errno}, flush=True)
-                for process in processes:
-                    code = process.poll()
-                    print("Browser before cleanup:", {"pid": process.pid, "returncode": code,
-                        "signal": -code if code is not None and code < 0 else None}, flush=True)
-                # Mozilla FIREFOX_159_0_RELEASE minidump_format.h: stream 6,
-                # MDRawExceptionStream. Read metadata, never process memory.
-                for dump in list(Path('/tmp').rglob('*.dmp'))[:8]:
-                    try:
-                        size = dump.stat().st_size
-                        with dump.open('rb') as stream:
-                            header = stream.read(32)
-                            if len(header) != 32:
-                                continue
-                            signature, _, count, directory = struct.unpack_from('<IIII', header)
-                            if signature != 0x504d444d or count > 128 or directory + count * 12 > size:
-                                continue
-                            stream.seek(directory)
-                            entries = stream.read(count * 12)
-                            locations = {kind: (length, position) for kind, length, position in
-                                struct.iter_unpack('<III', entries) if position + length <= size}
-                            instruction = None
-                            for offset in range(0, len(entries), 12):
-                                kind, length, position = struct.unpack_from('<III', entries, offset)
-                                if kind != 6 or length < 32 or position + 32 > size:
-                                    continue
-                                stream.seek(position)
-                                record = stream.read(32)
-                                print("Browser minidump exception:", {"file": dump.name, "size": size,
-                                    "code": struct.unpack_from('<I', record, 8)[0],
-                                    "address": hex(struct.unpack_from('<Q', record, 24)[0])}, flush=True)
-                                # Exact Mozilla AMD64 context: RIP is at byte 248.
-                                # Read register metadata only, never stack/memory streams.
-                                if length >= 168 and 7 in locations:
-                                    stream.seek(locations[7][1])
-                                    architecture = struct.unpack('<H', stream.read(2))[0]
-                                    stream.seek(position + 160)
-                                    context_size, context_position = struct.unpack('<II', stream.read(8))
-                                    if architecture == 9 and context_size >= 256 and context_position + context_size <= size:
-                                        stream.seek(context_position + 248)
-                                        instruction = struct.unpack('<Q', stream.read(8))[0]
-                                        print("Browser crash instruction:", {"thread": struct.unpack_from('<I', record)[0],
-                                            "rip": hex(instruction)}, flush=True)
-                            if instruction is not None and 4 in locations:
-                                module_size, module_position = locations[4]
-                                stream.seek(module_position)
-                                module_count = struct.unpack('<I', stream.read(4))[0]
-                                if module_count <= 4096 and 4 + module_count * 108 <= module_size:
-                                    for index in range(module_count):
-                                        stream.seek(module_position + 4 + index * 108)
-                                        module = stream.read(108)
-                                        base, extent = struct.unpack_from('<QI', module)
-                                        if base <= instruction < base + extent:
-                                            name_position = struct.unpack_from('<I', module, 20)[0]
-                                            if name_position + 4 <= size:
-                                                stream.seek(name_position)
-                                                name_size = struct.unpack('<I', stream.read(4))[0]
-                                                if name_size <= 4096 and name_position + 4 + name_size <= size:
-                                                    name = stream.read(name_size).decode('utf-16-le', errors='replace')
-                                                    print("Browser crash module:", {"name": Path(name).name,
-                                                        "offset": hex(instruction - base)}, flush=True)
-                                                    # Retain only the delivered ELF, never mapped memory.
-                                                    if Path(name).name == 'libmozsandbox.so':
-                                                        module_path = Path(name)
-                                                        module_length = module_path.stat().st_size
-                                                        print("Browser module file:", {"name": module_path.name,
-                                                            "size": module_length, "limit": 1048576}, flush=True)
-                                                        if module_length <= 1048576:
-                                                            binary = module_path.read_bytes()
-                                                            if len(binary) == module_length and binary.startswith(b'\x7fELF'):
-                                                                print("BOOKSYS_SANDBOX_ELF_SHA256=" + hashlib.sha256(binary).hexdigest(), flush=True)
-                                                                print("BOOKSYS_SANDBOX_ELF_BASE64=" + base64.b64encode(binary).decode('ascii'), flush=True)
-                        extra = dump.with_suffix('.extra')
-                        if extra.is_file() and extra.stat().st_size <= 65536:
-                            annotations = json.loads(extra.read_text())
-                            print("Browser crash annotations:", {key: str(annotations[key])[:512]
-                                for key in ('ProcessType', 'MozCrashReason', 'StartupCrash')
-                                if key in annotations}, flush=True)
-                    except (OSError, ValueError, struct.error) as error:
-                        print("Minidump metadata unavailable:", type(error).__name__, flush=True)
-            finally:
-                await teardown(session)
-
-        def retain_output(output, stream):
-            output_init(output, stream)
-            outputs.append(output)
-
-        launch = InvisiblePlaywright.__aenter__
-
-        async def report_launch(session):
-            print("Pinned browser launch contract:", {"seed": session.seed,
-                "headless": session._headless, "extra_args": session._extra_args,
-                "locale_requested": session._locale_requested,
-                "timezone": session._timezone, "persistent_profile": session._profile_dir is not None}, flush=True)
-            return await launch(session)
 
         def firefox_pids():
             result = set()
@@ -275,24 +117,7 @@ class SessionApiTests(unittest.TestCase):
         async def browser():
             generator = upstream.get_browser()
             try:
-                try:
-                    native = await anext(generator)
-                except BaseException:
-                    traceback.print_exc()
-                    for output in outputs:
-                        print("Browser startup output:", output.tail(), flush=True)
-                    for pid in sorted(firefox_pids()):
-                        status = Path('/proc', pid, 'status')
-                        try:
-                            print("Browser process:", [line for line in status.read_text().splitlines()
-                                if line.startswith(('Name:', 'State:', 'VmRSS:', 'Threads:'))], flush=True)
-                        except FileNotFoundError:
-                            pass
-                    for name in ('memory.events', 'pids.events'):
-                        events = Path('/sys/fs/cgroup', name)
-                        if events.is_file():
-                            print(name, events.read_text(), flush=True)
-                    raise
+                native = await anext(generator)
                 browser_pids.append(firefox_pids())
                 yield native
             finally:
@@ -311,14 +136,7 @@ class SessionApiTests(unittest.TestCase):
                 status=200, content_type='text/html', body='<h1>Local fixture</h1>'))
             return await browser.page.goto(request.url)
 
-        with (patch.object(connection, '_spawn_posix', new=retain_process),
-              patch.object(ProcessOutput, 'wait_for_ready', new=report_ready),
-              patch.object(connection.Connection, 'startup_send', new=report_startup),
-              patch.object(InvisiblePlaywright, '__aenter__', new=report_launch),
-              patch.object(InvisiblePlaywright, '_teardown', new=report_before_cleanup),
-              patch.object(ProcessOutput, 'KEEP', 2000),
-              patch.object(ProcessOutput, '__init__', new=retain_output),
-              patch.object(upstream, 'warm_up', new=AsyncMock()),
+        with (patch.object(upstream, 'warm_up', new=AsyncMock()),
               patch.object(upstream, 'get_browser_geo', new=AsyncMock(
                   return_value=upstream.BrowserGeo('UTC', 'en-US'))),
               patch('invisible_playwright.async_api.prepare_session_geo',

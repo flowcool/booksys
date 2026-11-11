@@ -21,65 +21,13 @@ loaded_id=$(docker image inspect --format '{{.Id}}' "$image_id")
 [[ "$loaded_id" == "$image_id" ]] || { echo "Loaded image differs from retained OCI artifact" >&2; exit 1; }
 docker image inspect "$image_id" > "$reports/inspect.json"
 if [[ "$image" == byparr ]]; then
-  # Diagnose namespace prerequisites without launching or weakening a browser.
-  if sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone > "$reports/namespace-host.log" 2>&1; then
-    echo "read_exit=0" >> "$reports/namespace-host.log"
-  else
-    echo "read_exit=$?" >> "$reports/namespace-host.log"
-  fi
-  if docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-      --entrypoint /usr/bin/unshare "$image_id" -Ur /bin/true > "$reports/namespace-default.log" 2>&1; then
-    echo "exit=0" >> "$reports/namespace-default.log"
-  else
-    namespace_status=$?
-    echo "exit=$namespace_status" >> "$reports/namespace-default.log"
-  fi
+  # Require the namespace and chroot operations used by the Firefox sandbox.
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --entrypoint /usr/bin/unshare "$image_id" -Ur /bin/true > "$reports/namespace-profile.log" 2>&1
-  # Retain the exact prior profile to prove the chroot denial before the exception.
-  baseline_profile="$reports/seccomp-before-chroot.json"
-  python3 - "$baseline_profile" <<'PYPROFILE'
-import hashlib
-import json
-from pathlib import Path
-import sys
-profile = json.loads(Path("ops/byparr-seccomp.json").read_text())
-rule = profile["syscalls"][-1]
-assert rule["names"] == ["clone", "setns", "unshare", "chroot"]
-rule["names"].remove("chroot")
-payload = (json.dumps(profile, indent=2) + "\n").encode()
-assert hashlib.sha256(payload).hexdigest() == "dfa51b13977961193954ffe3a4968b715d8f27093b9459061674551ebee3f731"
-Path(sys.argv[1]).write_bytes(payload)
-PYPROFILE
-  if docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-      --env LC_ALL=C --security-opt "seccomp=$baseline_profile" --entrypoint /usr/bin/unshare \
-      "$image_id" -Ur "$interpreter" -c "import os; os.chroot('/'); os.execv('/bin/true', ['/bin/true'])" > "$reports/chroot-baseline.log" 2>&1; then
-    echo "Baseline unexpectedly allowed chroot" >&2
-    exit 1
-  else
-    chroot_status=$?
-    echo "exit=$chroot_status" >> "$reports/chroot-baseline.log"
-    [[ "$chroot_status" == 1 ]]
-    grep -F 'PermissionError: [Errno 1]' "$reports/chroot-baseline.log"
-    grep -F 'Operation not permitted' "$reports/chroot-baseline.log"
-  fi
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --env LC_ALL=C --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --entrypoint /usr/bin/unshare \
     "$image_id" -Ur "$interpreter" -c "import os; os.chroot('/'); os.execv('/bin/true', ['/bin/true'])" > "$reports/chroot-profile.log" 2>&1
-  # Firefox initializes application directories before its explicit session profile.
-  docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-    --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" --entrypoint "$interpreter" \
-    "$image_id" - > "$reports/appdata-baseline.log" 2>&1 <<'PYAPPDATA'
-from pathlib import Path
-for name in ('/home/byparr/.mozilla/firefox', '/cache/mozilla/firefox'):
-    try:
-        Path(name).mkdir(parents=True, exist_ok=True)
-    except OSError as error:
-        print({'path': name, 'errno': error.errno}, flush=True)
-        assert error.errno == 30, 'Expected the read-only application-data prerequisite'
-    else:
-        raise AssertionError('Baseline unexpectedly permits application-data creation')
-PYAPPDATA
+  # Require writable application directories before the explicit session profile.
   docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --security-opt "seccomp=$PWD/ops/byparr-seccomp.json" \
     --tmpfs /home/byparr/.mozilla:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 \
