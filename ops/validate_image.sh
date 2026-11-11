@@ -21,10 +21,30 @@ loaded_id=$(docker image inspect --format '{{.Id}}' "$image_id")
 [[ "$loaded_id" == "$image_id" ]] || { echo "Loaded image differs from retained OCI artifact" >&2; exit 1; }
 docker image inspect "$image_id" > "$reports/inspect.json"
 if [[ "$image" == byparr ]]; then
+  # Diagnose namespace prerequisites without launching or weakening a browser.
+  if sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone > "$reports/namespace-host.log" 2>&1; then
+    echo "read_exit=0" >> "$reports/namespace-host.log"
+  else
+    echo "read_exit=$?" >> "$reports/namespace-host.log"
+  fi
+  if docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+      --entrypoint /usr/bin/unshare "$image_id" -Ur /bin/true > "$reports/namespace-default.log" 2>&1; then
+    echo "exit=0" >> "$reports/namespace-default.log"
+  else
+    namespace_status=$?
+    echo "exit=$namespace_status" >> "$reports/namespace-default.log"
+    if docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+        --security-opt seccomp=unconfined --entrypoint /usr/bin/unshare "$image_id" -Ur /bin/true > "$reports/namespace-comparison.log" 2>&1; then
+      echo "exit=0" >> "$reports/namespace-comparison.log"
+    else
+      echo "exit=$?" >> "$reports/namespace-comparison.log"
+    fi
+  fi
   # The adapter is a server: --help would start it. Probe its actual tini entrypoint.
   container=$(docker run -d --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 1024 --memory 1536m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
-    --tmpfs /cache/invisible-playwright/fonts:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 "$image_id")
+    --tmpfs /cache/invisible-playwright/fonts:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 \
+    --tmpfs /cache/fontconfig:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 "$image_id")
   finish_readiness() {
     local status=0 command_status
     # Keep an exited container until evidence is saved. Always attempt its stop.
@@ -64,6 +84,7 @@ if [[ "$image" == byparr ]]; then
   docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 1024 --memory 1536m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
     --tmpfs /cache/invisible-playwright/fonts:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 \
+    --tmpfs /cache/fontconfig:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000 \
     --env BEADS_DIR=/tmp/nonexistent-test-beads --entrypoint "$interpreter" "$image_id" -c "$(cat tests/probes/byparr.py)" sessions \
     < tests/test_byparr_session.py > "$reports/probe.log" 2>&1
 else
