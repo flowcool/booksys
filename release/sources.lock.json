@@ -9842,6 +9842,10 @@
           "version": "1:1.3.dfsg+really1.3.1-1ubuntu3.2"
         },
         {
+          "id": "file:/app/.venv/lib/python3.14/site-packages/invisible_core/seal.json",
+          "version": "65dbac615850e8ba58d87a1d48bef983e8bdf54233836cd6123d9ffb4a288e58"
+        },
+        {
           "id": "file:/cache/invisible-playwright/firefox-55_159.0_20261104013450/application.ini",
           "version": "f6f8ef55716d63f9524db535beb328de816dd03c503e8dde2b7fc0bbd181f21b"
         },
@@ -13282,6 +13286,15 @@
           "license": "MIT",
           "exclusion": "permissive-license-no-source-offer-required",
           "rationale": "Exact installed extension exportsuv_version_string1.52.1. libuvMIT permits binary distribution with copyright and permission notice; preserve libuv notices supplied by matching Node source plus installed uvloopMIT/Apache notices."
+        },
+        {
+          "id": "file:/app/.venv/lib/python3.14/site-packages/invisible_core/seal.json",
+          "license": "MPL-2.0",
+          "sources": [
+            "browser-mozilla",
+            "browser-series"
+          ],
+          "rationale": "Installed seal seriesb2fe2cd specifies Firefox159 tag and generatedsourcecommit. Retain complete exacttag,patches,buildscripts; generatedhash not independently reproduced, no binary reproducibility claim."
         }
       ],
       "reviewed_non_package_components": [
