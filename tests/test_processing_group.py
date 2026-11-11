@@ -66,7 +66,12 @@ class ProcessingTests(unittest.TestCase):
             self.assertIn('BOOKSYS_NAS_PROBE_ROLE="'+queue+'"',section['environment'])
         services=yaml.safe_load((ROOT/'compose.stack.yaml').read_text())['services']
         self.assertNotIn('ocr',services);self.assertNotIn('metadata',services)
-        self.assertEqual(len([v for v in services.values() if not v.get('profiles')]),11)
+        self.assertEqual({name for name, value in services.items() if not value.get('profiles')},
+            {'controller','discovery','collection','intake','processing','copies',
+             'routing','retirement','web','reader-launcher'})
+        self.assertEqual({name for name, value in services.items()
+            if value.get('profiles') == ['retained-dependencies']}, {'postgres','byparr','pyload'})
+        self.assertEqual(services['tools']['profiles'], ['tools'])
         self.assertEqual(services['postgres']['network_mode'], 'none')
         group=services['processing']
         self.assertEqual(group['mem_limit'],'512m');self.assertEqual(group['pids_limit'],96)
