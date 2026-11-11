@@ -58,3 +58,7 @@ class RoutingClient:
         self.endpoint = '/api/' + method
         self.wrote = self.wrote or write
         return self.client.call(method, write=write, **parameters)
+
+    def mutation(self, owner: str, journal: Any) -> Any:
+        from booksys_core.network_admission import native_operation
+        return native_operation(self.client, owner, journal)

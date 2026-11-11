@@ -1,4 +1,4 @@
-"""Exercise public collection boundaries with minimized HTML and synthetic outgoing links and a local API."""
+"""Exercise public collection boundaries with captured HTML and a local API."""
 
 import json
 import tempfile
@@ -6,6 +6,10 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from postgres_fixture import create_store
+from library.primitives import empty
+from library.operational_state import CollectorState
 
 from booksys import Byparr, CollectionError, DEFAULT_CATEGORY, catalogue, collect
 
@@ -28,15 +32,16 @@ def captured(url):
 
 
 class CollectorTests(unittest.TestCase):
-    def test_fixture_catalogues_have_40_distinct_items_and_next_page(self):
+    def test_real_catalogues_have_40_distinct_items_and_next_page(self):
         first, next_url = catalogue(captured(DEFAULT_CATEGORY), DEFAULT_CATEGORY)
         second, _ = catalogue(captured(next_url), next_url)
         self.assertEqual((len(first), len(second), len(first.keys() | second.keys())), (20, 20, 40))
         self.assertEqual(next_url, DEFAULT_CATEGORY + "?page=2")
 
-    def test_collect_exports_synthetic_links_and_skips_completed_items_on_restart(self):
+    def test_collect_exports_real_links_and_skips_completed_items_on_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            create_store(self, directory, empty())
             counts = collect([DEFAULT_CATEGORY], captured, directory,
                              {"1fichier", "nitroflare"}, max_items=2)
             self.assertEqual(counts["collected"], 2)
@@ -67,6 +72,7 @@ class CollectorTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            create_store(self, directory, empty())
             counts = collect([DEFAULT_CATEGORY], fetch, directory, {"1fichier"}, pages=0)
             self.assertEqual(counts["pages"], 2)
             self.assertEqual(counts["collected"], 2)
@@ -80,12 +86,13 @@ class CollectorTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            create_store(self, directory, empty())
             with self.assertRaises(CollectionError):
                 collect([DEFAULT_CATEGORY], fetch, directory, {"nitroflare"})
             self.assertEqual((directory / "nitroflare.txt").read_text(),
                              "https://files.example.invalid/fixture-0b011ea44ebc45f9\n")
-            self.assertIn(FIRST, (directory / "state.yaml").read_text())
-            self.assertNotIn(SECOND, (directory / "state.yaml").read_text())
+            self.assertIn(FIRST, CollectorState(directory).captured()["items"])
+            self.assertNotIn(SECOND, CollectorState(directory).captured()["items"])
 
     def test_off_site_link_is_rejected_before_fetch(self):
         calls = []
@@ -95,6 +102,7 @@ class CollectorTests(unittest.TestCase):
             return '<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="https://evil.example/123-book">Book</a></div>'
 
         with tempfile.TemporaryDirectory() as temporary:
+            create_store(self, Path(temporary), empty())
             with self.assertRaises(CollectionError):
                 collect([DEFAULT_CATEGORY], fetch, Path(temporary), {"1fichier"})
         self.assertEqual(calls, [DEFAULT_CATEGORY])
@@ -110,6 +118,7 @@ class CollectorTests(unittest.TestCase):
             return page if url == FIRST else outgoing
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            create_store(self, directory, empty())
             collect([DEFAULT_CATEGORY], fetch, directory)
             self.assertEqual((directory / "all-links.txt").read_text(),
                              "https://files.example/a\nhttps://files.example/b\n")
@@ -121,6 +130,7 @@ class CollectorTests(unittest.TestCase):
             calls.append(url)
             return captured(url)
         with tempfile.TemporaryDirectory() as temporary:
+            create_store(self, Path(temporary), empty())
             counts = collect([DEFAULT_CATEGORY], fetch, Path(temporary), pages=0, after_id=358548)
         self.assertEqual(counts["collected"], 0)
         self.assertEqual(calls, [DEFAULT_CATEGORY])
@@ -131,11 +141,40 @@ class CollectorTests(unittest.TestCase):
                 return f'<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="{FIRST}">Book</a></div>'
             return captured(url)
         with tempfile.TemporaryDirectory() as temporary:
+            create_store(self, Path(temporary), empty())
             with self.assertRaisesRegex(CollectionError, "before reaching"):
                 collect([DEFAULT_CATEGORY], fetch, Path(temporary), {"1fichier"}, pages=0, after_id=358000)
 
 
 class ByparrTests(unittest.TestCase):
+    def test_owned_local_busy_is_distinct_from_remote_or_unknown_refusal(self):
+        from booksys_core.browser_outcomes import BrowserOutcome
+        outcomes = [('browser_busy', 'local'), ('remote_rate_limited', 'remote'), ('unknown_browser_failure', 'unknown')]
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                code, origin = outcomes.pop(0)
+                body = json.dumps({'detail': {'schema': 1, 'code': code, 'origin': origin,
+                    'request_id': self.headers.get('X-Booksys-Request-ID'),
+                    'retry_after_state': 'valid', 'retry_after_seconds': 1200}}).encode()
+                self.send_response(429)
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = Byparr(f'http://127.0.0.1:{server.server_port}/v1', delay=0)
+            for expected in ('browser_busy', 'remote_rate_limited', 'unknown_browser_failure'):
+                with self.assertRaises(BrowserOutcome) as result:
+                    client(DEFAULT_CATEGORY)
+                self.assertEqual(result.exception.outcome.code, expected)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_real_api_contract_and_error_handling(self):
         responses = [
             {"status": "ok", "solution": {"status": 200, "url": DEFAULT_CATEGORY,

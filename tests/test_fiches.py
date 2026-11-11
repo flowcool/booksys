@@ -5,6 +5,9 @@ from pathlib import Path
 
 from booksys import CollectionError, extract_page
 from fiches import write_fiche
+from postgres_fixture import create_store
+from library.primitives import empty
+from library.operational_state import CollectorState
 
 SOURCE = "https://www7.bookys-ebooks.com/bandes-dessinees/42-example"
 HTML = """<h1>Example</h1><div itemprop="mainEntity">
@@ -70,8 +73,9 @@ class FicheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state=Path(tmp)/"state";state.mkdir();root=Path(tmp)/"downloads";root.mkdir()
             (root/"example").mkdir();archive=root/"example/example.cbz";archive.write_bytes(b"abc")
-            save(state/"state.yaml", {"version":1,"items":{SOURCE:{"title":"Example","downloads":{}}}})
-            save(state/"monitor.yaml", {"version":1,"submissions":{SOURCE:{"status":"queued","package_id":8}}})
+            create_store(self,state,empty())
+            CollectorState(state).capture(SOURCE,{"title":"Example","downloads":{}})
+            CollectorState(state).submission(SOURCE,{"status":"queued","package_id":8})
             self.assertTrue(run_fiche_once(state,browser,Api(),root,minimum_free=0))
             catalog=yaml.safe_load((state/"catalogue.yaml").read_text())
             self.assertEqual(catalog["items"][SOURCE]["fiche_relative"],"example/fiche.md")
@@ -96,7 +100,7 @@ class FicheTests(unittest.TestCase):
             (root/"example/fiche.md").unlink()
             with patch("fiches.atomic_bytes",side_effect=OSError("temporary write failure")):
                 self.assertTrue(run_fiche_once(state,browser,Api(),root,minimum_free=0))
-            progress=yaml.safe_load((state/"fiches.yaml").read_text())
+            progress=CollectorState(state).fiches()
             self.assertEqual(progress["items"][SOURCE]["cover_relative"],"example/couverture.jpg")
             with patch("pipeline.time.time",return_value=99999999999):
                 self.assertTrue(run_fiche_once(state,browser,Api(),root,minimum_free=0))
@@ -117,7 +121,7 @@ class FicheTests(unittest.TestCase):
             def __enter__(self): return self
             def __exit__(self,*args): pass
             def read(self,limit): return JPEG
-        with patch("booksys.build_opener") as build:
+        with patch("booksys_core.browser.build_opener") as build:
             build.return_value.open.return_value=Response()
             data,ext=browser.cover("https://www7.bookys-ebooks.com/storage/items/a.jpg",SOURCE)
             self.assertEqual((data,ext),(JPEG,".jpg"))
@@ -145,6 +149,7 @@ class FicheTests(unittest.TestCase):
                     result["links"]=[dict(f,fid=i,name="example.cbz") for i,f in enumerate(result["links"],1)]
                 return result
         with tempfile.TemporaryDirectory() as tmp:
+            create_store(self,Path(tmp),empty())
             downloader=Downloader();downloader.downloads=Path(tmp)
             downloader.fetch_image=lambda u,s:(JPEG,".jpg")
             record={"title":"Example","page":extract_page(HTML,SOURCE),
@@ -167,8 +172,9 @@ class FicheTests(unittest.TestCase):
         for stage in ["page","cover"]:
             with self.subTest(stage=stage),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp)/"downloads";root.mkdir();state=Path(tmp)/"state";state.mkdir()
-                save(state/"state.yaml",{"version":1,"items":{SOURCE:{"title":"Example","downloads":{}}}})
-                save(state/"monitor.yaml",{"version":1,"submissions":{SOURCE:{"status":"queued","package_id":8}}})
+                create_store(self,state,empty())
+                CollectorState(state).capture(SOURCE,{"title":"Example","downloads":{}})
+                CollectorState(state).submission(SOURCE,{"status":"queued","package_id":8})
                 self.assertFalse(run_fiche_once(state,Browser(stage),Api(),root,minimum_free=0))
                 if stage=="cover":self.assertTrue((root/"example/fiche.md").exists())
 
@@ -178,8 +184,9 @@ class FicheTests(unittest.TestCase):
         from booksys import BrowserError
         with tempfile.TemporaryDirectory() as tmp:
             credential=Path(tmp)/"credential.json";credential.write_text('{"api_key":"isolated-test"}')
-            argv=["pipeline","--credentials",str(credential),"--downloads",tmp,"--interval","60"]
-            with patch("sys.argv",argv),patch("pipeline.run_backfill",return_value=None), \
+            argv=["pipeline","--directory",tmp,"--credentials",str(credential),"--downloads",tmp,"--interval","60"]
+            with patch.dict('os.environ', {'BOOKSYS_COLLECTION_DIR': tmp}), \
+                 patch("sys.argv",argv),patch("pipeline.run_backfill",return_value=None), \
                  patch("pipeline.run_once",side_effect=BrowserError("challenge")), \
                  patch("pipeline.run_fiche_once") as enrich,patch("pipeline.os.umask"), \
                  patch("pipeline.time.sleep",side_effect=KeyboardInterrupt):

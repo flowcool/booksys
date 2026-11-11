@@ -12,26 +12,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 MAX_FILE = 1024 ** 3
 READER_POLICY = 'single-comic-3'
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, 'rb') as handle:
-        while data := handle.read(1024 * 1024):
-            digest.update(data)
-    return digest.hexdigest()
-
-
-def fingerprint(path: Path) -> tuple[int, int, int, int, int]:
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode):
-        raise LibraryError('Not a regular file')
-    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+from library.reader_inputs import sha256 as sha256, fingerprint as fingerprint, ReaderUnavailable as ReaderUnavailable
 
 
 def worker_failure(label: str, code: int, stderr: bytes) -> str:
@@ -72,7 +59,15 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
                 '--pids-limit', '32', '--mount', f'type=bind,src={path},dst=/input,readonly',
                 '--entrypoint', '/app/.venv/bin/python', image, '-m', 'library.reader_worker',
                 '/input', path.suffix.lower()]
-        result = subprocess.run(command, capture_output=True, timeout=45, check=False)
+        from library.reader_client import endpoint, execute
+        if endpoint():
+            result = subprocess.CompletedProcess(command, 0, json.dumps(execute('validate', path)).encode(), b'')
+        else:
+            from library.decoder_ownership import prepare
+            command = prepare(command)
+            result = subprocess.run(command, capture_output=True, timeout=45, check=False)
+        if result.returncode in (125, 126, 127):
+            raise ReaderUnavailable(worker_failure('Isolated reader setup', result.returncode, result.stderr))
         if result.returncode:
             raise LibraryError(worker_failure('Isolated reader failed', result.returncode, result.stderr))
         outcome: dict[str, Any] = json.loads(result.stdout)
@@ -83,6 +78,8 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
         if fingerprint(path) != first or sha256(path) != asset_hash:
             raise LibraryError('Reception changed during validation')
         return {**outcome, 'sha256': asset_hash, 'size': first[2]}
+    except ReaderUnavailable:
+        raise
     except subprocess.TimeoutExpired:
         return {'status': 'rejected', 'reason': 'Isolated reader timed out: wall limit 45 seconds',
                 'reader_policy': READER_POLICY}

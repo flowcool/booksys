@@ -10,7 +10,7 @@ from test_library_publish import setup_library
 class WorkDecisionTests(unittest.TestCase):
     def test_work_confirmation_has_no_fabricated_edition_and_replays(self):
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, source, key = setup_library(Path(folder))
+            store, reception, source, key = setup_library(Path(folder),self)
             state = store.read()
             state['assets'][key].pop('identity')
             store.save(state, expected=state['revision'])

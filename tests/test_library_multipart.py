@@ -1,3 +1,4 @@
+from postgres_fixture import create_catalog
 import unittest
 from library.multipart import select_parts
 from library.catalog import LibraryError
@@ -36,7 +37,7 @@ class MultipartTests(unittest.TestCase):
                 if mode=='unfinished': links[1]['status']=1
                 if mode=='symlink': (reception/links[1]['name']).symlink_to(reception/links[0]['name'])
                 if mode=='unsupported': links=[dict(fid=3,name='A.zip.001',status=0)]
-                state=receive(Catalog(root/'state'),reception,{'items':{source:{}}},
+                state=receive(create_catalog(self,root/'state'),reception,{'items':{source:{}}},
                     {'submissions':{source:dict(status='queued',package_id=1,name='tracked')}},
                     [dict(pid=1,name='tracked',folder='.',links=links)],stable_seconds=0)
                 self.assertFalse(state['assets'])
@@ -64,16 +65,17 @@ class MultipartTests(unittest.TestCase):
         import subprocess
         from pathlib import Path
         from unittest.mock import patch
-        from library.readers import inspect_file
+        from library.readers import inspect_file, ReaderUnavailable
         from test_library_bundles import comic
         with tempfile.TemporaryDirectory() as folder:
             source=Path(folder)/'comic.cbz';source.write_bytes(comic())
             failed=subprocess.CompletedProcess([],125,b'',b'docker: No such image: retained-candidate')
             with patch('library.readers.subprocess.run',return_value=failed):
-                result=inspect_file(source,stable_seconds=0)
-            self.assertIn('container setup failure',result['reason'])
-            self.assertIn('No such image',result['reason'])
-            self.assertNotIn('resource limit',result['reason'])
+                with self.assertRaises(ReaderUnavailable) as error:
+                    inspect_file(source,stable_seconds=0)
+            self.assertIn('container setup failure',str(error.exception))
+            self.assertIn('No such image',str(error.exception))
+            self.assertNotIn('resource limit',str(error.exception))
             with patch('library.readers.subprocess.run',side_effect=subprocess.TimeoutExpired('worker',45)):
                 result=inspect_file(source,stable_seconds=0)
             self.assertIn('wall limit',result['reason'])

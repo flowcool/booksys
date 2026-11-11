@@ -16,23 +16,20 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import yaml
 from bs4 import BeautifulSoup
 
-from library.catalog import Catalog, LibraryError, apply_effect, atomic_yaml, digest, now, lock
+from library.catalog import Catalog
+from library.primitives import LibraryError, atomic_yaml, digest, now, lock
+from library.effects import apply_effect
+
+from booksys_core.network_admission import RollingBudget
+
+PROVIDER_BUDGET: ContextVar[RollingBudget | None] = ContextVar('current_provider_budget', default=None)
 
 REDIRECT_CHARGE: ContextVar[Callable[[], None] | None] = ContextVar('provider_redirect_charge', default=None)
 
 Fetch = Callable[[str], tuple[int, str]]
 
 
-def normalized(value: Any) -> str:
-    return ' '.join(unicodedata.normalize('NFKC', str(value)).casefold().split())
-
-
-def isbn13(value: str) -> str | None:
-    value = re.sub(r'[-\s]', '', value)
-    if not re.fullmatch(r'97[89]\d{10}', value):
-        return None
-    checksum = sum(int(char) * (1 if index % 2 == 0 else 3) for index, char in enumerate(value[:12]))
-    return value if (10 - checksum % 10) % 10 == int(value[-1]) else None
+from library.bibliographic import normalized, isbn13
 
 
 def discovery_hint(title: str, embedded: dict[str, Any]) -> dict[str, str]:
@@ -152,6 +149,9 @@ def http_fetch(url: str) -> tuple[int, str]:
                 raise LibraryError('Provider response exceeds limit')
             return response.status, body.decode('utf-8')
     except HTTPError as exc:
+        admission = PROVIDER_BUDGET.get()
+        if admission is not None and (exc.code == 429 or exc.headers.get('Retry-After') is not None):
+            admission.remote_deadline(exc.headers.get('Retry-After'))
         return exc.code, ''
 
 
@@ -160,6 +160,12 @@ class Providers:
                  budget: int = 12, shared: Path | None = None):
         self.cache, self.fetch, self.interval, self.budget = cache, fetch, interval, budget
         self.shared = shared
+        from booksys_core.network_admission import configured_budget
+        self.admission = configured_budget('provider')
+        if self.admission is None and shared is not None:
+            self.admission = RollingBudget(shared/'provider-admission.yaml')
+        from library.operational_state import ProviderCache
+        self._cache=ProviderCache(shared or (self.admission.path.parent if self.admission else cache.parent),str(cache.absolute()))
         self.last_request = 0.0
         self.events: list[dict[str, Any]] = []
 
@@ -169,7 +175,7 @@ class Providers:
         else:
             with lock(self.shared / 'library-network.lock'):
                 result = self._get(url)
-        self.events.append({key: result[key] for key in ('status', 'http_status', 'reason') if key in result})
+        self.events.append({key: result[key] for key in ('status', 'http_status', 'reason', 'dependency', 'retrieved_at', 'expires') if key in result})
         return result
 
     def _get(self, url: str) -> dict[str, Any]:
@@ -178,11 +184,9 @@ class Providers:
                 ('openlibrary.org', 'www.bdtheque.com', 'api.mangadex.org', 'catalogue.bnf.fr', 'www.bedetheque.com')
                 or parts.username or parts.password or parts.port):
             raise LibraryError('Unqualified provider URL')
-        path = self.cache / (digest(url) + '.yaml')
-        if path.exists():
-            cached: dict[str, Any] = yaml.load(path.read_text(), Loader=getattr(yaml, 'CSafeLoader', yaml.SafeLoader))
-            if cached['expires'] > time.time():
-                return cached
+        cached=self._cache.get(url)
+        if cached is not None and cached['expires']>time.time():
+            return cached
         if self.budget <= 0:
             return {'status': 'unavailable', 'reason': 'Request budget exhausted', 'url': url}
         time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
@@ -193,10 +197,12 @@ class Providers:
         self.last_request = time.monotonic()
         try:
             context = REDIRECT_CHARGE.set(self.charge)
+            budget_context = PROVIDER_BUDGET.set(self.admission)
             try:
                 status, body = self.fetch(url)
             finally:
                 REDIRECT_CHARGE.reset(context)
+                PROVIDER_BUDGET.reset(budget_context)
             result = {'status': 'ok' if status == 200 else 'unavailable',
                       'http_status': status, 'body': body if status == 200 else '',
                       'url': url, 'retrieved_at': now(),
@@ -204,20 +210,46 @@ class Providers:
         except (OSError, ValueError, LibraryError) as exc:
             result = {'status': 'unavailable', 'reason': str(exc), 'url': url,
                       'retrieved_at': now(), 'expires': time.time() + 300}
-        atomic_yaml(path, result)
+        result['dependency'] = parts.hostname
+        if self.admission is not None:
+            from library.dependency_recovery import DependencyRecovery
+            response_status = int(result.get('http_status', 0))
+            DependencyRecovery(self.admission.path.parent/'dependency-readiness.yaml').observe(
+                str(parts.hostname), available=(response_status not in (0, 429)
+                    and response_status < 500), at=time.time(), url=url)
+        self._cache.retain(url,result)
         return result
 
     def charge(self) -> None:
         if self.budget <= 0:
             raise LibraryError('Request budget exhausted')
-        if self.shared is not None:
-            budget_path = self.shared / 'library-network-budget.yaml'
-            value = yaml.safe_load(budget_path.read_text()) if budget_path.exists() else {'remaining': 50}
-            if value['remaining'] <= 0:
-                raise LibraryError('Request budget exhausted')
-            time.sleep(max(0, self.interval - (time.time() - value.get('last_request', 0))))
-            value.update(remaining=value['remaining'] - 1, last_request=time.time())
-            atomic_yaml(budget_path, value)
+        if self.admission is not None or self.shared is not None:
+            from booksys_core.network_admission import RollingBudget, BudgetWait
+            from booksys_core.errors import CollectionError
+            try:
+                admission = self.admission
+                if admission is None:
+                    assert self.shared is not None
+                    admission = RollingBudget(self.shared / 'provider-admission.yaml')
+                admission.debit()
+            except BudgetWait as exc:
+                # Redirects debit the same budget. Wait only for a short pacing
+                # gap. A window limit or remote deadline still defers the task.
+                delay = exc.due - time.time()
+                if not 0 < delay <= self.interval:
+                    raise LibraryError('Request budget exhausted') from exc
+                time.sleep(delay)
+                try:
+                    assert admission is not None
+                    admission.debit()
+                except BudgetWait as retry:
+                    raise LibraryError('Request budget exhausted') from retry
+                except CollectionError as retry:
+                    raise LibraryError('Network authority unavailable') from retry
+            except CollectionError as exc:
+                raise LibraryError('Network authority unavailable') from exc
+            self.budget -= 1
+            return
         self.budget -= 1
 
     def discover(self, title: str, *, author: str = '', number: str = '') -> dict[str, Any]:
@@ -376,15 +408,14 @@ def add_assertions(asset: dict[str, Any], response: dict[str, Any]) -> None:
             asset['assertions'].append(value)
 
 
-def enrich(store: Catalog, asset_id: str, providers: Providers,
+def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
            references: list[tuple[str, str]]) -> dict[str, Any]:
-    state = store.read()
+    state = store.result_set('identify', {'assets': [asset_id]})
     asset = state['assets'][asset_id]
     from library.work_enrichment import enrich_work
     enrich_work(state, asset_id, providers)
     if asset['work_result']['status'] == 'identified' and not references and not asset.get('identity'):
-        store.save(state, expected=state['revision'])
-        return store.read()
+        return state
     # All external work happens on the snapshot, outside catalogue locks.
     candidates = []
     attempt_start = len(asset.get('source_attempts', []))
@@ -406,7 +437,7 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
     printed = asset.get('printed')
     printed_code = None
     if printed:
-        from library.printed import printed_isbns
+        from library.printed_model import printed_isbns
         codes, invalid = printed_isbns(printed)
         if printed.get('status') == 'ok' and len(codes) == 1 and not invalid:
             printed_code = next(iter(codes))
@@ -434,7 +465,7 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
                        for candidate in candidates}.values())
     printed = asset.get('printed')
     if printed:
-        from library.printed import printed_isbns, identify_printed
+        from library.printed_model import printed_isbns, identify_printed
         if printed.get('asset') != asset_id:
             raise LibraryError('Printed assertions are not bound to this asset')
         codes, invalid = printed_isbns(printed)
@@ -461,6 +492,17 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
     if result['status'] != 'identified':
         result.setdefault('reason_code', 'conflict' if any(word in result['reason'].lower()
             for word in ('conflict', 'contradict')) else 'missing_evidence')
+    # A new exact edition must agree with an earlier manual work choice.
+    # Retain the proposed candidate and evidence when the work disagrees.
+    confirmed = asset.get('work_decision', {}).get('work', {})
+    if result['status'] == 'identified' and confirmed:
+        from library.work_identity import IDENTITY_FIELDS, normalized as work_normalized, present
+        proposed = result['candidate']
+        if any(present(confirmed.get(field)) and present(proposed.get(field))
+                and work_normalized(confirmed[field], field) != work_normalized(proposed[field], field)
+                for field in IDENTITY_FIELDS):
+            result.update(status='pending', reason_code='conflict',
+                          reason='Exact edition conflicts with confirmed work')
     asset['identity_result'] = result
     if result['status'] == 'identified':
         candidate = result['candidate']
@@ -474,7 +516,8 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
                 'work_id': wid, 'edition_id': eid, 'work': {
                     **{key: candidate[key] for key in ('title', 'author', 'number', 'contributors', 'responsibility')
                        if candidate.get(key)},
-                    'identity_scope': 'edition' if candidate['work_ref'].startswith('edition-scoped:') else 'work'},
+                    'identity_scope': 'edition' if candidate['work_ref'].startswith('edition-scoped:') else 'work',
+                    **{key: value for key, value in confirmed.items() if value not in (None, '', [], {})}},
                 'edition': {'language': candidate['language'], 'publisher': candidate['publisher'],
                             'date': candidate['date'], 'revision': candidate['revision'], 'evidence': result['evidence']}}})
             state['editions'][eid].setdefault('selected', asset['identity']['variant'])
@@ -492,5 +535,11 @@ def enrich(store: Catalog, asset_id: str, providers: Providers,
                     for known, fields in ((work, ('title', 'author', 'number')),
                                           (edition, ('language', 'publisher', 'date', 'revision'))) for field in fields):
                 asset['contested'] = True
+    return state
+
+
+def enrich(store: Catalog, asset_id: str, providers: Providers,
+           references: list[tuple[str, str]]) -> dict[str, Any]:
+    state = prepare_enrichment(store, asset_id, providers, references)
     store.save(state, expected=state['revision'])
-    return store.read()
+    return store.working_set('identify', {'assets': [asset_id]})

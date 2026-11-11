@@ -14,10 +14,10 @@ import uuid
 import yaml
 
 from library.bundle_worker import POLICY, MAX_SOURCE, MAX_CHILD, MAX_TOTAL
-from library.catalog import LibraryError, atomic_yaml, digest, now, sync_dir
+from library.relocation import matches_retained
+from library.primitives import LibraryError, atomic_yaml, digest, now, sync_dir
 from library.readers import fingerprint, sha256, inspect_file, READER_POLICY
 
-RESERVE = 20 * 1024**3
 
 
 def digest_name(member: str) -> str:
@@ -81,7 +81,7 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
 
 def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
            fault: Callable[[str], None] = lambda phase: None, wall_limit: float = 180,
-           parts: list[Path] | None = None) -> tuple[Path, dict[str, Any]]:
+           parts: list[Path] | None = None, detached: bool = False) -> tuple[Path, dict[str, Any]]:
     if not 0 < wall_limit <= 180:
         raise LibraryError('Invalid bundle wall limit')
     source = source.absolute()
@@ -92,7 +92,7 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
     if parts and (source != parts[0] or len({p.name for p in parts}) != len(parts)):
         raise LibraryError('Invalid multipart input set')
     if parts:
-        from library.multipart import select_parts
+        from library.multipart_model import select_parts
         synthetic = [{'fid': i, 'name': part.name, 'status': 0, 'url': 'https://isolated.invalid/' + str(i),
                       'input_folder': str(part.parent)} for i,part in enumerate(parts)]
         if [item['name'] for item in select_parts(synthetic, synthetic[0])] != [part.name for part in parts]:
@@ -113,7 +113,8 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
     parent_hash = hashes[0]
     source_parts = [{'name': part.name, 'sha256': key, 'size': stamp[2]}
                     for part,key,stamp in zip(inputs,hashes,stamps)]
-    root = state_dir / 'bundle-inputs'
+    from library.media_paths import bundle_inputs
+    root = state_dir/'bundle-inputs' if detached else bundle_inputs(state_dir)
     if source.is_relative_to(state_dir.absolute()) or state_dir.absolute().is_relative_to(source.parent):
         raise LibraryError('Bundle staging must be outside reception')
     if any(p.is_symlink() for p in (root.absolute(), *root.absolute().parents)):
@@ -126,7 +127,10 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
     if binding.is_symlink():
         raise LibraryError('Symlink bundle source binding')
     if binding.exists():
-        if yaml.safe_load(binding.read_text()) != source_record:
+        retained = yaml.safe_load(binding.read_text())
+        same_parts = retained.get('source_parts') == source_record.get('source_parts')
+        if (retained.get('sha256') != parent_hash or not same_parts
+                or not matches_retained(source, retained.get('fingerprint', []), parent_hash)):
             raise LibraryError('Bundle source changed since extraction intent')
     else:
         atomic_yaml(binding, source_record, exclusive=True)
@@ -152,8 +156,6 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
             stage = complete[0]
             manifest = verify_directory(stage, parent_hash)
         else:
-            if shutil.disk_usage(root).free - MAX_TOTAL < RESERVE:
-                raise LibraryError('Bundle extraction cannot retain 20 GiB reserve')
             stage = root / ('.' + parent_hash + '-' + uuid.uuid4().hex)
             stage.mkdir(mode=0o700)
             fault('intent')
@@ -190,32 +192,37 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
                 if created.returncode:
                     raise LibraryError('Cannot create isolated bundle engine')
                 command = ['docker', 'start', '--attach', str(container_name)]
-            try:
-                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            except OSError:
-                if container_name:
-                    stop_bundle_container(container_name)
-                raise
-            started = time.monotonic()
-            try:
-                while True:
-                    try:
-                        stdout, _ = process.communicate(timeout=.2)
-                        break
-                    except subprocess.TimeoutExpired:
-                        if shutil.disk_usage(root).free < RESERVE:
-                            raise LibraryError('Bundle extraction reached disk reserve')
-                        if time.monotonic() - started > wall_limit:
-                            raise LibraryError('Bundle extraction exceeded wall limit')
-            finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.communicate()
+            from library.reader_client import endpoint, execute
+            if endpoint():
+                from library.reader_client import bundle_payload
+                manifest = execute('bundle', source, bundle_payload(inputs) if parts else {}, destination=stage)
+            else:
+                try:
+                    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                except OSError:
                     if container_name:
                         stop_bundle_container(container_name)
-            if process.returncode:
-                raise LibraryError('Isolated bundle worker failed')
-            manifest = json.loads(stdout)
+                    raise
+                started = time.monotonic()
+                try:
+                    while True:
+                        try:
+                            stdout, _ = process.communicate(timeout=.2)
+                            break
+                        except subprocess.TimeoutExpired:
+                            if shutil.disk_usage(root).free == 0:
+                                raise LibraryError('Bundle extraction has no free disk space')
+                            if time.monotonic() - started > wall_limit:
+                                raise LibraryError('Bundle extraction exceeded wall limit')
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
+                        if container_name:
+                            stop_bundle_container(container_name)
+                if process.returncode:
+                    raise LibraryError('Isolated bundle worker failed')
+                manifest = json.loads(stdout)
             if manifest.get('status') != 'extracted' or manifest.get('parent_sha256') != parent_hash:
                 raise LibraryError(manifest.get('reason', 'Bundle source hash mismatch'))
             if parts:
@@ -239,12 +246,12 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
 
 def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: str,
                    origin: dict[str, Any], hint: dict[str, Any], *, budget: int,
-                   stable_seconds: float = 2, parts: list[Path] | None = None) -> int:
+                   stable_seconds: float = 2, parts: list[Path] | None = None, detached: bool = False) -> int:
     previous = state['origins'].get(oid, {})
     stamp = list(fingerprint(source))
-    if previous.get('bundle') and (previous.get('fingerprint') != stamp or sha256(source) != previous['sha256']):
+    if previous.get('bundle') and (not matches_retained(source, previous.get('fingerprint', []), previous['sha256']) or sha256(source) != previous['sha256']):
         raise LibraryError('Bundle parent changed after retention')
-    directory, manifest = retain(source, state_dir, stable_seconds=stable_seconds, parts=parts)
+    directory, manifest = retain(source, state_dir, stable_seconds=stable_seconds, parts=parts, detached=detached)
     parent_hash = manifest['parent_sha256']
     if parts:
         expected_parts = [{'name': Path(part['path']).name, 'sha256': part['sha256'],
@@ -252,8 +259,16 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
         if manifest.get('source_parts') != expected_parts:
             raise LibraryError('Multipart source changed during retention')
     if parts:
-        if previous.get('source_parts') and previous['source_parts'] != origin.get('source_parts'):
-            raise LibraryError('Multipart source provenance changed')
+        retained_parts = previous.get('source_parts')
+        if retained_parts:
+            current_parts = origin.get('source_parts', [])
+            if (len(retained_parts) != len(current_parts) or len(parts) != len(retained_parts)
+                    or any({k: v for k, v in old.items() if k != 'fingerprint'} !=
+                           {k: v for k, v in new.items() if k != 'fingerprint'}
+                           or not matches_retained(path, old['fingerprint'], old['sha256'])
+                           for old, new, path in zip(retained_parts, current_parts, parts))):
+                raise LibraryError('Multipart source provenance changed')
+            origin['source_parts'] = retained_parts  # Preserve the original proof.
     if previous.get('bundle') and previous['bundle']['members'] != manifest['members']:
         raise LibraryError('Retained bundle manifest changed from canonical parent')
     if previous.get('sha256') and previous['sha256'] != parent_hash:

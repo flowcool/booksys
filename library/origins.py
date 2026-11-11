@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any
 import re
 
-from library.catalog import Catalog, LibraryError, digest
+from library.catalog import Catalog
+from library.relocation import matches_retained
+from library.primitives import LibraryError, digest
 from library.readers import fingerprint, sha256
 
 
@@ -30,7 +32,7 @@ def verify_source_parts(reception: Path, parent: dict[str, Any], manifest: dict[
     for part in parts:
         relative = Path(part['path'])
         path = reception_path(reception, str(relative.parent), relative.name)
-        if list(fingerprint(path)) != part['fingerprint'] or sha256(path) != part['sha256']:
+        if not matches_retained(path, part['fingerprint'], part['sha256']) or sha256(path) != part['sha256']:
             raise LibraryError('Multipart source part changed')
 
 
@@ -48,10 +50,11 @@ def resolve_asset_origin(store: Catalog, reception: Path, state: dict[str, Any],
                 relative = Path(parent['path'])
                 parent_path = reception_path(reception, str(relative.parent), relative.name)
                 if (parent.get('availability') != 'bundle' or parent.get('sha256') != origin['parent_sha256']
-                        or list(fingerprint(parent_path)) != parent.get('fingerprint')
+                        or not matches_retained(parent_path, parent.get('fingerprint', []), origin['parent_sha256'])
                         or sha256(parent_path) != origin['parent_sha256']):
                     raise LibraryError('Bundle parent changed or unavailable')
-                directory = store.directory / 'bundle-inputs' / str(origin['parent_sha256'])
+                from library.media_paths import bundle_inputs
+                directory = bundle_inputs(store.directory) / str(origin['parent_sha256'])
                 manifest = verify_directory(directory, origin['parent_sha256'])
                 verify_source_parts(reception, parent, manifest)
                 if manifest['members'] != parent.get('bundle', {}).get('members'):

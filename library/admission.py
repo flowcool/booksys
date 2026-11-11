@@ -12,22 +12,19 @@ import uuid
 
 import yaml
 
-from library.catalog import LibraryError, digest, lock, now, sync_dir
-from library.publish import Publisher, private_tree, rename_atomic, verify
+from library.primitives import LibraryError, digest, now, sync_dir
+from library.publication import Publisher, private_tree, publication_lock, rename_atomic, verify
 from library.readers import sha256
 from library.transform import transform_archive
 from library.xmlmetadata import work_comicinfo
 
 
 def work_fields(state: dict[str, Any], key: str) -> dict[str, Any] | None:
+    from library.work_identity import accepted_work
     asset = state['assets'][key]
-    result = asset.get('work_result', {})
-    if result.get('status') == 'identified':
-        return {**result['work'], 'field_conflicts': result.get('field_conflicts', {})}
-    identity = asset.get('identity')
-    if identity and not asset.get('contested'):
-        return {**state['works'][identity['work']], **state['editions'][identity['edition']]}
-    return None
+    identity = asset.get('identity', {})
+    return accepted_work(asset, state['works'].get(identity.get('work'), {}),
+                         state['editions'].get(identity.get('edition'), {}))
 
 
 def eligible(state: dict[str, Any], key: str) -> bool:
@@ -55,7 +52,7 @@ def retire_legacy(state: dict[str, Any], key: str, root: Path) -> bool:
         recovery = root/'.recovery'/('edition-'+record['operation'])
         if source.exists() and not recovery.exists():
             verify(source, record['manifest'])
-            rename_atomic(source, recovery)
+            rename_atomic(source, recovery, private_root=root)
         elif source.exists() or not recovery.exists():
             raise LibraryError('Legacy admission retirement divergence')
         verify(recovery, record['manifest'])
@@ -86,6 +83,8 @@ def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
 class AdmissionPublisher(Publisher):
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
+        from library.operational_state import CopyOperations
+        self.operations=CopyOperations(self.store.backend()._database,'admission')
         self.journals = self.store.directory / 'library-admission-operations'
         if self.journals.is_symlink():
             raise LibraryError('Symlink in admission layout')
@@ -108,7 +107,9 @@ class AdmissionPublisher(Publisher):
     def load_operation(self, operation_id: str) -> dict[str, Any]:
         if not re.fullmatch('[0-9a-f]{32}', operation_id):
             raise LibraryError('Invalid admission operation ID')
-        value: dict[str, Any] = yaml.safe_load((self.journals/(operation_id+'.yaml')).read_text())
+        value=self.operations.get(operation_id)
+        if value is None:
+            raise LibraryError('Admission operation authority unavailable')
         if (value.get('schema') != 1 or value.get('id') != operation_id or value.get('kind') != 'admission'
                 or not re.fullmatch('[0-9a-f]{64}', str(value.get('asset', '')))
                 or set(value.get('manifest', {})) != {'book.cbz', 'fiche.md'}):
@@ -119,12 +120,18 @@ class AdmissionPublisher(Publisher):
     def commit(self, operation: dict[str, Any]) -> None:
         target = self.target_path(operation['target'])
         verify(target, operation['manifest'])
-        state = self.store.read()
+        state = self.store.working_set('admit', {'assets': [operation['asset']]})
         current = state['assets'][operation['asset']].get('admission')
         if current and current['operation'] == operation['id']:
             self.transition(operation, 'committed')
             return
-        if state['revision'] != operation['catalogue_revision']:
+        if operation.get('conflict'):
+            self.store.verify_result(operation['conflict'])
+            from library.primitives import WorkingState
+            if not isinstance(state, WorkingState):
+                raise LibraryError('Scoped operation requires PostgreSQL working set')
+            state.conflict = operation['conflict']
+        elif state['revision'] != operation['catalogue_revision']:
             raise LibraryError('Admission catalogue changed; preserve journal for reconciliation')
         if current != operation['previous']:
             raise LibraryError('Admission ownership changed')
@@ -133,7 +140,7 @@ class AdmissionPublisher(Publisher):
             recovery = self.recovery / operation['id']
             if previous.exists() and not recovery.exists():
                 verify(previous, current['manifest'])
-                rename_atomic(previous, recovery)
+                rename_atomic(previous, recovery, private_root=self.root)
             elif previous.exists() or not recovery.exists():
                 raise LibraryError('Admission recovery divergence')
             verify(recovery, current['manifest'])
@@ -141,55 +148,70 @@ class AdmissionPublisher(Publisher):
             key: operation[key] for key in ('target', 'manifest', 'signature', 'status', 'transformation')}
         state['assets'][operation['asset']]['admission']['operation'] = operation['id']
         retire_legacy(state, operation['asset'], self.root)
-        self.store.save(state, expected=state['revision'])
-        self.transition(operation, 'committed')
         from library.provisional import retire_provisional
-        retire_provisional(self.store, self.root, operation['asset'])
+        retire_provisional(self.store,self.root,operation['asset'],state=state)
+        self._terminal(operation,self.store.prepare(state))
 
-    def reconcile(self, *, locked: bool = False, provisional: bool = True) -> list[dict[str, Any]]:
+    def reconcile(self, *, locked: bool = False, provisional: bool = True, asset: str | None = None) -> list[dict[str, Any]]:
         if not locked:
-            with lock(self.store.directory/'library-copy.lock', blocking=False):
-                return self.reconcile(locked=True)
-        operations = [self.load_operation(p.stem) for p in sorted(self.journals.glob('*.yaml'))]
+            with publication_lock(self.store.directory, self.root):
+                return self.reconcile(locked=True, asset=asset)
+        operations = self.operations.records()
+        if asset is not None:
+            operations = [op for op in operations if self.operation_applies(op, asset)]
         for op in sorted(operations, key=lambda value: (value['phase'] == 'committed', value['created_at'])):
             target = self.target_path(op['target'])
+            if op['phase'] == 'interrupted':
+                continue
             if op['phase'] == 'committed':
-                current = self.store.read()['assets'][op['asset']].get('admission', {})
+                current = (self.store.get('assets', op['asset']) or {}).get('admission', {})
                 if current.get('operation') == op['id']:
                     verify(target, op['manifest'])
                 continue
             if not target.exists() and op['phase'] in ('prepared', 'verified'):
+                if op.get('conflict'):
+                    self.store.verify_result(op['conflict'])
                 stage = self.staging / op['id']
                 verify(stage, op['manifest'])
                 self.prepare_parent(target)
                 private_tree(self.root)
                 self.capacity.check(self.root, 0)
-                rename_atomic(stage, target)
+                rename_atomic(stage, target, private_root=self.root)
             if target.exists():
                 self.commit(op)
+            elif op['phase'] in ('intent', 'transforming'):
+                # The exposed destination is absent. Keep every operation-owned
+                # partial, retire this intent, and let domain retry accounting
+                # authorize a fresh conversion. Never reuse unverified output.
+                self.transition(op, 'interrupted')
             else:
                 raise LibraryError('Interrupted admission requires recovery: ' + op['id'])
-        for key, asset in self.store.read()['assets'].items():
-            current = asset.get('admission')
+        entries = (self.store.records('assets') if asset is None
+                   else [(asset, self.store.get('assets', asset) or {})])
+        for key, entry in entries:
+            current = entry.get('admission')
             if current and not any(op['id'] == current['operation'] and op['asset'] == key for op in operations):
                 raise LibraryError('Admission journal missing')
-            if current and eligible(self.store.read(), key):
+            if current and eligible(self.store.working_set('admit', {'assets': [key]}), key):
                 verify(self.target_path(current['target']), current['manifest'])
-                state = self.store.read()
+                state = self.store.result_set('admit', {'assets': [key]})
                 if retire_legacy(state, key, self.root):
                     self.store.save(state, expected=state['revision'])
                 from library.provisional import retire_provisional
-                retire_provisional(self.store, self.root, key)
+                if self.prepared is None:
+                    retire_provisional(self.store,self.root,key)
         return operations
 
     def publish_asset(self, key: str) -> dict[str, Any]:
         from activity import report
         report('identity', 'working', 'Conversion and classification', item=key)
-        with lock(self.store.directory/'library-copy.lock', blocking=False):
+        with publication_lock(self.store.directory, self.root):
             Publisher(self.store, self.reception, self.root, exclusive=True,
-                      capacity=self.capacity).reconcile(locked=True, provisional=False)
-            self.reconcile(locked=True)
-            state = self.store.read()
+                      capacity=self.capacity,prepared=self.prepared).reconcile(locked=True, provisional=False, asset=key if self.local_recovery else None)
+            self.reconcile(locked=True, asset=key if self.local_recovery else None)
+            if self.prepared:
+                return dict(self.prepared[-1].completions[-1].value)
+            state = self.store.result_set('admit', {'assets': [key]})
             if not eligible(state, key):
                 raise LibraryError('Asset is not eligible for work admission')
             asset = state['assets'][key]
@@ -214,7 +236,7 @@ class AdmissionPublisher(Publisher):
             op: dict[str, Any] = {'schema': 1, 'id': uuid.uuid4().hex, 'kind': 'admission',
                 'asset': key, **{k: desired[k] for k in ('target', 'signature', 'status')},
                 'manifest': {'book.cbz': '', 'fiche.md': hashlib.sha256(fiche).hexdigest()},
-                'catalogue_revision': state['revision'], 'previous': current, 'created_at': now()}
+                'catalogue_revision': state['revision'], 'conflict': getattr(state, 'conflict', None), 'previous': current, 'created_at': now()}
             self.transition(op, 'intent')
             stage = self.staging/op['id']
             converted = self.staging/(op['id']+'-transform')
@@ -235,13 +257,15 @@ class AdmissionPublisher(Publisher):
             sync_dir(stage)
             self.transition(op, 'prepared')
             verify(stage, op['manifest'])
-            if self.store.read()['revision'] != state['revision']:
+            if op.get('conflict'):
+                self.store.verify_result(op['conflict'])
+            elif self.store.revision != state['revision']:
                 raise LibraryError('Catalogue changed during admission')
             self.prepare_parent(target)
             private_tree(self.root)
             self.capacity.check(self.root, 0)
             self.transition(op, 'verified')
-            rename_atomic(stage, target)
+            rename_atomic(stage, target, private_root=self.root)
             self.fault('after_substitution', op)
             self.transition(op, 'published')
             self.commit(op)
@@ -250,9 +274,11 @@ class AdmissionPublisher(Publisher):
 
 def process_admissions(store: Any, reception: Path, library: Path, *, limit: int = 1,
                        **options: Any) -> dict[str, int]:
-    state = store.read()
-    ready = [key for key in state['assets'] if eligible(state, key) and
-             state['assets'][key].get('admission', {}).get('signature') != projection(state, key)['signature']]
+    ready = []
+    for key, asset in store.records('assets'):
+        state = store.working_set('admit', {'assets': [key]})
+        if eligible(state, key) and asset.get('admission', {}).get('signature') != projection(state, key)['signature']:
+            ready.append(key)
     if limit > 0:
         options.setdefault('lab', True)
         writer = AdmissionPublisher(store, reception, library, **options)

@@ -4,6 +4,7 @@ import importlib.util
 import asyncio
 import threading
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -21,6 +22,26 @@ class Page:
         self.visits = 0
         self.main_frame = object()
         self.routes = []
+        self.listeners = {}
+
+    def on(self, name, callback):
+        self.listeners.setdefault(name, []).append(callback)
+
+    def remove_listener(self, name, callback):
+        self.listeners[name].remove(callback)
+
+    def is_closed(self):
+        return False
+
+    def response(self, status=200, headers=None):
+        request = SimpleNamespace(headers={'user-agent': 'fixture'}, url=self.url,
+            frame=self.main_frame, is_navigation_request=lambda: True)
+        response = SimpleNamespace(request=request, headers=headers or {}, status=status, url=self.url)
+        for callback in self.listeners.get('request', []):
+            callback(request)
+        for callback in self.listeners.get('response', []):
+            callback(response)
+        return response
 
     async def unroute_all(self, **kwargs):
         self.routes.clear()
@@ -35,7 +56,7 @@ class Page:
             raise TimeoutError("fixture timeout")
         if url.endswith("/slow"):
             await asyncio.sleep(3)
-        return SimpleNamespace(request=SimpleNamespace(headers={"user-agent": "fixture"}), headers={})
+        return self.response()
 
     async def wait_for_load_state(self, *args, **kwargs):
         pass
@@ -53,59 +74,105 @@ class Context:
 
 @unittest.skipUnless(AVAILABLE, "Run in the pinned Byparr image with /app on PYTHONPATH")
 class SessionApiTests(unittest.TestCase):
-    def test_health_is_lazy_and_rejected_requests_do_not_open_a_browser(self):
-        opened = []
-
-        async def browser():
-            opened.append(True)
-            yield SimpleNamespace(page=Page(), context=Context())
-
-        with TestClient(create_app(browser)) as client:
-            self.assertEqual(client.get("/health").json(),
-                             {"status": "ok", "generation": 0, "requests": 0})
-            self.assertEqual(client.post("/v1", json={"url": "https://outside.example.invalid"}).status_code, 422)
-            self.assertEqual(client.get("/health").json()["generation"], 0)
-        self.assertEqual(opened, [])
-
-    def test_startup_failure_is_not_retried_and_next_request_can_recover(self):
-        attempts = []
+    def test_listener_transport_failure_still_closes_browser_and_allows_reuse(self):
         closed = []
 
-        async def browser():
-            attempts.append(True)
-            try:
-                if len(attempts) == 1:
-                    raise RuntimeError("synthetic startup failure")
-                yield SimpleNamespace(page=Page(), context=Context())
-            finally:
-                closed.append(True)
-
-        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
-            with TestClient(create_app(browser), raise_server_exceptions=False) as client:
-                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 500)
-                self.assertEqual(len(attempts), 1)
-                self.assertEqual(len(closed), 1)
-                self.assertEqual(client.get("/health").json()["generation"], 0)
-                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 200)
-                self.assertEqual(len(attempts), 2)
-        self.assertEqual(len(closed), 2)
-
-    def test_shutdown_releases_a_successful_session_once(self):
-        closed = []
+        class BrokenListenerPage(Page):
+            def remove_listener(self, name, callback):
+                raise RuntimeError('fixture transport closed before page state updated')
 
         async def browser():
             try:
-                yield SimpleNamespace(page=Page(), context=Context())
+                page = BrokenListenerPage() if not closed else Page()
+                yield SimpleNamespace(page=page, context=Context())
             finally:
                 closed.append(True)
 
-        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
+        with patch('src.endpoints.challenge_present', new=AsyncMock(return_value=False)):
             with TestClient(create_app(browser)) as client:
-                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 200)
-                self.assertEqual(client.get("/health").json(),
-                                 {"status": "ok", "generation": 1, "requests": 1})
-                self.assertEqual(closed, [])
-        self.assertEqual(closed, [True])
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/timeout'}).status_code, 502)
+                self.assertEqual(len(closed), 1)
+                self.assertEqual(client.get('/health').status_code, 200)
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok'}).status_code, 200)
+            self.assertEqual(len(closed), 2)
+
+    def test_pinned_browser_slow_cleanup_recovers_after_request_timeout(self):
+        import invisible_core
+        import src.utils as upstream
+
+        closed = []
+        browser_pids = []
+
+        def firefox_pids():
+            result = set()
+            for process in Path('/proc').iterdir():
+                if process.name.isdecimal():
+                    try:
+                        if (process / 'comm').read_text().strip() == 'firefox':
+                            result.add(process.name)
+                    except FileNotFoundError:
+                        pass
+            return result
+
+        async def browser():
+            generator = upstream.get_browser()
+            try:
+                native = await anext(generator)
+                browser_pids.append(firefox_pids())
+                yield native
+            finally:
+                # A slow but successful teardown must not poison the service.
+                try:
+                    if not closed:
+                        await asyncio.sleep(5.1)
+                finally:
+                    await generator.aclose()
+                    closed.append(True)
+
+        async def navigate(browser, request, timer):
+            if request.url.endswith('/slow'):
+                await asyncio.sleep(3)
+            await browser.page.route(request.url, lambda route: route.fulfill(
+                status=200, content_type='text/html', body='<h1>Local fixture</h1>'))
+            return await browser.page.goto(request.url)
+
+        with (patch.object(upstream, 'warm_up', new=AsyncMock()),
+              patch.object(upstream, 'get_browser_geo', new=AsyncMock(
+                  return_value=upstream.BrowserGeo('UTC', 'en-US'))),
+              patch('invisible_playwright.async_api.prepare_session_geo',
+                  return_value=invisible_core.SessionGeo('UTC', None)),
+              patch('ops.byparr.session_api._navigate_and_solve', side_effect=navigate)):
+            with TestClient(create_app(browser, memory_pressure=lambda: False)) as client:
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok'}).status_code, 200)
+                failed = client.post('/v1', json={'url': ORIGIN + '/slow', 'maxTimeout': 1000})
+                self.assertEqual((failed.status_code, client.get('/health').status_code), (408, 200))
+                self.assertEqual(len(closed), 1)
+                self.assertTrue(browser_pids[0])
+                self.assertFalse(browser_pids[0] & firefox_pids())
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok'}).status_code, 200)
+            self.assertEqual(len(closed), 2)
+            self.assertFalse(browser_pids[1] & firefox_pids())
+
+    def test_final_navigation_status_wins_over_initial_status_and_html_heading(self):
+        class RatePage(Page):
+            async def goto(self, url, **kwargs):
+                self.url = url
+                initial = self.response(429 if url.endswith('/solved') else 200)
+                self.response(200 if url.endswith('/solved') else 429, {'retry-after': '1200'})
+                return initial
+        async def browser():
+            yield SimpleNamespace(page=RatePage(), context=Context())
+        with patch('src.endpoints.challenge_present', new=AsyncMock(return_value=False)):
+            with TestClient(create_app(browser)) as client:
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/solved'}).status_code, 200)
+                response = client.post('/v1', json={'url': ORIGIN + '/limited'}, headers={'X-Booksys-Request-ID': 'fixture-1'})
+                self.assertEqual(response.status_code, 429)
+                detail = response.json()['detail']
+                self.assertEqual(detail['code'], 'remote_rate_limited')
+                self.assertEqual(detail['origin'], 'remote')
+                self.assertEqual(detail['retry_after_seconds'], 1200)
+                self.assertEqual(detail['request_id'], 'fixture-1')
+                self.assertEqual(response.headers['X-Booksys-Request-ID'], 'fixture-1')
 
     def test_successive_requests_reuse_the_browser_page(self):
         async def browser():
@@ -116,6 +183,7 @@ class SessionApiTests(unittest.TestCase):
                 first = client.post("/v1", json={"url": ORIGIN + "/first"})
                 second = client.post("/v1", json={"url": ORIGIN + "/second"})
         self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.headers['X-Booksys-Request-ID'])
         self.assertEqual(second.json()["solution"]["response"], "<h1>Visit 2</h1>")
 
     def test_timeout_is_not_retried_and_next_request_gets_a_clean_session(self):
@@ -218,7 +286,7 @@ class SessionApiTests(unittest.TestCase):
 
         with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
             with TestClient(create_app(browser), raise_server_exceptions=False) as client:
-                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/bad-html"}).status_code, 500)
+                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/bad-html"}).status_code, 503)
                 self.assertEqual(client.get("/health").status_code, 503)
                 self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 503)
 

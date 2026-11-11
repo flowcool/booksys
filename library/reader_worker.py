@@ -23,12 +23,14 @@ from xml.etree import ElementTree
 import pikepdf
 from PIL import Image
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 from library.readers import READER_POLICY
 
 MAX_MEMBER = 64 * 1024 ** 2
 MAX_EXPANDED = 2 * 1024 ** 3
 MAX_PAGES = 2000
+# rarfile 4.5 decodes comments (at most 256 KiB) through a temporary RAR.
+RAR_COMMENT_SCRATCH = 1024 ** 2
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
 
@@ -219,72 +221,19 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
     return {'status': 'validated', 'format': suffix[1:], **output}
 
 
-def inspect_pdf(path: Path) -> dict[str, Any]:
-    with pikepdf.open(path, attempt_recovery=False) as pdf:
-        if pdf.is_encrypted:
-            raise LibraryError('Encrypted PDF')
-        warnings_found = pdf.check_pdf_syntax()
-        fatal_warnings = [warning for warning in warnings_found if not re.fullmatch(
-            r'WARNING: [^\n]+: incorrect object count in outline hint table', warning)]
-        if not 0 < len(pdf.pages) <= MAX_PAGES or fatal_warnings:
-            raise LibraryError('Unreadable PDF or page limit')
-        forbidden = {'/AA', '/JS', '/JavaScript', '/EmbeddedFiles',
-                     '/EF', '/RichMedia', '/AcroForm', '/XFA', '/Launch', '/Collection'}
-        for obj in pdf.objects:
-            if isinstance(obj, (pikepdf.Dictionary, pikepdf.Stream)):
-                if forbidden.intersection(str(key) for key in obj.keys()):
-                    raise LibraryError('Active PDF content or attachment')
-                for action_key in ('/A', '/OpenAction'):
-                    if action_key not in obj:
-                        continue
-                    action = obj[action_key]
-                    if (not isinstance(action, pikepdf.Dictionary) or str(action.get('/S', '')) != '/GoTo'
-                            or set(map(str, action.keys())) - {'/S', '/D', '/Type'}):
-                        raise LibraryError('Active or external PDF action')
-                    destination = action.get('/D')
-                    if (not isinstance(destination, pikepdf.Array) or len(destination) < 2
-                            or destination[0].objgen not in {page.obj.objgen for page in pdf.pages}
-                            or str(destination[1]) not in ('/Fit', '/FitB', '/XYZ', '/FitH', '/FitV', '/FitR', '/FitBH', '/FitBV')):
-                        raise LibraryError('Unresolved or external PDF destination')
-                if str(obj.get('/Type', '')) == '/Filespec':
-                    raise LibraryError('PDF attachment')
-        # Decode every stream. Syntax alone does not check compressed page bytes.
-        expanded = 0
-        for obj in pdf.objects:
-            if isinstance(obj, pikepdf.Stream):
-                try:
-                    if str(obj.get('/Subtype', '')) == '/Image':
-                        width, height = int(obj.get('/Width', 0)), int(obj.get('/Height', 0))
-                        if width <= 0 or height <= 0 or width * height > 50_000_000:
-                            raise LibraryError('PDF image pixel limit')
-                        image = pikepdf.PdfImage(obj).as_pil_image()
-                        if image.width * image.height > 50_000_000:
-                            raise LibraryError('PDF image pixel limit')
-                        image.load()
-                        size = image.width * image.height * len(image.getbands())
-                    else:
-                        size = len(obj.read_bytes())
-                    expanded += size
-                    if size > MAX_MEMBER or expanded > MAX_EXPANDED:
-                        raise LibraryError('PDF stream size limit')
-                except pikepdf.PdfError as exc:
-                    raise LibraryError('PDF stream cannot be validated') from exc
-        for page in pdf.pages:
-            list(pikepdf.parse_content_stream(page))
-        embedded = {str(k).lstrip('/'): str(v) for k, v in pdf.docinfo.items()}
-        return {'status': 'validated', 'format': 'pdf', 'pages': len(pdf.pages),
-                'embedded': embedded, 'reader_warnings': warnings_found}
+from library.pdf_inspection import inspect_pdf
 
 
 def main() -> None:
+    path, suffix = Path(sys.argv[1]), sys.argv[2]
     pdf_transform = '--transform' in sys.argv and len(sys.argv) > 2 and sys.argv[2] == '.pdf'
     cpu_limit = 1800 if pdf_transform else 30
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
     resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024 ** 2, 1536 * 1024 ** 2))
     transform = len(sys.argv) > 3 and sys.argv[3] == '--transform'
-    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_EXPANDED if transform else 0, MAX_EXPANDED if transform else 0))
+    file_limit = MAX_EXPANDED if transform else RAR_COMMENT_SCRATCH if suffix == '.cbr' else 0
+    resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-    path, suffix = Path(sys.argv[1]), sys.argv[2]
     output: dict[str, Any]
     try:
         file_hash = hashlib.sha256()

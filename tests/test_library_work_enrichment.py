@@ -9,6 +9,65 @@ from test_library_publish import setup_library
 
 
 class WorkEnrichmentTests(unittest.TestCase):
+    def test_creator_ambiguity_controls_real_holding_and_classified_admission(self):
+        import zipfile
+        from library.admission import AdmissionPublisher
+        from library.publication import Capacity
+        from library.readers import sha256
+        for scenario, authors, expected in (
+                ('homonyms', ('Alice', 'Bob'), 'review'),
+                ('editions', ('Alice', 'Alice'), 'identified'),
+                ('missing-creators', (None, None), 'identified'),
+                ('duplicates', ('Alice', 'Alice'), 'identified')):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                store, reception, source, key = setup_library(root,self)
+                state = store.read()
+                state['assets'][key].pop('identity')
+                state['assets'][key]['embedded'] = {'Series': 'Les Geeks', 'Number': '4'}
+                for table in ('works', 'editions', 'variants'):
+                    state[table].clear()
+                store.save(state, expected=state['revision'])
+                album = (Path(__file__).parent/'fixtures/french-metadata/album-95136.html').read_text()
+                def fetch(url):
+                    if url.endswith('/robots.txt'):
+                        return 200, 'User-agent: *\nAllow: /'
+                    if 'bandes_dessinees_' in url:
+                        return 200, '<a href="/serie-123-Les-Geeks.html">Les Geeks</a>'
+                    if '/serie-' in url:
+                        return 200, '<ul class="bdt-box-albums-liste">'+''.join(
+                            '<li><a href="/BD-Les-Geeks-Tome-4-'+number+'.html">'
+                            '<span class="bdt-box-albums-titre">Hacker vaillant rien d’impossible</span></a></li>'
+                            for number in ('95136', '95137'))+'</ul>'
+                    if '/BD-' in url:
+                        index = int('95137' in url)
+                        body = album.replace("Collectif ''Gang''", authors[index] or '')
+                        if scenario == 'editions' and index:
+                            body = body.replace('Soleil Productions', 'Other publisher').replace('2009-09-23', '2010-01-01').replace('9782302008168', '9782302008175')
+                        return 200, body
+                    if url.startswith('https://openlibrary.org/search.json?'):
+                        return 200, '{"docs":[]}'
+                    self.fail('Unexpected reference request: '+url)
+                providers = Providers(root/'cache', fetch=fetch, interval=0, budget=30)
+                result = enrich(store, key, providers, [])['assets'][key]['work_result']
+                self.assertEqual(result['status'], expected)
+                self.assertEqual(len(result['candidates']), 2)
+                if expected == 'review':
+                    self.assertIn('creator', result['reason'])
+                    self.assertEqual(result['work'], {})
+                    self.assertNotIn('classification', result)
+                if scenario == 'editions':
+                    self.assertEqual(result['edition_status'], 'unknown')
+                    for field in ('publisher', 'date', 'isbn'):
+                        self.assertIn(field, result['field_conflicts'])
+                        self.assertNotIn(field, result['work'])
+                operation = AdmissionPublisher(store, reception, root/'library', isolated=True,
+                    capacity=Capacity(reserve=0)).publish_asset(key)
+                self.assertEqual(operation['status'], 'holding' if expected == 'review' else 'classified')
+                self.assertEqual(sha256(source), key)
+                with zipfile.ZipFile(root/'library'/operation['target']/'book.cbz') as archive:
+                    self.assertIn('ComicInfo.xml', archive.namelist())
+
     def test_opening_ocr_identifies_work_without_isbn_but_not_rear_advertisement(self):
         from library.work_enrichment import printed_concordance
         from library.work_identity import evaluate_work
@@ -36,7 +95,7 @@ class WorkEnrichmentTests(unittest.TestCase):
     def test_file_reference_concordance_identifies_without_edition(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, source, key = setup_library(root)
+            store, reception, source, key = setup_library(root,self)
             state = store.read()
             state['assets'][key].pop('identity')
             state['assets'][key]['embedded'] = {'Series': 'Les Geeks', 'Number': '4'}
@@ -78,7 +137,7 @@ class WorkEnrichmentTests(unittest.TestCase):
         from library.automatic import METHOD, evidence_version
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, source, key = setup_library(root)
+            store, reception, source, key = setup_library(root,self)
             state = store.read()
             asset = state['assets'][key]
             asset.pop('identity')

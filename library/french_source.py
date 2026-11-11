@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import yaml
-from library.catalog import LibraryError, atomic_yaml, now
+from library.primitives import LibraryError, atomic_yaml, now
 from library.french_metadata import BASE, reference_url
 
 AGENT = 'BooksysMetadataQualification/0.1'

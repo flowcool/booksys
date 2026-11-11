@@ -23,7 +23,7 @@ class WebTests(unittest.TestCase):
 
     def test_provisional_copy_is_available_without_confirmed_publication(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder);store, _, _, asset = setup_library(root)
+            root = Path(folder);store, _, _, asset = setup_library(root,self)
             state = store.read();state['assets'][asset].pop('identity', None)
             state['assets'][asset]['provisional'] = {'status': 'published', 'edition_status': 'unknown',
                 'target': asset, 'artifact_format': 'cbz', 'operation': 'a'*32,
@@ -39,11 +39,12 @@ class WebTests(unittest.TestCase):
 
     def test_description_uses_matching_captured_source_then_bibliography_or_unknown(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); store, reception, original, asset = setup_library(root)
+            root = Path(folder); store, reception, original, asset = setup_library(root,self)
             state = store.read(); source = next(iter(state['origins'].values()))['source']
-            atomic_yaml(root / 'snapshots/captured.yaml', {'items': {
-                source: {'page': {'description': '<p>Album &amp; story.</p><p>Second paragraph.</p><script>bad()</script>'}},
-                'https://other.example/': {'page': {'description': 'Wrong album'}}}})
+            from library.operational_state import CollectorState
+            captured=CollectorState(root/'state')
+            captured.capture(source,{'page':{'description':'<p>Album &amp; story.</p><p>Second paragraph.</p><script>bad()</script>'}})
+            captured.capture('https://other.example/',{'page':{'description':'Wrong album'}})
             fiche = next(iter(build_projection(root)['fiches'].values()))
             self.assertEqual(fiche['summary'], 'Album & story.\n\nSecond paragraph.')
             self.assertEqual(fiche['summary_provenance'], 'Captured Bookys page')
@@ -53,7 +54,7 @@ class WebTests(unittest.TestCase):
             self.assertEqual(fiche['summary'], 'Operator correction')
             self.assertEqual(fiche['summary_provenance'], 'Operator override')
             state = store.read();state['assets'][asset]['overrides'].pop('summary')
-            atomic_yaml(root / 'snapshots/captured.yaml', {'items': {}})
+            captured.capture(source,{})
             state['works']['work']['summary'] = 'Bibliographic summary'
             store.save(state, expected=state['revision'])
             fiche = next(iter(build_projection(root)['fiches'].values()))
@@ -65,7 +66,7 @@ class WebTests(unittest.TestCase):
 
     def test_read_only_projection_filters_private_evidence_and_escapes_fiche(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder); store, reception, original, asset = setup_library(root)
+            root = Path(folder); store, reception, original, asset = setup_library(root,self)
             state = store.read();state['assets'][asset]['captured_hints'] = {'private-host': {'title': '<script>alert(1)</script>'}}
             state['assets'][asset]['assertions'] = [{'field': 'summary', 'raw': '<img src=x onerror=alert(2)>', 'source': 'fixture', 'url': 'https://evil.example/download'}]
             state['works']['work']['title'] = '<script>alert(2)</script>'

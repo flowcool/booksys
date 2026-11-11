@@ -7,18 +7,14 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
-from library.catalog import Catalog, LibraryError, digest, now
-from library.readers import inspect_file, fingerprint, sha256, READER_POLICY
+from library.catalog import Catalog
+from library.store import PreparedResult
+from library.relocation import matches_retained
+from library.primitives import LibraryError, digest, now
+from library.readers import inspect_file, fingerprint, sha256, READER_POLICY, ReaderUnavailable
 
 
-def reception_path(root: Path, folder: str, name: str) -> Path:
-    relative = Path(folder) / name
-    if Path(folder).is_absolute() or Path(name).name != name or '..' in relative.parts:
-        raise LibraryError('Unsafe pyLoad reception path')
-    path = root / relative
-    if any(p.is_symlink() for p in (path, *path.parents)) or not path.resolve().is_relative_to(root.resolve()):
-        raise LibraryError('Reception escape or symlink')
-    return path
+from library.reception import reception_path as reception_path
 
 
 def _receive_retired(state: dict[str, Any], store: Catalog, root: Path,
@@ -32,8 +28,12 @@ def _receive_retired(state: dict[str, Any], store: Catalog, root: Path,
         if not proof or proof.get('path') != relative or proof.get('scope') != scope:
             raise LibraryError('Retired input lacks retained technical proof')
         base = root if scope == 'reception' else store.directory
-        path = reception_path(base, str(Path(relative).parent), Path(relative).name)
-        if list(fingerprint(path)) != proof['fingerprint']:
+        if scope == 'state' and relative.startswith('bundle-inputs/'):
+            from library.media_paths import bundle_inputs
+            path = reception_path(bundle_inputs(store.directory), str(Path(relative).relative_to('bundle-inputs').parent), Path(relative).name)
+        else:
+            path = reception_path(base, str(Path(relative).parent), Path(relative).name)
+        if not matches_retained(path, proof['fingerprint'], proof.get('sha256')):
             raise LibraryError('Retired input changed or disappeared')
 
     def check_parent(origin: dict[str, Any]) -> None:
@@ -69,10 +69,20 @@ def _receive_retired(state: dict[str, Any], store: Catalog, root: Path,
 
 def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[str, Any],
             queue: list[dict[str, Any]], *, stable_seconds: float = 2,
-            incremental: bool = False, inspection_limit: int | None = None) -> dict[str, Any]:
+            incremental: bool = False, inspection_limit: int | None = None, source_only: str | None = None,
+            prepared: list[PreparedResult] | None = None, media_directory: Path | None=None) -> dict[str, Any]:
     # The caller obtains immutable snapshots without holding a collector lock.
     # Parsing and hashing happen before the short catalogue compare-and-save.
-    state = store.read()
+    backend = store.backend()
+    refs = {'origins': backend.ids('origins')} if backend is not None and source_only is None else {}
+    if source_only is not None:
+        from library.stage_inputs import origin_refs
+        refs = origin_refs(store, source_only)
+        entry = journal.get('submissions', {}).get(source_only, {})
+        for candidate_package in queue:
+            if candidate_package['pid'] == entry.get('package_id') or candidate_package.get('mirror_source') == source_only:
+                refs['origins'].extend(digest({'source': source_only, 'pid': candidate_package['pid'], 'fid': item['fid']}) for item in candidate_package.get('links', []))
+    state = store.result_set('retire', refs, media=False)
     completed_before = {(oid, o.get('sha256'), o.get('availability')) for oid, o in state['origins'].items()
                         if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
     packages = {int(p['pid']): p for p in queue}
@@ -94,6 +104,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             return bool(fresh), max(fresh, default=0)
         submissions.sort(key=priority, reverse=True)
     for source, submission in submissions:
+        if source_only is not None and source != source_only:
+            continue
         host = urlsplit(source).hostname or ''
         if (source not in captured.get('items', {}) or submission.get('status') != 'queued'
                 or not (host == 'bookys-ebooks.com' or host.endswith('.bookys-ebooks.com'))):
@@ -111,8 +123,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             _receive_retired(state, store, root, source, package)
             continue
         from library.multipart import is_multipart, receive_parts
-        inspected += receive_parts(state, store.directory, root, source, package, captured['items'][source],
-            max(0, (inspection_limit if inspection_limit is not None else 8) - inspected), stable_seconds)
+        inspected += receive_parts(state, media_directory or store.directory, root, source, package, captured['items'][source],
+            max(0, (inspection_limit if inspection_limit is not None else 8) - inspected), stable_seconds, detached=media_directory is not None)
         for item in package.get('links', []):
             if is_multipart(item['name']):
                 continue
@@ -132,7 +144,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                 path = reception_path(root, item.get('input_folder', package['folder']), name)
                 # Exact pinned pyLoad status: core/datatypes/pyfile.py: finished = 0.
                 if type(item.get('status')) is not int or item['status'] != 0:
-                    from library.activity import terminal_transfer
+                    from library.presentation import terminal_transfer
                     terminal = terminal_transfer(item.get('status'))
                     origin['reason'] = terminal[1] if terminal else 'Transfer is not confirmed finished'
                 elif not path.exists():
@@ -198,9 +210,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         attempts = int(previous.get('bundle_attempts', 0)) + 1 if same_attempt else 1
                         origin.update(fingerprint=stamp, bundle_policy=POLICY, bundle_engine_policy=engine_policy,
                                       bundle_attempts=attempts, bundle_next_attempt=time.time() + (300 if attempts == 1 else 900))
-                        inspected += receive_bundle(state, store.directory, path, oid, origin,
+                        inspected += receive_bundle(state, media_directory or store.directory, path, oid, origin,
                             captured['items'][source], budget=max(0, (inspection_limit if inspection_limit is not None else 8) - inspected),
-                            stable_seconds=stable_seconds)
+                            stable_seconds=stable_seconds, detached=media_directory is not None)
                         continue
                     temporary = any(text in previous.get('reason', '').lower() for text in
                         ('isolated reader failed', 'resource limit exceeded', 'timed out', 'reader policy differs'))
@@ -227,6 +239,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                     from activity import report
                     report('local', 'working', 'Validate file', item=oid, title=captured['items'][source].get('title', ''))
                     result = inspect_file(path, stable_seconds=stable_seconds)
+                    if result['status'] == 'rejected':
+                        from booksys_core.diagnostics import emit
+                        emit(service='library', stage='local', code='failed', reason='invalid_archive')
                     if result['status'] == 'pending' and 'Nested container' in result.get('reason', ''):
                         from library.bundles import receive_bundle
                         inspected -= 1
@@ -235,9 +250,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             state['origins'][oid] = origin
                             continue
                         bundle_preparations += 1
-                        inspected += receive_bundle(state, store.directory, path, oid, origin,
+                        inspected += receive_bundle(state, media_directory or store.directory, path, oid, origin,
                             captured['items'][source], budget=max(0, (inspection_limit if inspection_limit is not None else 8) - inspected),
-                            stable_seconds=stable_seconds)
+                            stable_seconds=stable_seconds, detached=media_directory is not None)
                         continue
                     count = (int(previous.get('intake_attempts', 0)) + 1
                              if previous.get('fingerprint') == stamp and previous.get('reader_policy') == READER_POLICY else 1)
@@ -266,7 +281,12 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         if oid not in asset['origins']:
                             asset['origins'].append(oid)
                         asset['captured_hints'][source] = captured['items'][source]
+            except ReaderUnavailable:
+                raise
             except (LibraryError, OSError) as exc:
+                from booksys_core.diagnostics import emit, exception_details
+                emit(service='library', stage='local', code='failed',
+                     **{**exception_details(exc), 'reason': 'invalid_archive'})
                 origin.update(availability='rejected', reason=str(exc))
                 previous_hash = state['origins'].get(oid, {}).get('sha256')
                 if previous_hash:
@@ -276,9 +296,18 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
         package = packages.get(origin['pid'], {})
         if package.get('retirement'):
             origin['retirement'] = package['retirement']
+    if prepared is not None:
+        prepared.append(store.prepare(state))
+        return state
     store.save(state, expected=state['revision'])
     from activity import report
     completed_after = {(oid, o.get('sha256'), o.get('availability')) for oid, o in state['origins'].items()
                        if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
     report('local', 'sleeping', 'Intake committed', progressed=bool(completed_after - completed_before))
-    return store.read()
+    if backend is None:
+        return store.read()
+    from library.primitives import WorkingState
+    state['revision'] = store.revision
+    result = WorkingState(state)
+    result.media_omitted = True
+    return result

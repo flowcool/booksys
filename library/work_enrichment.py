@@ -4,10 +4,10 @@ from __future__ import annotations
 from typing import Any
 
 from library.asset_evidence import bind_evidence
-from library.catalog import LibraryError, now
+from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
-from library.work_identity import evaluate_work, classify_work
+from library.work_identity import evaluate_work, classify_work, merge_work_decision
 
 
 def printed_concordance(evidence: dict[str, Any], asset: dict[str, Any],
@@ -18,7 +18,7 @@ def printed_concordance(evidence: dict[str, Any], asset: dict[str, Any],
     silently resolve a structured identity contradiction.
     """
     from copy import deepcopy
-    from library.printed import words
+    from library.printed_model import words
     printed = (asset.get('printed') or {})
     if printed.get('status') != 'ok' or printed.get('asset') != asset['sha256']:
         return evidence
@@ -92,7 +92,7 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             # phrases for bounded page retrieval; final title+creator proof below
             # is still mandatory before identification.
             if not matching and (asset.get('printed') or {}).get('asset') == key:
-                from library.printed import words
+                from library.printed_model import words
                 text = ' '+words('\n'.join(p.get('text', '') for p in asset['printed'].get('pages', [])[:4]))+' '
                 matching = [row for row in rows if len(words(row.get('title') or '').split()) >= 2
                             and ' '+words(row['title'])+' ' in text]
@@ -144,5 +144,5 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
         result['field_conflicts'].update(classification['field_conflicts'])
     # Explicit work decisions are replayable and take precedence over enrichment.
     if asset.get('work_decision'):
-        result = {**result, **asset['work_decision']}
+        result = merge_work_decision(result, asset['work_decision'])
     asset['work_result'] = result

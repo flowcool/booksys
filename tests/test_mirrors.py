@@ -1,3 +1,4 @@
+from postgres_fixture import create_catalog
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,8 @@ from booksys import CollectionError
 from pipeline import Pyload
 from test_pipeline import MemoryDownloader, NEW
 import yaml
+from tests.postgres_fixture import create_store
+from library.primitives import empty
 
 
 class MirrorTests(unittest.TestCase):
@@ -28,6 +31,7 @@ class MirrorTests(unittest.TestCase):
             'a': {'hoster': '1fichier', 'urls': ['https://1fichier.com/?part1', 'https://1fichier.com/?part2']},
             'b': {'hoster': 'other', 'urls': ['https://other.example/one', 'https://other.example/two']}}}
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             journal = {'submissions': {}}
             downloader.submit(NEW, record, journal, Path(folder) / 'monitor.yaml')
             self.assertEqual({link['url'] for link in downloader.packages[0]['links']}, set(record['downloads']['a']['urls']))
@@ -52,6 +56,7 @@ class MirrorTests(unittest.TestCase):
                 if method == 'stop_downloads': self.active = []; return
                 raise AssertionError(method)
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             root = Path(folder); (root/'downloads/owned').mkdir(parents=True)
             (root/'downloads/owned/a.cbz').write_bytes(b'a'); (root/'downloads/owned/b.cbz').write_bytes(b'b')
             client = Native()
@@ -97,6 +102,7 @@ class MirrorTests(unittest.TestCase):
                     return self.creates
                 return super().call(method, write=write, **values)
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             root = Path(folder); (root/'downloads/original').mkdir(parents=True)
             failed = root/'downloads/original/album.cbz'; failed.write_bytes(b'corrupt retained bytes')
             client = Native()
@@ -116,7 +122,8 @@ class MirrorTests(unittest.TestCase):
             self.assertEqual({item['url'] for item in client.packages[1]['links']},
                              set(record['downloads']['b']['urls']))
             self.assertEqual(failed.read_bytes(), b'corrupt retained bytes')
-            operation = yaml.safe_load(journal.read_text())['packages']['1']
+            from library.operational_state import NativeHistory
+            operation = NativeHistory(root).routing()['packages']['1']
             self.assertEqual(operation['attempt_pid'], 2)
             from mirror_routing import restore_package
             client.packages[1]['name'] = 'foreign-drift'
@@ -139,10 +146,12 @@ class MirrorTests(unittest.TestCase):
                         [{'pid': 1, 'name': 'Booksys-original', 'folder': 'original',
                           'links': [{'fid': 10, 'url': 'https://1fichier.com/?a'}]}])
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             path = Path(folder)/'routing.yaml'
-            atomic_yaml(path, {'schema': 1, 'packages': {'1': {'source': NEW,
+            from library.operational_state import NativeHistory
+            NativeHistory(Path(folder)).route('1', {'source': NEW,
                 'phase': 'active', 'attempt_pid': 2, 'attempt_name': 'Booksys-fallback-owned',
-                'input_folders': {'10': 'original'}}}})
+                'input_folders': {'10': 'original'}})
             snapshot = logical_snapshot(Snapshot(), path)
             attempt, original = snapshot
             self.assertEqual((attempt['pid'], attempt['links'][0]['fid']), (2, 20))
@@ -165,6 +174,7 @@ class MirrorTests(unittest.TestCase):
                     return 2
                 return super().call(method, write=write, **values)
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             root = Path(folder); reception = root/'downloads'; (reception/'original').mkdir(parents=True)
             (reception/'original/album.cbz').write_bytes(b'corrupt retained bytes')
             client = Native()
@@ -190,6 +200,7 @@ class MirrorTests(unittest.TestCase):
         state = {'origins': {'child': {'parent_origin': 'parent', 'availability': 'rejected', 'reason': 'Bad CRC'}}}
         self.assertEqual(technical({'availability': 'bundle', '_id': 'parent'}, state), 'failed')
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             root = Path(folder)
             target = root/'source.cbz'; target.write_bytes(b'original')
             with self.assertRaisesRegex(CollectionError, 'outside reception'):
@@ -205,6 +216,7 @@ class MirrorTests(unittest.TestCase):
                 if method == 'get_package_data': return self_package
                 raise AssertionError(method)
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             root = Path(folder); reception = root/'downloads'; reception.mkdir()
             record = {'downloads': {'a': {'hoster': 'one', 'urls': ['https://1fichier.com/?offline']},
                                     'b': {'hoster': 'two', 'urls': ['https://other.example/a']}}}
@@ -218,6 +230,7 @@ class MirrorTests(unittest.TestCase):
         from library.intake import receive
         from test_library_readers import image_bytes
         with tempfile.TemporaryDirectory() as folder:
+            create_store(self,Path(folder),empty())
             root = Path(folder); reception = root/'downloads'
             for name in ('original', 'attempt'):
                 (reception/name).mkdir(parents=True)
@@ -230,7 +243,7 @@ class MirrorTests(unittest.TestCase):
                 {'pid': 2, 'name': 'Booksys-attempt', 'folder': 'attempt', 'mirror_source': NEW,
                  'mirror_original_pid': 1, 'links': [{'fid': 20, 'name': 'album.cbz', 'status': 0,
                     'size': (reception/'attempt/album.cbz').stat().st_size}]}]
-            state = receive(Catalog(root/'state'), reception, captured, journal, queue, stable_seconds=.01)
+            state = receive(create_catalog(self,root/'state'), reception, captured, journal, queue, stable_seconds=.01)
             self.assertEqual({(o['pid'], o['fid'], o['path']) for o in state['origins'].values()},
                              {(1, 10, 'original/album.cbz'), (2, 20, 'attempt/album.cbz')})
             self.assertTrue(all(o['availability'] == 'validated' for o in state['origins'].values()))

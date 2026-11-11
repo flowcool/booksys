@@ -11,7 +11,7 @@ from typing import Any, Callable
 import pikepdf
 from PIL import Image
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 from library.process import bounded_run
 
 DPI = 200
@@ -101,7 +101,7 @@ def extract_page(pdf: Any, page: Any, shape: dict[str, Any]) -> bytes | None:
 
 def convert_pdf_pages(path: Path, sink: Callable[[str, bytes], None],
                       *, indices: list[int] | None = None) -> dict[str, Any]:
-    from library.reader_worker import inspect_pdf, MAX_EXPANDED
+    from library.pdf_inspection import inspect_pdf, MAX_EXPANDED
     inspection = inspect_pdf(path)
     wanted = indices if indices is not None else list(range(1, inspection['pages'] + 1))
     if not wanted or wanted != sorted(set(wanted)) or any(type(i) is not int or not 1 <= i <= inspection['pages'] for i in wanted):

@@ -8,7 +8,7 @@ import resource
 import sys
 from pathlib import Path
 from PIL import Image, ImageOps
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 from library.readers import sha256
 
 

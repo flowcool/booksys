@@ -1,3 +1,5 @@
+from postgres_fixture import create_catalog, create_store
+from library.primitives import empty
 import copy
 import tempfile
 import unittest
@@ -12,17 +14,17 @@ class ResolutionTests(unittest.TestCase):
     def test_preview_confirm_is_ledger_only_idempotent_and_stale_on_new_assertion(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             service = Resolution(store, reception)
             page = service.page(asset, 1)
             values = {'edition_id': 'edition', 'work_id': 'work', 'work': {}, 'edition': {},
                       'select': True, 'proof': [{'page': page['id'], 'field': field, 'text': 'Checked visible ' + field} for field in ('title', 'publisher', 'language')],
                       'reason': 'Publisher and language checked', 'supersedes': None, 'restore': None}
             preview = service.preview(asset, values)
-            before = store.path.read_bytes()
+            before = store.backend().get('assets',asset)
             result = service.confirm({'request_id': 'one', 'preview': preview['id']})
             self.assertEqual(result['status'], 'recorded')
-            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual(store.backend().get('assets',asset),before)
             self.assertEqual(service.confirm({'request_id': 'one', 'preview': preview['id']})['decision'], result['decision'])
             self.assertEqual(len(store.ledger()), 1)
             service.project()
@@ -39,7 +41,7 @@ class ResolutionTests(unittest.TestCase):
         from library.publish import Publisher, Capacity
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
             publisher.publish(asset)
             source_bytes = original.read_bytes()
@@ -79,7 +81,7 @@ class ResolutionTests(unittest.TestCase):
         from library.web import handler
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, _, asset = setup_library(root)
+            store, reception, _, asset = setup_library(root,self)
             service = Resolution(store, reception)
             server = ThreadingHTTPServer(('127.0.0.1', 0), handler(root, resolution=service))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -99,8 +101,9 @@ class ResolutionTests(unittest.TestCase):
                 client.request('POST', '/api/resolution/case', json.dumps({'asset': asset}),
                                {'Content-Type': 'application/json', 'X-CSRF-Token': token, 'Origin': 'http://' + host})
                 response = client.getresponse()
-                self.assertEqual(response.status, 200)
-                self.assertEqual(json.loads(response.read())['asset'], asset)
+                body=response.read()
+                self.assertEqual(response.status, 200, body.decode())
+                self.assertEqual(json.loads(body)['asset'], asset)
                 self.assertEqual(store.ledger(), [])
             finally:
                 server.shutdown()
@@ -110,7 +113,7 @@ class ResolutionTests(unittest.TestCase):
     def test_missing_proof_blocks_replay_and_same_reference_is_not_duplicated(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, _, asset = setup_library(root)
+            store, reception, _, asset = setup_library(root,self)
             service = Resolution(store, reception)
             page = service.page(asset, 1)
             values = {'edition_id': None, 'work_id': 'work', 'work': {'title': 'Album'},
@@ -126,7 +129,7 @@ class ResolutionTests(unittest.TestCase):
             piece = service.pieces / (page['id'] + '.yaml')
             piece.chmod(0o600)
             piece.write_text('changed: true\n')
-            with self.assertRaisesRegex(LibraryError, 'evidence missing or altered'):
+            with self.assertRaisesRegex(LibraryError, 'proof missing or altered'):
                 store.replay()
 
     def test_shared_request_budget_keeps_local_application_independent(self):
@@ -138,7 +141,9 @@ class ResolutionTests(unittest.TestCase):
             def fetch(url):
                 calls.append(url)
                 return 200, '{}'
-            atomic_yaml(root / 'library-network-budget.yaml', {'remaining': 1})
+            from booksys_core.network_admission import RollingBudget
+            create_store(self,root,empty())
+            RollingBudget.create(root/'provider-admission.yaml',requests=1,period=3600)
             first = Providers(root / 'cache', fetch=fetch, interval=0, shared=root)
             second = Providers(root / 'cache', fetch=fetch, interval=0, shared=root)
             self.assertEqual(first.get('https://openlibrary.org/books/OL1M.json')['status'], 'ok')
@@ -155,7 +160,7 @@ class ResolutionTests(unittest.TestCase):
         from test_library_readers import image_bytes
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, original, first_asset = setup_library(root)
+            store, reception, original, first_asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
             publisher.publish(first_asset)
             second = original.with_name('scan2.cbz')
@@ -185,7 +190,7 @@ class ResolutionTests(unittest.TestCase):
         from library.publish import Publisher, Capacity
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, _, asset = setup_library(root)
+            store, reception, _, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
             publisher.publish(asset)
             service = Resolution(store, reception)
@@ -211,7 +216,7 @@ class ResolutionTests(unittest.TestCase):
         from library.publish import Publisher, Capacity
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, _, asset = setup_library(root)
+            store, reception, _, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
             publisher.publish(asset)
             service = Resolution(store, reception)
@@ -238,7 +243,8 @@ class ResolutionTests(unittest.TestCase):
         import shutil
         import subprocess
         from library.resolution_ui import PANEL
-        self.assertIsNotNone(shutil.which('node'), 'Required test prerequisite missing: node')
+        if not shutil.which('node'):
+            self.skipTest('Node is needed for actual form event execution')
         script = re.search(r'<script>(.*?)</script>', PANEL, re.S).group(1)
         driver = r'''
 const vm=require('vm'),assert=require('assert');let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',async()=>{
@@ -258,7 +264,7 @@ ids['resolution-candidate'].value='0';ids['resolution-candidate'].onchange();ids
         from library.publish import Publisher, Capacity
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, _, asset = setup_library(root)
+            store, reception, _, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
             service = Resolution(store, reception)
             page = service.page(asset, 1)
@@ -284,7 +290,7 @@ ids['resolution-candidate'].value='0';ids['resolution-candidate'].onchange();ids
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, _, _ = setup_library(root)
+            store, reception, _, _ = setup_library(root,self)
             service = Resolution(store, reception)
             existing = service.piece({'fixture': 'retained'})
             with patch.object(service, 'trim_previews', side_effect=LibraryError('Temporary evidence budget exhausted')):
@@ -294,3 +300,97 @@ ids['resolution-candidate'].value='0';ids['resolution-candidate'].onchange();ids
                     service.piece({'fixture': 'retained'})
             self.assertEqual([p.stem for p in service.pieces.glob('*.yaml')], [existing])
             self.assertEqual(service.load_piece(existing), {'fixture': 'retained'})
+
+
+    def test_actor_decision_publication_and_result_project_with_original_task(self):
+        from datetime import datetime,timezone
+        from library.stage_model import Obligation
+        from library.stage_tasks import StageTasks
+        from library.business_stages import BusinessStages
+        from library.publish import Capacity
+        from library.operational_state import apply_completion,CopyOperations
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);catalog,reception,original,asset=setup_library(root,self)
+            service=Resolution(catalog,reception);page=service.page(asset,1)
+            values={'edition_id':'edition','work_id':'work','work':{},'edition':{},'select':True,
+                'proof':[{'page':page['id'],'field':field,'text':'Checked visible '+field} for field in ('title','publisher','language')],
+                'reason':'Exact visible proof','supersedes':None,'restore':None}
+            preview=service.preview(asset,values);decision=service.confirm({'request_id':'actor','preview':preview['id']})['decision']
+            service.project();stamp=datetime(2026,11,10,tzinfo=timezone.utc);tasks=StageTasks(catalog.backend())
+            task=tasks.discover(Obligation('copies','decision:'+decision,decision,'manual'),now=stamp)
+            active=tasks.start(task.key,task.generation,now=stamp,resources=True)
+            adapter=BusinessStages(catalog,reception,root/'library',None,capacity=Capacity(reserve=0),isolated=True)
+            with patch('library.publish.Publisher.publish',side_effect=AssertionError('Fresh copy in receipt')),patch('library.publish.Publisher.withdraw',side_effect=AssertionError('Fresh withdrawal in receipt')):
+                absent=adapter.receipt(active)
+            self.assertEqual(absent[0],'absent')
+            self.assertEqual(list(CopyOperations(catalog.backend()._database,'publication').records()),[])
+            result=adapter.execute(active,now=stamp)
+            self.assertIsNotNone(result.prepared)
+            self.assertEqual(catalog.get('assets',asset)['resolution']['status'],'pending')
+            self.assertNotIn('publication',catalog.get('editions','edition'))
+            service.project() # An observer cannot project the owning task's terminal suffix.
+            self.assertEqual(catalog.get('assets',asset)['resolution']['status'],'pending')
+            # The reserved exact closure rejects relevant writes and borrowed task results.
+            other=tasks.discover(Obligation('metadata',asset,'other','other'),now=stamp)
+            other=tasks.start(other.key,other.generation,now=stamp,resources=True)
+            with self.assertRaises(LibraryError):tasks.complete(other.key,other.generation,now=stamp,prepared=result.prepared)
+            self.assertEqual(tasks.get(other.key).status,'active')
+            from dataclasses import replace
+            forged=replace(result.prepared.change,ledger=[*result.prepared.change.ledger[:-1],'f'*64])
+            with self.assertRaises(LibraryError):catalog.backend().commit(forged,expected_revision=result.prepared.revision,conflict=result.prepared.conflict,attempt=(active.key,active.generation),now=stamp,commit_key='negative:forged-result',completions=result.prepared.completions)
+            fresh=catalog.result_set('override',{'assets':[asset]})
+            before_chain=len(catalog.ledger())
+            with self.assertRaises(LibraryError):catalog.append_decision({'action':'override','target':asset,'values':{'title':'Concurrent relevant decision'},'author':'flowcool','time':stamp.isoformat()},conflict=fresh.conflict)
+            self.assertEqual(len(catalog.ledger()),before_chain)
+            from library.store import Change
+            from library.primitives import digest
+            source_origin=next(iter(catalog.records('origins')))[1]
+            new_origin={**source_origin,'fid':999}
+            new_id=digest({'source':new_origin['source'],'pid':new_origin['pid'],'fid':999})
+            with self.assertRaises(LibraryError):catalog.backend().commit(Change(upserts={'origins':{new_id:new_origin}}),expected_revision=catalog.revision,commit_key='negative:new-member')
+            self.assertIsNone(catalog.get('origins',new_id))
+            def fail(db,completion):
+                apply_completion(db,completion)
+                raise LibraryError('Injected SQL failure after phase write')
+            with patch('library.operational_state.apply_completion',side_effect=fail):
+                with self.assertRaises(LibraryError):tasks.complete(active.key,active.generation,now=stamp,prepared=result.prepared)
+            self.assertEqual(tasks.get(task.key).status,'active')
+            self.assertNotIn('publication',catalog.get('editions','edition'))
+            receipt=adapter.receipt(active)
+            self.assertEqual(receipt.outcome,'done')
+            done=tasks.reconcile(active.key,active.generation,now=stamp,owner_stopped=True,outcome=receipt.outcome,proof=receipt.proof,prepared=receipt.prepared)
+            self.assertEqual((done.status,done.attempts,done.generation),('done',active.attempts,active.generation))
+            self.assertEqual(catalog.get('assets',asset)['resolution']['status'],'applied')
+            self.assertIn('publication',catalog.get('editions','edition'))
+            from library.catalog import Catalog
+            self.assertEqual(create_catalog(self,catalog.directory).get('assets',asset)['resolution']['status'],'applied')
+            self.assertTrue(all(op['phase']=='committed' for op in CopyOperations(catalog.backend()._database,'publication').records()))
+
+
+    def test_decision_receipt_after_withdraw_does_not_start_the_missing_copy(self):
+        from datetime import datetime,timezone
+        from library.publish import Publisher,Capacity
+        from library.business_stages import BusinessStages
+        from library.stage_model import Obligation
+        from library.stage_tasks import StageTasks
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);catalog,reception,original,asset=setup_library(root,self)
+            publisher=Publisher(catalog,reception,root/'library',isolated=True,capacity=Capacity(reserve=0))
+            publisher.publish(asset)
+            service=Resolution(catalog,reception);page=service.page(asset,1)
+            values={'edition_id':None,'work_id':'work','work':{'title':'Album'},'edition':{'publisher':'Other','language':'fr','reference':'new-local-label'},'select':True,
+                'proof':[{'page':page['id'],'field':field,'text':'Checked visible '+field} for field in ('title','publisher','language')],
+                'reason':'Exact transfer proof','supersedes':None,'restore':None}
+            preview=service.preview(asset,values);decision=service.confirm({'request_id':'withdraw-only','preview':preview['id']})['decision']
+            service.project();stamp=datetime(2026,11,10,tzinfo=timezone.utc);tasks=StageTasks(catalog.backend())
+            task=tasks.discover(Obligation('copies','decision:'+decision,decision,'manual'),now=stamp)
+            active=tasks.start(task.key,task.generation,now=stamp,resources=True)
+            publisher.withdraw('edition',expected=catalog.revision,decision=decision,role='withdraw')
+            adapter=BusinessStages(catalog,reception,root/'library',None,capacity=Capacity(reserve=0),isolated=True)
+            with patch('library.publish.Publisher.publish',side_effect=AssertionError('Fresh copy in readback')),patch('library.publish.Publisher.withdraw',side_effect=AssertionError('Repeated withdrawal in readback')):
+                receipt=adapter.receipt(active)
+            self.assertEqual(receipt[0],'absent')
+            self.assertEqual(tasks.get(task.key).status,'active')
+            self.assertNotIn('publication',catalog.get('editions','edition'))

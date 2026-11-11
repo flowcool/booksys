@@ -13,14 +13,84 @@ import yaml
 
 from library.catalog import atomic_yaml
 from test_library_publish import setup_library
+from library.operational_state import CollectorState,RuntimeObservation
+
+def runtime_fixture(store,root):
+    (root/"postgresql.json").write_bytes((store.directory/"postgresql.json").read_bytes());(root/"postgresql.json").chmod(0o600)
+    from booksys_core.network_admission import RollingBudget
+    RollingBudget.create(store.directory/"provider-admission.yaml",requests=50,period=60)
+    RuntimeObservation(store.backend()._database).activate({"status":"lab"},role="library")
+    RuntimeObservation(store.backend()._database).publish([],at=0,remaining=None,overshoot=None)
+
 
 
 class CLITests(unittest.TestCase):
+    def test_preview_bundle_ignores_shared_media_root_and_preserves_source(self):
+        from unittest.mock import patch
+        from test_library_bundles import comic
+        from test_library_intake import SOURCE
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            store,reception,original,asset=setup_library(root,self)
+            runtime_fixture(store,root)
+            shared=root/'shared-media';shared.mkdir();(shared/'retained').write_bytes(b'unchanged')
+            bundle=reception/'package/bundle.zip'
+            with zipfile.ZipFile(bundle,'w') as archive:archive.writestr('Album.cbz',comic())
+            atomic_yaml(root/'captured.yaml',{'items':{SOURCE:{'title':'Bundle'}}})
+            atomic_yaml(root/'submissions.yaml',{'submissions':{SOURCE:{'status':'queued','package_id':1,'name':'tracked'}}})
+            atomic_yaml(root/'queue.yaml',[{'pid':1,'name':'tracked','folder':'package','links':[
+                {'fid':2,'name':bundle.name,'status':0,'size':bundle.stat().st_size}]}])
+            before=store.backend().export()
+            files={str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            with patch.dict(os.environ,BOOKSYS_BUNDLE_INPUT_ROOT=str(shared)):
+                process=subprocess.run([sys.executable,'-m','library.cli','--state',str(store.directory),
+                    'preview','--output',str(root/'preview'),'--reception',str(reception),
+                    '--captured',str(root/'captured.yaml'),'--submissions',str(root/'submissions.yaml'),
+                    '--queue',str(root/'queue.yaml')],capture_output=True,text=True)
+            self.assertEqual(process.returncode,0,process.stdout+process.stderr)
+            self.assertEqual(store.backend().export(),before)
+            self.assertEqual({str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*')
+                if p.is_file() and not p.is_relative_to(root/'preview')},files)
+            self.assertTrue(any((root/'preview/state/bundle-inputs').glob('*/manifest.yaml')))
+            preview=yaml.safe_load((root/'preview/state/library.yaml').read_text())
+            self.assertGreater(len(preview['origins']),len(store.read()['origins']))
+
+    def test_preview_projects_indexed_decision_without_committing(self):
+        from library.cli import parser,run
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);store,reception,_,asset=setup_library(root,self)
+            record=store.append_decision({'action':'override','target':asset,
+                'values':{'title':'Accepted pending title'},'author':'fixture','time':'2026-11-09T00:00:00Z'})
+            for name,value in [('captured',{'items':{}}),('submissions',{'submissions':{}}),('queue',[])]:
+                atomic_yaml(root/(name+'.yaml'),value)
+            before=store.backend().export()
+            files={str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            args=parser().parse_args(['--state',str(store.directory),'preview','--output',str(root/'preview'),
+                '--reception',str(reception),'--captured',str(root/'captured.yaml'),
+                '--submissions',str(root/'submissions.yaml'),'--queue',str(root/'queue.yaml')])
+            self.assertEqual(run(args)['status'],'preview_only')
+            preview=yaml.safe_load((root/'preview/state/library.yaml').read_text())
+            self.assertEqual(preview['assets'][asset]['overrides']['title'],'Accepted pending title')
+            self.assertEqual(preview['ledger'],[record['id']])
+            self.assertEqual(store.backend().export(),before)
+            self.assertEqual({str(p.relative_to(root)):p.read_bytes() for p in root.rglob('*')
+                if p.is_file() and not p.is_relative_to(root/'preview')},files)
+
+    def test_library_activation_preserves_stage_activation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);store,_,_,_=setup_library(root,self)
+            observed=RuntimeObservation(store.backend()._database)
+            observed.activate({'qualification':'stage'})
+            observed.activate({'qualification':'library'},role='library')
+            self.assertEqual(observed.activation(),{'qualification':'stage'})
+            self.assertEqual(observed.activation(role='library'),{'qualification':'library'})
+
     def test_explicit_lab_lifecycle_and_path_guards(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             self.assertTrue(root.is_relative_to('/data'))
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
+            runtime_fixture(store,root)
             original_bytes = original.read_bytes()
             def cli(*args, state=None, code=0):
                 result = subprocess.run([sys.executable, '-m', 'library.cli', '--state',
@@ -58,7 +128,8 @@ class CLITests(unittest.TestCase):
     def test_reusable_lab_cycle_accounts_for_pending_inputs(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
+            runtime_fixture(store,root)
             for name, value in [('captured', {'items': {}}), ('submissions', {'submissions': {}}), ('queue', [])]:
                 atomic_yaml(root / (name + '.yaml'), value)
             command = [sys.executable, 'ops/library_cycle.py', '--root', str(root),
@@ -74,6 +145,8 @@ class CLITests(unittest.TestCase):
                     with zipfile.ZipFile(second, 'w') as archive, zipfile.ZipFile(original) as first:
                         archive.writestr('001.png', first.read('001.png'))
                         archive.writestr('002.png', first.read('001.png'))
+                    CollectorState(root).capture(SOURCE,{'title':'Album'})
+                    CollectorState(root).submission(SOURCE,{'status':'queued','name':'tracked','package_id':1})
                     atomic_yaml(root / 'captured.yaml', {'items': {SOURCE: {'title': 'Album'}}})
                     atomic_yaml(root / 'submissions.yaml', {'submissions': {SOURCE: {
                         'status': 'queued', 'name': 'tracked', 'package_id': 1}}})
@@ -114,7 +187,8 @@ class CLITests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('cycle_test', 'ops/library_cycle.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder);store, reception, original, asset = setup_library(root)
+            root = Path(folder);store, reception, original, asset = setup_library(root,self)
+            runtime_fixture(store,root)
             state = store.read();state['assets'][asset]['identity_result'] = {'status': 'identified', 'reason': 'Fixture proved edition'}
             store.save(state, expected=state['revision'])
             atomic_yaml(root / 'captured.yaml', {'items': {SOURCE: {'title': 'Album'}}})
@@ -165,7 +239,8 @@ class CLITests(unittest.TestCase):
     def test_tool_lifecycle_and_safe_preview(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
+            runtime_fixture(store,root)
             def cli(*arguments, code=0):
                 process = subprocess.run([sys.executable, '-m', 'library.cli', '--state', str(store.directory),
                     *map(str, arguments)], capture_output=True, text=True)
@@ -187,17 +262,17 @@ class CLITests(unittest.TestCase):
             published = cli('publish', '--asset', asset, *common)
             cli('reconcile', *common)
             cli('withdraw', '--edition', 'edition', '--expected', str(store.read()['revision']), *common)
-            withdrawn = [p for p in (store.directory / 'library-operations').glob('*.yaml')
-                         if yaml.safe_load(p.read_text())['kind'] == 'withdraw'][0]
-            cli('restore', '--operation', withdrawn.stem, '--expected', str(store.read()['revision']), *common)
+            from library.operational_state import CopyOperations
+            withdrawn=next(op for op in CopyOperations(store.backend()._database,'publication').records() if op['kind']=='withdraw')
+            cli('restore','--operation',withdrawn['id'],'--expected',str(store.revision),*common)
             cli('preflight', '--reception', reception, '--library', root / 'library', code=2)
             atomic_yaml(root / 'captured.yaml', {'items': {}})
             atomic_yaml(root / 'submissions.yaml', {'submissions': {}})
             atomic_yaml(root / 'queue.yaml', [])
             inputs = ['--reception', reception, '--captured', root / 'captured.yaml',
                       '--submissions', root / 'submissions.yaml', '--queue', root / 'queue.yaml']
-            before = store.path.read_bytes()
+            before = store.backend().export()
             cli('preview', '--output', root / 'preview', *inputs)
-            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual(store.backend().export(),before)
             cli('intake', '--isolated', *inputs)
             self.assertTrue((root / 'preview/review.yaml').exists())

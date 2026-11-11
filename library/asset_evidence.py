@@ -5,7 +5,7 @@ from pathlib import PurePosixPath
 import re
 from typing import Any
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 
 def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:

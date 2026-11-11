@@ -19,6 +19,44 @@ class WorkIdentityTests(unittest.TestCase):
 
 
 class ConcordanceSafetyTests(unittest.TestCase):
+    def test_homonymous_works_with_different_authors_abstain_and_keep_candidates(self):
+        candidates = [reference(author='Alice', work_ref='work-a', edition_ref='edition-a'),
+                      reference(author='Bob', work_ref='work-b', edition_ref='edition-b')]
+        result = evaluate_work({'title': 'Le Grand Voyage', 'asset_bound': True}, candidates)
+        self.assertEqual(result['status'], 'review')
+        self.assertIn('creator', result['reason'])
+        self.assertEqual(result['candidates'], candidates)
+        self.assertEqual(result['work'], {})
+
+    def test_conflicting_primary_contributors_abstain_without_a_flat_author(self):
+        candidates = [reference(contributors=[{'role': '(Scénario)', 'name': name}]) for name in ('Alice', 'Bob')]
+        result = evaluate_work({'title': 'Le Grand Voyage', 'asset_bound': True}, candidates)
+        self.assertEqual(result['status'], 'review')
+        self.assertIn('creator', result['reason'])
+
+    def test_duplicate_ids_and_missing_creators_do_not_invent_identity_conflicts(self):
+        for candidates in ([reference(work_ref='a'), reference(work_ref='b')],
+                           [reference(author='Alice', work_ref='a'), reference(author='Alice', work_ref='b')],
+                           [reference(author='Alice'), reference(author=None)]):
+            with self.subTest(candidates=candidates):
+                result = evaluate_work({'title': 'Le Grand Voyage', 'asset_bound': True}, candidates)
+                self.assertEqual(result['status'], 'identified')
+                self.assertEqual(result['edition_status'], 'unknown')
+                self.assertEqual(len(result['concordant_candidates']), 2)
+
+    def test_same_work_editions_keep_secondary_conflicts_and_partial_creator_credits(self):
+        candidates = [reference(author='Alice', work_ref='same', publisher='A', date='2000', isbn='123',
+                                contributors={'writer': ['Alice', 'Bob'], 'colorist': ['C']}),
+                      reference(author='Alice', work_ref='same', publisher='B', date='2001', isbn='456',
+                                contributors={'writer': ['Alice'], 'colorist': ['D']})]
+        result = evaluate_work({'title': 'Le Grand Voyage', 'asset_bound': True}, candidates)
+        self.assertEqual(result['status'], 'identified')
+        self.assertEqual(result['work']['author'], 'Alice')
+        self.assertEqual(result['edition_status'], 'unknown')
+        for field in ('publisher', 'date', 'isbn'):
+            self.assertNotIn(field, result['work'])
+            self.assertIn(field, result['field_conflicts'])
+
     def test_parent_and_generic_titles_cannot_identify(self):
         for evidence in ({'title': 'Le Grand Voyage'}, {'title': 'Intégrale', 'asset_bound': True},
                          {'labels': ['Le Grand Voyage'], 'asset_bound': True}):

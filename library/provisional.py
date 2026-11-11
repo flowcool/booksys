@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from library.catalog import Catalog, LibraryError, lock, now, sync_dir
-from library.publish import Publisher, Capacity, manifest, private_tree, rename_atomic, verify
+from library.catalog import Catalog
+from library.primitives import LibraryError, now, sync_dir
+from library.publication import Publisher, Capacity, manifest, private_tree, publication_lock, rename_atomic, verify
 from library.readers import fingerprint, sha256
 from library.transform import transform_archive
 from library.xmlmetadata import validate_xml
@@ -41,6 +42,8 @@ def provisional_xml(asset_id: str, asset: dict[str, Any]) -> bytes:
 class ProvisionalPublisher(Publisher):
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
+        from library.operational_state import CopyOperations
+        self.operations=CopyOperations(self.store.backend()._database,'provisional')
         self.exposed = self.root / 'bd-provisional'
         self.journals = self.store.directory / 'library-provisional-operations'
         for path in (self.exposed, self.journals):
@@ -53,7 +56,7 @@ class ProvisionalPublisher(Publisher):
 
     def commit(self, operation: dict[str, Any]) -> None:
         verify(self.exposed / operation['target'], operation['manifest'])
-        state = self.store.read()
+        state = self.store.working_set('admit', {'assets': [operation['asset']]})
         asset = state['assets'][operation['asset']]
         previous = asset.get('provisional')
         if previous:
@@ -65,21 +68,24 @@ class ProvisionalPublisher(Publisher):
             asset['provisional'] = {'operation': operation['id'], 'target': operation['target'],
                 'manifest': operation['manifest'], 'artifact_format': 'cbz', 'edition_status': 'unknown',
                 'status': 'published', 'transformation': operation['transformation']}
-            self.store.save(state, expected=state['revision'])
-        self.transition(operation, 'committed')
+            self._terminal(operation,self.store.prepare(state))
+            return
+        self.transition(operation,'committed')
 
-    def reconcile(self, *, locked: bool = False, provisional: bool = True) -> list[dict[str, Any]]:
+    def reconcile(self, *, locked: bool = False, provisional: bool = True, asset: str | None = None) -> list[dict[str, Any]]:
         if not locked:
-            with lock(self.store.directory / 'library-copy.lock', blocking=False):
-                return self.reconcile(locked=True)
-        operations = [self.load_operation(path.stem) for path in sorted(self.journals.glob('*.yaml'))]
+            with publication_lock(self.store.directory, self.root):
+                return self.reconcile(locked=True, asset=asset)
+        operations = self.operations.records()
         for operation in operations:
             if (operation.get('kind') != 'provisional' or operation.get('target') != operation.get('asset')
                     or not re.fullmatch('[0-9a-f]{64}', str(operation.get('asset', '')))
                     or set(operation.get('manifest', {})) != {'book.cbz', 'fiche.md'}):
                 raise LibraryError('Invalid provisional operation journal')
+            if asset is not None and not self.operation_applies(operation, asset):
+                continue
             target = self.exposed / operation['target']
-            current = self.store.read()['assets'][operation['asset']].get('provisional')
+            current = (self.store.get('assets', operation['asset']) or {}).get('provisional')
             if current and current['operation'] != operation['id']:
                 raise LibraryError('Provisional journal ownership conflict')
             if current and current['status'] == 'recovered':
@@ -93,28 +99,30 @@ class ProvisionalPublisher(Publisher):
             elif operation['phase'] in ('prepared', 'verified'):
                 stage = self.staging / operation['id']
                 verify(stage, operation['manifest'])
-                if not eligible(self.store.read()['assets'][operation['asset']]):
+                if not eligible((self.store.get('assets', operation['asset']) or {})):
                     raise LibraryError('Interrupted provisional copy eligibility changed')
                 private_tree(self.root)
                 self.capacity.check(self.root, 0)
-                rename_atomic(stage, target)
+                rename_atomic(stage, target, private_root=self.root)
                 self.commit(operation)
             else:
                 # A failed conversion is evidence. Never silently repeat it or
                 # create another journal for this asset on the next cycle.
                 raise LibraryError('Interrupted provisional copy requires recovery: ' + operation['id'])
-        for asset in self.store.read()['assets'].values():
-            record = asset.get('provisional')
+        for key, entry in self.store.records('assets'):
+            if asset is not None and key != asset:
+                continue
+            record = entry.get('provisional')
             if record and not any(op['id'] == record['operation'] for op in operations):
                 raise LibraryError('Provisional catalogue journal is missing')
         return operations
 
     def publish_unknown(self, asset_id: str) -> dict[str, Any]:
-        with lock(self.store.directory / 'library-copy.lock', blocking=False):
+        with publication_lock(self.store.directory, self.root):
             # Reconcile both namespaces before starting a new conversion.
             Publisher(self.store, self.reception, self.root, exclusive=True, capacity=self.capacity).reconcile(locked=True, provisional=False)
             self.reconcile(locked=True)
-            state = self.store.read()
+            state = self.store.working_set('admit', {'assets': [asset_id]})
             asset = state['assets'][asset_id]
             if not eligible(asset):
                 raise LibraryError('Asset is not eligible for provisional copying')
@@ -159,34 +167,17 @@ class ProvisionalPublisher(Publisher):
             self.transition(operation, 'prepared')
             verify(stage, operation['manifest'])
             self.capacity.check(self.root, 0)
-            if self.store.read()['revision'] != state['revision']:
+            if self.store.revision != state['revision']:
                 raise LibraryError('Catalogue changed during provisional conversion')
             private_tree(self.root)
             self.transition(operation, 'verified')
-            rename_atomic(stage, target)
+            rename_atomic(stage, target, private_root=self.root)
             self.fault('after_substitution', operation)
             self.transition(operation, 'published')
             self.commit(operation)
             return operation
 
 
-def retire_provisional(store: Catalog, root: Path, asset_id: str) -> None:
-    """Called under the shared copy lock after confirmed commit; retain all bytes."""
-    state = store.read()
-    record = state['assets'][asset_id].get('provisional')
-    if not record or record['status'] == 'recovered':
-        return
-    source = root / 'bd-provisional' / record['target']
-    name = 'provisional-' + record['operation']
-    recovery = root / '.recovery' / name
-    if source.exists() and not recovery.exists():
-        verify(source, record['manifest'])
-        rename_atomic(source, recovery)
-    elif source.exists() or not recovery.exists():
-        raise LibraryError('Unexplained provisional retirement divergence')
-    verify(recovery, record['manifest'])
-    record.update(status='recovered', recovery=name)
-    store.save(state, expected=state['revision'])
 
 
 def process_provisional(store: Catalog, reception: Path, library: Path, *, limit: int = 1,
@@ -206,3 +197,6 @@ def process_provisional(store: Catalog, reception: Path, library: Path, *, limit
             processed += 1
     backlog = sum(eligible(asset) for asset in store.read()['assets'].values())
     return {'processed': processed, 'published': processed, 'backlog': backlog, 'ready_backlog': backlog}
+
+
+from library.publication import retire_provisional as retire_provisional

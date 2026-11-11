@@ -15,7 +15,7 @@ class AutomaticTests(unittest.TestCase):
         from library.readers import READER_POLICY, fingerprint
         from test_library_intake import SOURCE
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, original, asset = setup_library(Path(folder))
+            store, reception, original, asset = setup_library(Path(folder),self)
             state = store.read()
             for origin in state['origins'].values():
                 origin.pop('reader_policy', None)
@@ -36,7 +36,7 @@ class AutomaticTests(unittest.TestCase):
         from library.readers import fingerprint, READER_POLICY
         from test_library_intake import SOURCE
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, original, asset = setup_library(Path(folder))
+            store, reception, original, asset = setup_library(Path(folder),self)
             target = original.with_name('album.part01.cbz');original.rename(target)
             state = store.read()
             for origin in state['origins'].values():
@@ -56,7 +56,7 @@ class AutomaticTests(unittest.TestCase):
 
     def test_old_pending_retries_once_per_method_and_changed_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, original, asset = setup_library(Path(folder))
+            store, reception, original, asset = setup_library(Path(folder),self)
             state = store.read(); state['assets'][asset].pop('identity'); state['assets'][asset]['identity_result'] = {'status': 'pending', 'reason': 'Unknown edition'}
             store.save(state, expected=state['revision'])
             providers = Providers(Path(folder) / 'cache', fetch=lambda url: (404, ''), interval=0, budget=50)
@@ -76,7 +76,7 @@ class AutomaticTests(unittest.TestCase):
 
     def test_temporary_failure_retries_are_capped_and_budget_deferral_does_not_spend_attempt(self):
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, original, asset = setup_library(Path(folder))
+            store, reception, original, asset = setup_library(Path(folder),self)
             state = store.read(); state['assets'][asset].pop('identity'); store.save(state, expected=state['revision'])
             providers = Providers(Path(folder) / 'cache', fetch=lambda url: (404, ''), interval=0, budget=0)
             result = process_assets(store, reception, Path(folder) / 'library', providers, clock=lambda: 0)
@@ -92,7 +92,7 @@ class AutomaticTests(unittest.TestCase):
 
     def test_incremental_intake_reuses_validated_fingerprint_and_detects_change(self):
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, original, asset = setup_library(Path(folder))
+            store, reception, original, asset = setup_library(Path(folder),self)
             from test_library_intake import SOURCE
             captured = {'items': {SOURCE: {'title': 'Album'}}}
             journal = {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}}
@@ -109,7 +109,7 @@ class AutomaticTests(unittest.TestCase):
     def test_metadata_transport_retry_differs_from_uncertain_identity(self):
         for status, expected in ((503, 'retry'), (404, 'pending')):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as folder:
-                store, reception, original, asset = setup_library(Path(folder))
+                store, reception, original, asset = setup_library(Path(folder),self)
                 state = store.read();state['assets'][asset].pop('identity')
                 state['assets'][asset]['printed'] = {'status': 'ok'}
                 store.save(state, expected=state['revision'])
@@ -126,7 +126,7 @@ class AutomaticTests(unittest.TestCase):
         for error, expected in ((LibraryError('Printed reader exceeded wall time; owned engine stopped'), 'retry'),
                                 (LibraryError('Printed evidence source changed'), 'pending')):
             with self.subTest(error=str(error)), tempfile.TemporaryDirectory() as folder:
-                store, reception, original, asset = setup_library(Path(folder))
+                store, reception, original, asset = setup_library(Path(folder),self)
                 state = store.read(); state['assets'][asset].pop('identity'); store.save(state, expected=state['revision'])
                 providers = Providers(Path(folder) / 'cache', fetch=lambda url: (404, ''), interval=0, budget=50)
                 with patch('library.automatic.scan_printed', side_effect=error):
@@ -138,7 +138,7 @@ class AutomaticTests(unittest.TestCase):
 
     def test_migration_reuses_only_identical_known_validated_bytes(self):
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, original, asset = setup_library(Path(folder))
+            store, reception, original, asset = setup_library(Path(folder),self)
             from test_library_intake import SOURCE
             state = store.read()
             for origin in state['origins'].values(): origin.pop('fingerprint', None)
@@ -162,6 +162,7 @@ class AutomaticTests(unittest.TestCase):
             ambiguous = copy.deepcopy(migrated)
             ambiguous['assets']['b'*64] = copy.deepcopy(ambiguous['assets'][asset])
             ambiguous['assets']['b'*64]['sha256'] = 'b'*64
+            ambiguous['assets']['b'*64].pop('identity', None)
             for origin in ambiguous['origins'].values():
                 origin.update(sha256=None, availability='pending', reason='Intake budget deferred')
                 origin.pop('fingerprint', None)
@@ -170,7 +171,12 @@ class AutomaticTests(unittest.TestCase):
                 for _ in range(2):
                     receive(store, reception, captured, journal, queue, incremental=True)
             self.assertIsNone(next(iter(store.read()['origins'].values()))['sha256'])
-            migrated['revision'] = store.read()['revision']
+            # Restore the unique inverse link from a fresh snapshot. Updating
+            # only an old revision does not describe deletion of the competitor.
+            restored = store.read()
+            restored['assets'].pop('b'*64)
+            restored['origins'] = copy.deepcopy(migrated['origins'])
+            migrated = restored
             for origin in migrated['origins'].values():origin.pop('fingerprint', None)
             store.save(migrated, expected=migrated['revision'])
             for origin in migrated['origins'].values():
@@ -187,7 +193,7 @@ class AutomaticTests(unittest.TestCase):
 
     def test_budget_deferral_preserves_source_identity_across_changed_bytes(self):
         with tempfile.TemporaryDirectory() as folder:
-            store, reception, original, asset = setup_library(Path(folder))
+            store, reception, original, asset = setup_library(Path(folder),self)
             from test_library_intake import SOURCE
             captured = {'items': {SOURCE: {'title': 'Album'}}}
             journal = {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}}
@@ -210,7 +216,7 @@ class AutomaticTests(unittest.TestCase):
     def test_failed_publication_is_recovery_work_even_after_method_change(self):
         from library.automatic import ready_assets
         with tempfile.TemporaryDirectory() as folder:
-            store,_,_,asset=setup_library(Path(folder))
+            store,_,_,asset=setup_library(Path(folder),self)
             state=store.read();state['assets'][asset]['automation']={'outcome':'unavailable',
                 'method':'old-method','reason':'Publication failed; inspect journal before retry'}
             store.save(state,expected=state['revision'])

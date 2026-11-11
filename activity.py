@@ -1,10 +1,8 @@
-"""Best-effort observations, never a processing authority. One bounded file per stage."""
+"""Best-effort PostgreSQL observations, independent from processing authority."""
 from __future__ import annotations
 
 from collections.abc import Callable
-import fcntl
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -21,8 +19,40 @@ WINDOW = 86400
 MAX_EVENTS = 8192
 
 
+def selected_store(root: Path) -> Any:
+    """One PostgreSQL authority; absence never enables a YAML fallback."""
+    configured = os.environ.get('BOOKSYS_ACTIVITY_DIR')
+    directory = Path(configured) if configured else root
+    from library.activity_store import ActivityStore
+    try:
+        selector = directory / 'activity-authority.yaml'
+        if selector.is_symlink():
+            raise ValueError('Unsafe Activity selector')
+        authority = yaml.safe_load(selector.read_text())['authority_id']
+        return ActivityStore(directory, authority=authority)
+    except Exception:
+        raise ValueError('Activity PostgreSQL authority is not selected') from None
+
+
 def read_activity(root: Path, stage: str) -> dict[str, Any]:
-    return read_yaml(root / (stage + '.yaml'))
+    store = selected_store(root)
+    if store is not None:
+        producers = [value for value in store.producers().values() if value['stage'] == stage]
+        primary = [p for p in producers if p['producer_scope'] != 'observer']
+        current: dict[str, Any] = max(primary or producers, key=lambda p: p['observed_at'], default={})
+        def legacy(value: dict[str, Any]) -> dict[str, Any]:
+            return {**value, 'last_progress_at': value.get('progress_at'), 'item': value.get('item_ref', ''),
+                    'session_started': value.get('session_started', 0), 'operation':value.get('operation_label') or value.get('operation')}
+        events, cursor = {}, None
+        for _ in range(41):
+            page = store.events(after=cursor, stage=stage, limit=200)
+            events.update({e['id']: legacy(e) for e in page['items']})
+            cursor = page['cursor']
+            if cursor is None:
+                break
+        return {'schema': 1, 'current': legacy(current) if current else {},
+                'sources': [legacy(p) for p in producers], 'events': events}
+    raise ValueError('Activity PostgreSQL authority unavailable')
 
 
 def read_yaml(path: Path, *, max_bytes: int = 32 * 1024 * 1024) -> dict[str, Any]:
@@ -40,7 +70,7 @@ def write_yaml(path: Path, value: dict[str, Any]) -> None:
     fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
     try:
         with os.fdopen(fd, 'w') as out:
-            yaml.safe_dump(value, out, allow_unicode=True)
+            yaml.dump(value, out, Dumper=getattr(yaml, 'CSafeDumper', yaml.SafeDumper), allow_unicode=True)
             out.flush()
             os.fsync(out.fileno())
         os.replace(name, path)
@@ -57,13 +87,10 @@ def write_yaml(path: Path, value: dict[str, Any]) -> None:
 def prune(root: Path, stage: str, stamp: float) -> None:
     """Observation-only lock. Never changes source freshness or producer ownership."""
     try:
-        with (root / (stage + '.lock')).open('a') as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            saved = read_activity(root, stage)
-            events = saved.get('events', {})
-            retained = {k: v for k, v in events.items() if v.get('at', 0) >= stamp - WINDOW}
-            if len(retained) != len(events):
-                write_yaml(root / (stage + '.yaml'), {**saved, 'events': retained})
+        store = selected_store(root)
+        if store is not None:
+            store.prune(timestamp=stamp)
+            return
     except (OSError, ValueError, TypeError):
         pass
 
@@ -80,50 +107,53 @@ def reference(value: Any) -> str:
 
 
 class Activity:
-    def __init__(self, root: Path, stage: str, *, clock: Callable[[], float] = time.time):
+    def __init__(self, root: Path, stage: str, *, clock: Callable[[], float] = time.time, scope: str | None = None):
         if stage not in STAGES:
             raise ValueError('Unknown activity stage')
         self.root, self.stage, self.clock = root, stage, clock
         self.session = reference(str(os.getpid()) + ':' + str(time.time_ns()))
         self.started = clock()
+        self.scope = scope or ('collector' if stage in ('collection', 'byparr') else 'controller')
+        self.dropped = 0
+        self.selection_failed = False
+        try:
+            self.store = selected_store(root)
+        except Exception:
+            self.store = None
+            self.selection_failed = True
+            self.dropped += 1
 
     def update(self, value: dict[str, Any] | None) -> None:
         try:
-            self.root.mkdir(parents=True, exist_ok=True)
-            with (self.root / (self.stage + '.lock')).open('a') as handle:
-                # A busy observation writer must never delay business work.
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                saved = read_activity(self.root, self.stage)
-                current = saved.get('current', {})
-                if not isinstance(current, dict) or not isinstance(saved.get('events', {}), dict):
-                    return
-                stamp = self.clock()
-                if value is None and current.get('session') != self.session:
-                    return
-                events = {k: e for k, e in saved.get('events', {}).items()
-                          if e.get('at', 0) >= stamp - WINDOW}
-                if value is not None:
-                    changed = any(current.get(k) != value.get(k) for k in ('state', 'operation', 'item', 'reason'))
-                    if changed:
-                        value['since'] = stamp
-                    else:
-                        value['since'] = current.get('since', stamp)
-                    progressed = value.pop('progressed', False)
-                    value['last_progress_at'] = stamp if progressed else current.get('last_progress_at')
-                    if changed:
-                        event = {**value, 'at': stamp}
-                        eid = reference(self.session + ':' + str(stamp) + ':' + json.dumps(event, sort_keys=True))
-                        events[eid] = event
-                    current = value
-                # Heartbeats retain the original producer identity after restart.
-                if value is not None:
-                    current.update(session=self.session, session_started=self.started, pid=os.getpid(),
-                                   process_start=Path('/proc/self/stat').read_text().split()[21])
-                current['observed_at'] = stamp
-                write_yaml(self.root / (self.stage + '.yaml'), {'schema': 1, 'current': current,
-                    'events': dict(sorted(events.items(), key=lambda x: x[1]['at'])[-MAX_EVENTS:])})
+            if self.selection_failed:
+                self.store = selected_store(self.root)
+                self.selection_failed = False
+                if self.store is not None:
+                    self.store.dropped += self.dropped
+                    self.dropped = 0
+            if self.store is not None:
+                if value is None:
+                    self.store.heartbeat(self.stage, self.scope, self.session, timestamp=self.clock())
+                else:
+                    from booksys_core.diagnostics import REASONS
+                    state = value['state']
+                    operation = {'working': 'started', 'waiting': 'waiting', 'sleeping': 'completed',
+                                 'stopped': 'completed', 'blocked': 'blocked', 'unknown': 'degraded'}[state]
+                    reason = value.get('reason', '')
+                    reason = reason if reason in REASONS else 'none' if not reason else 'unknown'
+                    self.store.report(self.stage, self.scope, self.session, state=state,
+                        operation=operation, reason=reason, timestamp=self.clock(),
+                        title=value.get('title', ''), item_ref=value.get('item', ''),
+                        progressed=value.get('progressed', False), next_attempt=value.get('next_attempt'),
+                        process_start=Path('/proc/self/stat').read_text().split()[21],
+                        process_id=os.getpid(), session_started=self.started,operation_label=value.get('operation',''))
+                return
+            raise ValueError('Activity PostgreSQL authority unavailable')
         except Exception:
-            pass  # Observability cannot stop work or expose source exceptions.
+            self.dropped = min(self.dropped + 1, 2**31 - 1)
+            from booksys_core.diagnostics import emit
+            emit(service='collector' if self.scope == 'collector' else 'library', stage=self.stage, code='degraded',
+                 reason='diagnostic_unavailable', dropped_count=self.dropped)
 
     def report(self, state: str, operation: str, *, item: str = '', title: str = '',
                reason: str = '', next_attempt: float | None = None, progressed: bool = False) -> None:
@@ -160,3 +190,9 @@ def bind(root: Path, *stages: str) -> list[threading.Event]:
 def report(stage: str, state: str, operation: str, **values: Any) -> None:
     if stage in _active:
         _active[stage].report(state, operation, **values)
+
+
+def degradation() -> int:
+    """Bounded in-process observation losses, independent of the stderr sink."""
+    return sum(value.dropped + (value.store.dropped if value.store is not None else 0)
+               for value in _active.values())

@@ -27,7 +27,7 @@ class AcceptanceTests(unittest.TestCase):
             for phase in ('intent', 'after_substitution', 'published', 'committed'):
                 with self.subTest(kind=kind, phase=phase), tempfile.TemporaryDirectory() as folder:
                     root = Path(folder)
-                    store, reception, original, asset = setup_library(root)
+                    store, reception, original, asset = setup_library(root,self)
                     before = inventory(reception)
                     publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
                     initial = publisher.publish(asset)
@@ -59,7 +59,7 @@ class AcceptanceTests(unittest.TestCase):
         for phase in ('intent', 'transforming', 'transformed', 'copying', 'prepared', 'verified', 'after_substitution', 'published', 'committed'):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
-                store, reception, original, asset = setup_library(root)
+                store, reception, original, asset = setup_library(root,self)
                 before = inventory(reception)
                 def run():
                     def crash(point, operation):
@@ -80,7 +80,7 @@ class AcceptanceTests(unittest.TestCase):
     def test_slow_provider_does_not_block_real_collector_cycle_or_metadata_lock(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             before = inventory(reception)
             entered, release = threading.Event(), threading.Event()
             def slow(url):
@@ -109,17 +109,19 @@ class AcceptanceTests(unittest.TestCase):
             release.set()
             thread.join(30 if os.environ.get('BOOKSYS_READER_IMAGE') else 5)
             self.assertFalse(thread.is_alive())
-            self.assertEqual(errors, ['Stale catalogue revision'])
+            # An unrelated no-op catalogue commit must not invalidate this
+            # prepared asset result. Relevant changes remain covered separately.
+            self.assertEqual(errors, [])
             self.assertEqual(inventory(reception), before)
 
     def test_capacity_envelope_and_one_active_copy(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             with self.assertRaisesRegex(LibraryError, 'not qualified'):
                 Capacity(reserve=20 * 1024**3, external_active=lambda: True).check(root, 1)
             free = [20 * 1024**3 + 128 * 1024**2]
-            capacity = Capacity(external_active=lambda: True, max_external_bps=64 * 1024**2,
+            capacity = Capacity(reserve=20 * 1024**3, external_active=lambda: True, max_external_bps=64 * 1024**2,
                                 qualified=True, max_interval=1, free=lambda _: free[0])
             capacity.check(root, 1024**2)
             free[0] -= 80 * 1024**2
@@ -130,20 +132,31 @@ class AcceptanceTests(unittest.TestCase):
             def pause(point, operation):
                 if point == 'copying':
                     entered.set()
-                    release.wait(3)
+                    release.wait()  # Main always releases in finally.
             publisher = Publisher(store, reception, root / 'library', isolated=True,
                                   capacity=Capacity(reserve=0), fault=pause)
-            thread = threading.Thread(target=lambda: publisher.publish(asset))
+            errors=[]
+            def publish():
+                try:
+                    publisher.publish(asset)
+                except Exception as exc:
+                    errors.append(exc)
+            # PostgreSQL acquisition has a 10 s budget. The old 2 s event wait
+            # tested scheduling speed and could release before the copy started.
+            source_bytes=original.read_bytes()
+            thread = threading.Thread(target=publish)
             thread.start()
             try:
-                self.assertTrue(entered.wait(30 if os.environ.get('BOOKSYS_READER_IMAGE') else 2))
+                self.assertTrue(entered.wait(10),errors)
                 with self.assertRaisesRegex(LibraryError, 'active'):
                     Publisher(store, reception, root / 'library', isolated=True,
                               capacity=Capacity(reserve=0)).publish(asset)
             finally:
                 release.set()
-                thread.join(30 if os.environ.get('BOOKSYS_READER_IMAGE') else 5)
+                thread.join(10)
             self.assertFalse(thread.is_alive())
+            self.assertEqual(errors,[])
+            self.assertEqual(original.read_bytes(),source_bytes)
 
     def test_manual_override_survives_reenrichment_and_failure_is_not_safe(self):
         asset = {'overrides': {'genres': ['Adventure']}, 'assertions': []}

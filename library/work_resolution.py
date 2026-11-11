@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from library.catalog import LibraryError, lock
+from library.primitives import LibraryError, lock
 from library.review import decide
 
 
@@ -16,12 +16,13 @@ def confirm_work(service: Any, value: dict[str, Any]) -> dict[str, Any]:
 def _confirm_work(service: Any, value: dict[str, Any]) -> dict[str, Any]:
     if set(value) != {'asset', 'case', 'version', 'request_id', 'work', 'proof', 'reason'}:
         raise LibraryError('Invalid work confirmation fields')
-    state = service.state()
+    state = service.state(value['asset'])
     asset = state['assets'].get(value['asset'], {})
     if asset.get('status') != 'validated' or asset.get('identity') or asset.get('resolution'):
         raise LibraryError('Work confirmation requires a validated file without an edition decision')
     from library.review import cases_for
-    case = cases_for(state).get(value['case'])
+    backend = service.store.backend()
+    case = backend.case(value['asset']) if backend is not None else cases_for(state).get(value['case'])
     if not case or case.get('asset') != value['asset']:
         raise LibraryError('Work confirmation case does not belong to this asset')
     if not isinstance(value['reason'], str) or not value['reason'].strip() or len(value['reason']) > 4000:

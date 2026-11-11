@@ -39,6 +39,57 @@ def present(value: Any) -> bool:
     return value is not None and value != '' and value != [] and value != {}
 
 
+def accepted_work(asset: dict[str, Any], work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any] | None:
+    """Read one accepted work without rewriting compatible legacy records.
+
+    A retained exact-edition identity owns its work. Automatic work results are
+    proposals beside that identity, not another accepted work. Publication state
+    is not bibliographic metadata. Contested ownership remains unaccepted.
+    """
+    if asset.get('contested'):
+        return None
+    if asset.get('identity'):
+        return {**work, **{field: value for field, value in edition.items() if field != 'publication'}}
+    result = asset.get('work_result', {})
+    if result.get('status') == 'identified':
+        return {**result['work'], 'field_conflicts': result.get('field_conflicts', {})}
+    return None
+
+
+def proposal_conflicts(asset: dict[str, Any], work: dict[str, Any]) -> list[str]:
+    """Keep proposal disagreements visible without changing confirmed ownership."""
+    result = asset.get('work_result', {})
+    if not asset.get('identity') or result.get('status') != 'identified':
+        return []
+    proposed = result.get('work', {})
+    return [field for field in IDENTITY_FIELDS if present(work.get(field)) and present(proposed.get(field))
+            and normalized(work[field], field) != normalized(proposed[field], field)]
+
+
+def merge_work_decision(result: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    """Confirm supplied work fields without replacing fresh source observations.
+
+    Empty work-confirmation fields are unknown, not field overrides. Explicit
+    overrides remain in the separate canonical override action and asset map.
+    """
+    merged = {**deepcopy(decision), **deepcopy(result)}
+    for field in ('status', 'edition_status', 'reason', 'decision'):
+        if field in decision:
+            merged[field] = deepcopy(decision[field])
+    source_work, confirmed = result.get('work', {}), decision.get('work', {})
+    agrees = not any(present(source_work.get(field)) and present(confirmed.get(field))
+                     and normalized(source_work[field], field) != normalized(confirmed[field], field)
+                     for field in IDENTITY_FIELDS)
+    # Keep contradictory source assertions in candidates/evidence, but do not
+    # attach their metadata to the operator's different accepted work.
+    merged['work'] = {**deepcopy(source_work if agrees else {}),
+                      **{field: deepcopy(value) for field, value in decision.get('work', {}).items()
+                         if present(value)}}
+    merged['field_conflicts'] = {**deepcopy(decision.get('field_conflicts', {})),
+                                 **deepcopy(result.get('field_conflicts', {}))}
+    return merged
+
+
 def informative(value: Any) -> bool:
     if not present(value):
         return False
@@ -60,6 +111,29 @@ def asset_assertions(evidence: dict[str, Any]) -> list[dict[str, Any]]:
         if present(evidence.get(field)) and (evidence.get('asset_bound') is True or provenance.get('scope') == 'asset'):
             assertions.append({**deepcopy(provenance), 'field': field, 'value': evidence[field], 'scope': 'asset'})
     return assertions
+
+
+def creator_names(candidate: dict[str, Any]) -> dict[str, set[str]]:
+    """Compare explicit primary roles; missing credits are not disagreements."""
+    names: dict[str, set[str]] = {'writer': set(), 'penciller': set()}
+    contributors = candidate.get('contributors')
+    if isinstance(contributors, dict):
+        for role in names:
+            values = contributors.get(role, [])
+            values = values if isinstance(values, list) else [values]
+            names[role].update(normalized(value) for value in values if present(value))
+    elif isinstance(contributors, list):
+        for person in contributors:
+            if not isinstance(person, dict) or not present(person.get('name')):
+                continue
+            role = normalized(person.get('role', ''))
+            for target, aliases in (('writer', ('scenario', 'writer', 'author')),
+                                    ('penciller', ('dessin', 'penciller'))):
+                if any(alias in role.split() for alias in aliases):
+                    names[target].add(normalized(person['name']))
+    if not names['writer'] and present(candidate.get('author')):
+        names['writer'].add(normalized(candidate['author']))
+    return names
 
 
 def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
@@ -113,6 +187,19 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
                                                for c in matched if present(c.get(field))]
     if result['field_conflicts']:
         result['reason'] = 'Concordant references describe different works'
+        return result
+    # A reliable shared title is sufficient until positive creator evidence
+    # contradicts it. Provider IDs alone neither prove nor disprove sameness.
+    profiles = [(candidate, creator_names(candidate)) for candidate in matched]
+    for role, field in (('writer', 'author'), ('penciller', 'contributors')):
+        known = [(candidate, names[role]) for candidate, names in profiles if names[role]]
+        if len(known) > 1 and not set.intersection(*(names for _, names in known)):
+            result['field_conflicts'][field] = [
+                {key: deepcopy(candidate.get(key)) for key in
+                 ('author', 'contributors', 'source', 'url', 'work_ref', 'edition_ref')}
+                for candidate, _ in known]
+    if result['field_conflicts']:
+        result['reason'] = 'Concordant references have conflicting work creators'
         return result
     work: dict[str, Any] = {}
     for field in WORK_FIELDS:

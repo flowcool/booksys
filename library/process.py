@@ -6,14 +6,19 @@ import selectors
 import signal
 import subprocess
 import time
-from typing import Any
+from typing import Any, Callable
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 
 def bounded_run(command: list[str], *, input: bytes = b'', timeout: float,
                 stdout_limit: int = 1024**2, stderr_limit: int = 65536,
-                env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
+                env: dict[str, str] | None = None,
+                check: Callable[[], None] | None = None) -> subprocess.CompletedProcess[bytes]:
+    from library.decoder_ownership import current_decoder
+    owner = current_decoder.get()
+    if owner is not None:
+        command = owner.prepare(command)
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, env=env, start_new_session=True)
     output: dict[str, bytearray] = {'stdout': bytearray(), 'stderr': bytearray()}
@@ -32,6 +37,8 @@ def bounded_run(command: list[str], *, input: bytes = b'', timeout: float,
             else:
                 process.stdin.close()
             while selector.get_map():
+                if check is not None:
+                    check()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)

@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 BASE = 'https://www.bedetheque.com'
 PARSER_VERSION = 'cbzforge-67823315-booksys-adapter-1'

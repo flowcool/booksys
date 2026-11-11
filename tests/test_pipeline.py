@@ -7,10 +7,23 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import yaml
 
 from booksys import CollectionError, DEFAULT_CATEGORY
-from pipeline import Pyload, run_once, run_backfill, save
+from pipeline import Pyload, run_once, run_backfill
+from postgres_fixture import create_store
+from library.primitives import empty
+from library.operational_state import CollectorState
+
+def seed_monitor(directory,value):
+    state=CollectorState(directory)
+    for source,record in value.get("categories",{}).items():state.category(source,record)
+    for source,record in value.get("submissions",{}).items():state.submission(source,record)
+
+def seed_backfill(directory,value):
+    state=CollectorState(directory)
+    state.start_backfill(value)
+    for url,sources in value.get("pages",{}).items():
+        state.backfill_page(value,url,{source:value["items"][source] for source in sources})
 
 FIRST = "https://www7.bookys-ebooks.com/bandes-dessinees/10-old"
 NEW = "https://www7.bookys-ebooks.com/bandes-dessinees/11-new"
@@ -59,13 +72,14 @@ class PipelineTests(unittest.TestCase):
             self.fail("Confirmed item must not be fetched again")
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            save(directory / "monitor.yaml", {"version": 1, "categories": {},
+            create_store(self,directory,empty())
+            seed_monitor(directory, {"version": 1, "categories": {},
                 "submissions": {FIRST: {"status": "queued", "package_id": 42}}})
-            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 1, "next_page": None,
+            seed_backfill(directory, {"version": 1, "pages_requested": 1, "next_page": None,
                 "pages": {DEFAULT_CATEGORY: [FIRST]}, "items": {FIRST: "Old"}, "status": "collecting", "submitted": 0})
             result = run_backfill(directory, fetch, downloader, minimum_free=0)
             self.assertEqual(result["queued"], 1)
-            self.assertEqual(yaml.safe_load((directory / "backfill.yaml").read_text())["submitted"], 1)
+            self.assertEqual(CollectorState(directory).backfill()["submitted"], 1)
             self.assertEqual(downloader.creates, 0)
 
     def test_backfill_resumes_saved_pages_and_does_not_resubmit_first_item(self):
@@ -85,8 +99,9 @@ class PipelineTests(unittest.TestCase):
             return '<h1>Item</h1><a href="/item/dl/1">Host</a>'
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            save(directory / "monitor.yaml", {"version": 1, "categories": {}, "submissions": {}})
-            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 2, "next_page": DEFAULT_CATEGORY,
+            create_store(self,directory,empty())
+            seed_monitor(directory, {"version": 1, "categories": {}, "submissions": {}})
+            seed_backfill(directory, {"version": 1, "pages_requested": 2, "next_page": DEFAULT_CATEGORY,
                 "pages": {}, "items": {}, "status": "pending", "submitted": 0})
             with self.assertRaises(CollectionError):
                 run_backfill(directory, fetch, downloader, minimum_free=0)
@@ -109,9 +124,10 @@ class PipelineTests(unittest.TestCase):
             return '<h1>Item</h1><a href="/item/dl/1">AnyHost</a>'
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            create_store(self,directory,empty())
             monitor = {"version": 1, "categories": {DEFAULT_CATEGORY: {"after_id": 999}}, "submissions": {}}
-            save(directory / "monitor.yaml", monitor)
-            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 10, "next_page": DEFAULT_CATEGORY,
+            seed_monitor(directory, monitor)
+            seed_backfill(directory, {"version": 1, "pages_requested": 10, "next_page": DEFAULT_CATEGORY,
                 "pages": {}, "items": {}, "status": "pending", "submitted": 0})
             result = run_backfill(directory, fetch, downloader, minimum_free=0, max_items=3)
             self.assertEqual(result, {"pages": 10, "items": 10, "queued": 3, "pending": 1})
@@ -124,7 +140,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(len(catalogue_calls), 10)
             self.assertEqual(downloader.creates, 10)
             self.assertTrue(all(p["dest"] == 1 and len(p["links"]) == 2 for p in downloader.packages))
-            self.assertEqual(yaml.safe_load((directory / "monitor.yaml").read_text())["categories"], monitor["categories"])
+            self.assertEqual(CollectorState(directory).monitor()["categories"], monitor["categories"])
             self.assertIsNone(run_backfill(directory, fetch, downloader, minimum_free=0))
             self.assertEqual(downloader.creates, 10)
 
@@ -146,16 +162,17 @@ class PipelineTests(unittest.TestCase):
             return '<h1>Item</h1><a href="/item/dl/1">Host</a>'
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            create_store(self,directory,empty())
             monitor = {"version": 1, "categories": {DEFAULT_CATEGORY: {"after_id": 9999}},
                        "submissions": {FIRST: {"status": "queued", "package_id": 100}}}
-            save(directory / "monitor.yaml", monitor)
-            save(directory / "backfill.yaml", {"version": 1, "pages_requested": 50, "next_page": DEFAULT_CATEGORY,
+            seed_monitor(directory, monitor)
+            seed_backfill(directory, {"version": 1, "pages_requested": 50, "next_page": DEFAULT_CATEGORY,
                  "pages": {}, "items": {}, "status": "pending", "submitted": 0})
             result = run_backfill(directory, fetch, downloader, minimum_free=0)
             self.assertEqual(result, {"pages": 50, "items": 51, "queued": 51})
             self.assertEqual(len(catalogue_calls), 50)
             self.assertEqual(downloader.creates, 50)
-            current = yaml.safe_load((directory / "monitor.yaml").read_text())
+            current = CollectorState(directory).monitor()
             self.assertEqual(current['categories'], monitor['categories'])
             self.assertEqual(current['submissions'][FIRST], monitor['submissions'][FIRST])
             self.assertIsNone(run_backfill(directory, fetch, downloader, minimum_free=0))
@@ -197,6 +214,7 @@ class PipelineTests(unittest.TestCase):
         downloader = MemoryDownloader()
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            create_store(self,directory,empty())
             result = run_once(directory, fetch, downloader, minimum_free=0)
             self.assertEqual(result["after_id"], 10)
             self.assertEqual(downloader.creates, 0)
@@ -213,12 +231,13 @@ class PipelineTests(unittest.TestCase):
         downloader = MemoryDownloader()
         record = {"title": "New", "downloads": {"x": {"hoster": "fixture", "urls": ["https://host.example/a"]}}}
         with tempfile.TemporaryDirectory() as temporary:
+            create_store(self,Path(temporary),empty())
             path = Path(temporary) / "monitor.yaml"
             journal = {"submissions": {}}
             downloader.lose_response = True
             with self.assertRaises(OSError):
                 downloader.submit(NEW, record, journal, path)
-            recovered = yaml.safe_load(path.read_text())
+            recovered = CollectorState(Path(temporary)).monitor()
             downloader.submit(NEW, record, recovered, path)
             self.assertEqual(downloader.creates, 1)
             self.assertEqual(recovered["submissions"][NEW]["status"], "queued")
@@ -228,6 +247,7 @@ class PipelineTests(unittest.TestCase):
         downloader.modify_links = True
         record = {"title": "New", "downloads": {"x": {"hoster": "fixture", "urls": ["https://host.example/a"]}}}
         with tempfile.TemporaryDirectory() as temporary:
+            create_store(self,Path(temporary),empty())
             with self.assertRaises(CollectionError):
                 downloader.submit(NEW, record, {"submissions": {}}, Path(temporary) / "journal.yaml")
             self.assertEqual(downloader.packages[0]["dest"], 0)
