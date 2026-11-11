@@ -68,9 +68,16 @@ else
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
     "$image_id" --help > "$reports/cli.log" 2>&1
-  docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-    --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
-    --entrypoint "$interpreter" "$image_id" - < "tests/probes/$image.py" > "$reports/probe.log" 2>&1
+  if [[ "$image" == worker ]]; then
+    docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+      --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+      --entrypoint "$interpreter" "$image_id" -c "$(cat tests/probes/worker.py)" \
+      < tests/test_provider_spacing.py > "$reports/probe.log" 2>&1
+  else
+    docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+      --pids-limit 128 --memory 512m --cpus 1 --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+      --entrypoint "$interpreter" "$image_id" - < "tests/probes/$image.py" > "$reports/probe.log" 2>&1
+  fi
 fi
 trivy --version > "$reports/trivy-version.txt"
 # Trivy accepts OCI layout directories, but not OCI tarballs. This archive is
