@@ -139,7 +139,7 @@ elif args[0] == "stop":
         with tempfile.TemporaryDirectory() as directory:
             result, calls = self.readiness_failure(directory)
             self.assertEqual(result.returncode, 42, result.stderr)
-            self.assertNotIn("--rm", next(c for c in calls if c[0] == "run"))
+            self.assertNotIn("--rm", next(c for c in calls if c[0] == "run" and "-d" in c))
             self.assertLess(calls.index(["logs", "owned-readiness-probe"]),
                             calls.index(["stop", "--time", "10", "owned-readiness-probe"]))
             self.assertEqual(calls[-1], ["rm", "owned-readiness-probe"])
