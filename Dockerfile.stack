@@ -5,7 +5,7 @@ COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 # Compile only in the disposable dependency stage against distro libpq.
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev=17.11-0+deb13u1 \
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libpq-dev=17.11-0+deb13u1 \
     && rm -rf /var/lib/apt/lists/* \
     && test -f /opt/python/include/python3.14/Python.h \
     && pip install --no-cache-dir uv==0.9.9 \

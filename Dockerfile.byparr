@@ -11,5 +11,6 @@ RUN apt-get update \
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/booksys/
 COPY third_party/ /usr/share/doc/booksys/third_party/
 USER 1000
+COPY booksys_core/ /app/booksys_core/
 COPY ops/byparr/session_api.py /app/session_api.py
 ENTRYPOINT ["tini", "-s", "--", "/app/.venv/bin/python", "/app/session_api.py"]
