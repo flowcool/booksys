@@ -1,0 +1,15 @@
+{
+  "images": {
+    "worker": {"inventory": [], "components": [], "reviewed_non_package_components": []},
+    "library": {"inventory": [], "components": [], "reviewed_non_package_components": []},
+    "byparr": {"inventory": [], "components": [], "reviewed_non_package_components": []}
+  },
+  "sources": {
+    "byparr-b041dd2998110fc61789ae65e2506bd5b79edba5": {
+      "url": "https://codeload.github.com/thephaseless/byparr/tar.gz/b041dd2998110fc61789ae65e2506bd5b79edba5",
+      "sha256": "3b93b11fc7a3b85d43f59384cda3d95c2e6e7b3d275aa31840c86ddc9da2603f",
+      "license": "GPL-3.0-only",
+      "revision": "b041dd2998110fc61789ae65e2506bd5b79edba5"
+    }
+  }
+}

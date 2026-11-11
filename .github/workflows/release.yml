@@ -1,0 +1,199 @@
+name: Publish verified release set
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-images
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      revision: ${{ steps.release.outputs.revision }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: release
+        name: Require the exact published release on protected main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash ops/release_preflight.sh "$RUNNER_TEMP/preflight"
+          python3 - "$RUNNER_TEMP/preflight/release.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json,sys
+          release=json.load(open(sys.argv[1]))
+          print('revision='+release['revision'])
+          print('version='+release['version'])
+          PY
+      - name: Require the reviewed corresponding-source lock
+        run: test -s release/sources.lock.json
+  images:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {image: worker, dockerfile: Dockerfile}
+          - {image: library, dockerfile: Dockerfile.library}
+          - {image: byparr, dockerfile: Dockerfile.byparr}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.revision }}
+          persist-credentials: false
+      - run: |
+          bash ops/install_validation_tools.sh "$RUNNER_TEMP/validation-tools"
+          echo "$RUNNER_TEMP/validation-tools" >> "$GITHUB_PATH"
+      - uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4
+        with:
+          version: v29.9.0
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          version: v0.38.0
+          cache-binary: false
+          driver-opts: image=moby/buildkit@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      - run: mkdir -p "$RUNNER_TEMP/candidate"
+      - name: Build once with retained SBOM and maximum provenance
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: false
+          pull: true
+          outputs: type=oci,dest=${{ runner.temp }}/candidate/image.oci.tar
+          provenance: mode=max,version=v1
+          attests: type=sbom,generator=docker/buildkit-syft-scanner@sha256:873a7458c3c8ac8e32c7b796c10e1600b07b963d2aa000a72a2d97aaaa2d6315
+          labels: |
+            org.opencontainers.image.source=https://github.com/flowcool/booksys
+            org.opencontainers.image.revision=${{ needs.preflight.outputs.revision }}
+            org.opencontainers.image.version=${{ needs.preflight.outputs.version }}
+      - name: Test and scan the exact artifact; retain its component inventory and notices
+        env:
+          IMAGE: ${{ matrix.image }}
+          REVISION: ${{ needs.preflight.outputs.revision }}
+        run: |
+          bash ops/validate_image.sh "$IMAGE" "$RUNNER_TEMP/candidate/image.oci.tar" "$REVISION" "$RUNNER_TEMP/candidate"
+          manifest=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/candidate/identity.json"))["manifest_digest"])')
+          docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 0 --entrypoint /app/.venv/bin/python "$manifest" - < ops/release_inventory.py > "$RUNNER_TEMP/candidate/inventory.json"
+          docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 0 --entrypoint /app/.venv/bin/python "$manifest" - < ops/collect_release_notices.py > "$RUNNER_TEMP/candidate/notices.tar"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: release-${{ matrix.image }}
+          path: |
+            ${{ runner.temp }}/candidate/image.oci.tar
+            ${{ runner.temp }}/candidate/*.json
+            ${{ runner.temp }}/candidate/*.log
+            ${{ runner.temp }}/candidate/*.txt
+            ${{ runner.temp }}/candidate/notices.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+  qualify:
+    needs: [preflight, images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/download
+      - name: Verify all three exact artifacts and assemble corresponding source before any write
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash ops/release_preflight.sh "$RUNNER_TEMP/preflight"
+          mkdir "$RUNNER_TEMP/artifacts"
+          for image in worker library byparr; do mv "$RUNNER_TEMP/download/release-$image" "$RUNNER_TEMP/artifacts/$image"; done
+          python3 ops/release_sources.py assemble "$RUNNER_TEMP/preflight/release.json" "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/sources" release/sources.lock.json > "$RUNNER_TEMP/source-bundle.json"
+          python3 ops/release_sources.py prepare "$RUNNER_TEMP/preflight/release.json" "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/sources" > "$RUNNER_TEMP/plan.json"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: qualified-release
+          path: |
+            ${{ runner.temp }}/artifacts/
+            ${{ runner.temp }}/sources/
+            ${{ runner.temp }}/corresponding-source.tar.gz
+            ${{ runner.temp }}/plan.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    needs: [preflight, qualify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write # Only corresponding-source release assets.
+      packages: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: qualified-release
+          path: ${{ runner.temp }}/qualified
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4; SHA-verified cosign.
+        with:
+          cosign-release: v3.1.4
+      - name: Install the pinned OCI copier
+        run: |
+          bash ops/install_release_tools.sh "$RUNNER_TEMP/release-tools"
+          echo "$RUNNER_TEMP/release-tools" >> "$GITHUB_PATH"
+          echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/docker/config.json" >> "$GITHUB_ENV"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
+      - name: Revalidate control plane and qualified artifact paths
+        run: |
+          bash ops/release_preflight.sh "$RUNNER_TEMP/preflight"
+          python3 ops/release_sources.py relocate "$RUNNER_TEMP/qualified" "$RUNNER_TEMP/preflight/release.json" > "$RUNNER_TEMP/plan.json"
+      - name: Authenticate with the job-scoped GitHub token
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          mkdir -p "$DOCKER_CONFIG"
+          printf '%s' "$GH_TOKEN" | skopeo login --username "$REGISTRY_USER" --password-stdin ghcr.io
+      - name: Preflight the complete set, publish without rebuild, sign and read back
+        env:
+          RECOVERY_RUN: ${{ vars.RELEASE_RECOVERY_RUN_ID }}
+          RECOVERY_REVISION: ${{ vars.RELEASE_RECOVERY_REVISION }}
+        run: |
+          recovery=()
+          if [[ "$RECOVERY_RUN" == "$GITHUB_RUN_ID" && "$RECOVERY_REVISION" == "$GITHUB_SHA" && "$GITHUB_RUN_ATTEMPT" -gt 1 ]]; then
+            recovery=(--resume)
+          fi
+          python3 ops/release_images.py publish "$RUNNER_TEMP/plan.json" "$RUNNER_TEMP/release-journal.json" "${recovery[@]}"
+      - name: Retain the operation journal and readback even after uncertain writes
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-publication-proof
+          path: |
+            ${{ runner.temp }}/release-journal.json
+            ${{ runner.temp }}/plan.json
+            ${{ runner.temp }}/qualified/artifacts/*/*.readback.oci.tar
+          compression-level: 0
+          if-no-files-found: warn
+          retention-days: 90

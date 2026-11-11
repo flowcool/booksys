@@ -21,3 +21,8 @@ not establish reader retention or runtime readiness for an installation.
 
 Image licenses differ from the Booksys MIT source license. Read the
 [third-party notices](../THIRD_PARTY_NOTICES.md) before redistribution.
+
+## Release verification
+
+See [releases and recovery](releases.md) for exact-artifact publication,
+corresponding-source assets, signature identity and recovery after uncertain writes.
