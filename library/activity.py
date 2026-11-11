@@ -17,6 +17,7 @@ DOWNLOAD_STATUS = {0: 'Finished', 1: 'Offline', 2: 'Online', 3: 'Queued', 4: 'Sk
     5: 'Hoster wait', 6: 'Temporary failure', 7: 'Starting', 8: 'Failed', 9: 'Aborted',
     10: 'Decrypting', 11: 'Custom', 12: 'Downloading', 13: 'Processing', 14: 'Unknown'}
 LOCAL_REASONS = ('Intake budget deferred', 'Transfer is not confirmed finished',
+    'Skipped mirror link', 'Offline mirror link', 'Failed mirror link',
     'Finished origin is missing or renamed', 'Ambiguous canonical origin references',
     'Unsupported or ambiguous suffix', 'Multipart representation',
     'Multiple image groups: possible multi-work archive', 'Reader policy differs from controller')
@@ -25,6 +26,14 @@ ITEM_FIELDS = ('id', 'title', 'state', 'reason', 'operation', 'observed_at', 'si
                'waiting_seconds', 'next_attempt', 'fiche')
 CURRENT_FIELDS = ('queue_observed_at', 'scope', 'state', 'operation', 'item', 'title', 'reason', 'observed_at', 'since',
                   'last_progress_at', 'next_attempt')
+
+
+def terminal_transfer(status: Any) -> tuple[str, str] | None:
+    """Pinned pyLoad terminal states affect presentation, never file admission."""
+    if type(status) is not int:
+        return None
+    return {4: ('stopped', 'Skipped mirror link'), 1: ('blocked', 'Offline mirror link'),
+            8: ('blocked', 'Failed mirror link')}.get(status)
 
 
 def number(value: Any) -> float | None:
@@ -290,8 +299,9 @@ class Observer:
             label = title(captured.get(origin.get('source'), {}), Path(origin.get('path', 'Unknown file')).name)
             base = {'id': oid, 'title': label, 'fiche': '/fiche/' + oid, 'observed_at': stamp}
             if origin.get('availability') not in ('validated', 'bundle', 'multipart_member'):
-                local.append({**base, 'state': 'blocked' if origin.get('availability') == 'rejected' else 'waiting',
-                    'reason': origin['reason'] if origin.get('reason') in LOCAL_REASONS else
+                terminal = terminal_transfer(origin.get('transfer_status')) if origin.get('availability') == 'pending' else None
+                local.append({**base, 'state': terminal[0] if terminal else 'blocked' if origin.get('availability') == 'rejected' else 'waiting',
+                    'reason': terminal[1] if terminal else origin['reason'] if origin.get('reason') in LOCAL_REASONS else
                         'Missing multipart input' if str(origin.get('reason', '')).startswith(('Awaiting part', 'Missing part')) else
                         'Local validation rejected' if origin.get('availability') == 'rejected' else 'Waiting for complete validated inputs',
                     'next_attempt': origin.get('intake_next_attempt') or origin.get('bundle_next_attempt')})
@@ -304,7 +314,10 @@ class Observer:
                     'next_attempt': automation.get('next_attempt')})
         stages['local']['queue_observed_at'] = stamp if state else None
         stages['identity']['queue_observed_at'] = stamp if state else None
-        stages['local'].update(counts={'waiting files': sum(v['state'] == 'waiting' for v in local), 'blocked files': sum(v['state'] == 'blocked' for v in local), 'validated files': sum(o.get('availability') == 'validated' for o in origins.values())}, items=local[:2000])
+        stages['local'].update(counts={'waiting files': sum(v['state'] == 'waiting' for v in local), 'blocked files': sum(v['state'] == 'blocked' for v in local),
+            'skipped mirror files': sum(v['reason'] == 'Skipped mirror link' for v in local),
+            'unavailable mirror files': sum(v['reason'] in ('Offline mirror link', 'Failed mirror link') for v in local),
+            'validated files': sum(o.get('availability') == 'validated' for o in origins.values())}, items=local[:2000])
         unique = {v['id']: v for v in identity}
         stages['identity'].update(counts={'assets': len(assets), 'waiting assets': sum(v['state'] == 'waiting' for v in unique.values()),
             'resulting copies': sum(bool(a.get('admission')) for a in assets.values())}, items=list(unique.values())[:2000])

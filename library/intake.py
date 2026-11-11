@@ -132,7 +132,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                 path = reception_path(root, item.get('input_folder', package['folder']), name)
                 # Exact pinned pyLoad status: core/datatypes/pyfile.py: finished = 0.
                 if type(item.get('status')) is not int or item['status'] != 0:
-                    origin['reason'] = 'Transfer is not confirmed finished'
+                    from library.activity import terminal_transfer
+                    terminal = terminal_transfer(item.get('status'))
+                    origin['reason'] = terminal[1] if terminal else 'Transfer is not confirmed finished'
                 elif not path.exists():
                     origin.update(availability='missing', reason='Finished origin is missing or renamed')
                 else:
