@@ -1,0 +1,109 @@
+name: Verify public prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact qualified v0.1.0 source revision
+        required: true
+        type: string
+      manifest_sha256:
+        description: Qualified manifest.json digest including sha256 prefix
+        required: true
+        type: string
+      source_sha256:
+        description: Qualified corresponding-source.tar.gz digest including sha256 prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-prerelease-verification
+  cancel-in-progress: false
+
+jobs:
+  sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download and hash the exact source assets anonymously
+        env:
+          REVISION: ${{ inputs.revision }}
+          MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+          SOURCE_SHA256: ${{ inputs.source_sha256 }}
+        run: |
+          python3 ops/verify_public_release.py --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256" --source-sha256 "$SOURCE_SHA256" --output "$RUNNER_TEMP/proof"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: anonymous-source-proof
+          path: ${{ runner.temp }}/proof/
+          if-no-files-found: error
+          retention-days: 90
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [worker, library, byparr]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4
+        with:
+          version: v29.9.0
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4
+        with:
+          cosign-release: v3.1.4
+      - name: Install existing pinned verification tools and empty registry credentials
+        run: |
+          bash ops/install_validation_tools.sh "$RUNNER_TEMP/validation-tools"
+          bash ops/install_release_tools.sh "$RUNNER_TEMP/release-tools"
+          echo "$RUNNER_TEMP/validation-tools" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/release-tools" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/anonymous-docker"
+          printf '{"auths":{}}\n' > "$RUNNER_TEMP/anonymous-docker/config.json"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/anonymous-docker" >> "$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/anonymous-docker/config.json" >> "$GITHUB_ENV"
+      - name: Pull the signed exact digest anonymously and run existing synthetic probes
+        env:
+          IMAGE: ${{ matrix.image }}
+          REVISION: ${{ inputs.revision }}
+          MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+          SOURCE_SHA256: ${{ inputs.source_sha256 }}
+        run: |
+          python3 ops/verify_public_release.py --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256" --source-sha256 "$SOURCE_SHA256" --manifest-only --output "$RUNNER_TEMP/proof"
+          digest=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/proof/manifest.json"))["images"][os.environ["IMAGE"]]["index_digest"])')
+          target="ghcr.io/flowcool/booksys-$IMAGE@$digest"
+          cosign verify --certificate-identity 'https://github.com/flowcool/booksys/.github/workflows/release.yml@refs/tags/v0.1.0' --certificate-oidc-issuer https://token.actions.githubusercontent.com "$target" > "$RUNNER_TEMP/proof/signatures.json"
+          skopeo copy --all --preserve-digests "docker://$target" "oci-archive:$RUNNER_TEMP/image.oci.tar"
+          bash ops/validate_image.sh "$IMAGE" "$RUNNER_TEMP/image.oci.tar" "$REVISION" "$RUNNER_TEMP/proof"
+          python3 - <<'PY'
+          import json,os,sys
+          from pathlib import Path
+          sys.path.insert(0, 'ops')
+          from release_images import registry_manifest
+          from verify_public_release import verify_image
+          root=Path(os.environ['RUNNER_TEMP'])/'proof'
+          image=os.environ['IMAGE']
+          expected=json.loads((root/'manifest.json').read_text())['images'][image]['index_digest']
+          actual=verify_image(Path(os.environ['RUNNER_TEMP'])/'image.oci.tar',os.environ['REVISION'],expected)
+          if registry_manifest('ghcr.io/flowcool/booksys-'+image+':latest') is not None:
+              raise SystemExit('Unexpected latest tag')
+          (root/'anonymous-image-proof.json').write_text(json.dumps({'authenticated':False,'image':image,'identity':actual,'latest':'absent'},indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: anonymous-${{ matrix.image }}-proof
+          path: ${{ runner.temp }}/proof/
+          if-no-files-found: error
+          retention-days: 90
