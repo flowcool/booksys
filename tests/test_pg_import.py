@@ -90,9 +90,9 @@ class ImportTests(unittest.TestCase):
             import_snapshot(manifest,root/'target',database=database)
             report=compare(manifest,root/'target',database=database)
             self.assertEqual(report['status'],'equal')
-            secret=root/'target'/'test.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
+            dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
             config=root/'target'/'postgresql.json'
-            config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+            config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
             select(manifest,root/'target',database=database)
             catalog=Catalog(root/'target')
             self.assertEqual(catalog.get('works','work-kept'),{'title':'Retained'})
@@ -166,8 +166,8 @@ class ImportTests(unittest.TestCase):
             self.assertEqual(result['gap_before'],1794300111.875)
             self.assertEqual(result['items'],[{**payload,'id':'d82bc854-c0c1-46ab-af48-eb91c1021cb5','at':1794311222.125,'stage':'collection'}])
             self.assertEqual(compare(manifest,root/'target',database=database)['status'],'equal')
-            target=root/'target';secret=target/'test.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
-            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+            target=root/'target';dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
             from library.pg_import import select
             collector=root/'collector-live'
             live_activity=target/'activity';live_activity.mkdir();(live_activity/'activity-authority.yaml').write_text(legacy)
@@ -208,8 +208,8 @@ class ImportTests(unittest.TestCase):
             database=self.target();manifest=prepare_manifest(source,candidate='candidate-test')
             import_snapshot(manifest,root/'target',database=database)
             target=root/'target'
-            secret=target/'test.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
-            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+            dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
             import shutil
             shutil.copytree(decisions,target/'library-decisions')
             select(manifest,target,database=database)
@@ -245,8 +245,8 @@ class ImportTests(unittest.TestCase):
             with database.connection() as db:
                 self.assertEqual(db.execute('SELECT global_revision,ledger FROM meta').fetchone(),(7,json.dumps([chain[0]['id']])))
                 self.assertEqual(db.execute('SELECT status FROM decision_reservations ORDER BY sequence').fetchall(),[('projected',),('indexed',),('reserved',)])
-            secret=target/'test.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
-            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+            dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
             shutil.copytree(decisions,target/'library-decisions');before={p.name:p.read_bytes() for p in decisions.iterdir()}
             select(manifest,target,database=database)
             catalog=Catalog(target)
@@ -305,8 +305,8 @@ class ImportTests(unittest.TestCase):
             database=self.target();manifest=prepare_manifest(source,candidate='fixture')
             import_snapshot(manifest,target,database=database)
             import_snapshot(manifest,target,database=database)
-            secret=target/'test.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
-            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+            dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
             select(manifest,target,database=database)
             owner=DecoderOwnership(target/'stage-children'/'owner.yaml')
             self.assertEqual(owner.names(),names[:2]);owner.register(names[2]);self.assertEqual(owner.names(),names)
@@ -346,8 +346,8 @@ class ImportTests(unittest.TestCase):
             database=self.target();manifest=prepare_manifest(source,candidate='fixture',origins={'library':str(target)})
             import_snapshot(manifest,target,database=database)
             self.assertEqual(compare(manifest,target,database=database)['status'],'equal')
-            secret=target/'test.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
-            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+            dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
             select(manifest,target,database=database)
             proofs=ManualProofs(database);self.assertEqual(proofs.request('request'),request);self.assertEqual(proofs.result('request'),result)
             self.assertEqual(ResolutionPreviews(database).get('preview-kept'),preview)
@@ -386,8 +386,12 @@ class ImportTests(unittest.TestCase):
             selector=target/'storage-authority.yaml';selector.write_text(legacy);selector.chmod(0o400)
             database=self.target();manifest=prepare_manifest(source,candidate='candidate-test')
             import_snapshot(manifest,target,database=database)
-            secret=target/'test.dsn';secret.write_text(database.dsn+' application_name=runtime-selector');secret.chmod(0o600)
-            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+            dsn_path=target/'test.dsn'
+            # This case deliberately uses different connection options for the same authority.
+            descriptor=os.open(dsn_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+            with os.fdopen(descriptor,'w') as stream:
+                stream.write(database.dsn+' application_name=runtime-selector')
+            config=target/'postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
             def interrupt(phase):raise InterruptedError('selection interrupted after database readiness')
             with self.assertRaises(InterruptedError):select(manifest,target,database=database,checkpoint=interrupt)
             self.assertEqual(selector.read_text(),legacy)
@@ -456,6 +460,27 @@ class ImportTests(unittest.TestCase):
             launcher.retained_write(actual,'cleanup',{**values['container'],'removed':False})
             self.assertEqual(launcher.retained_read(actual,'cleanup'),{**values['container'],'removed':False})
             self.assertEqual(yaml.safe_load((actual/'cleanup.yaml').read_text()),values['cleanup'])
+
+
+
+
+class FixtureSelectorTests(unittest.TestCase):
+    def test_selector_reuses_protected_dsn_without_copying_credentials(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from tests.import_fixture import private_selector
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            dsn_path = root / 'isolated.dsn'
+            dsn_path.write_text('synthetic fixture connection')
+            dsn_path.chmod(0o600)
+            directory = root / 'selector'
+            with patch.dict(os.environ, {'BOOKSYS_TEST_PG_DSN_FILE': str(dsn_path)}):
+                private_selector(directory, SimpleNamespace(schema='synthetic'))
+            config = json.loads((directory / 'postgresql.json').read_text())
+            self.assertEqual(config, {'schema': 'synthetic', 'dsn_file': str(dsn_path)})
+            self.assertEqual([path.name for path in directory.iterdir()], ['postgresql.json'])
+            self.assertEqual((directory / 'postgresql.json').stat().st_mode & 0o777, 0o600)
 
 
 if __name__=='__main__':

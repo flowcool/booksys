@@ -44,8 +44,8 @@ def checkpoint(phase: str) -> None:
 start=time.monotonic();import_snapshot(manifest,root/'target',database=database,checkpoint=checkpoint);import_seconds=time.monotonic()-start
 start=time.monotonic();report=compare(manifest,root/'target',database=database);compare_seconds=time.monotonic()-start
 if report['status']!='equal':raise RuntimeError('Semantic import mismatch')
-secret=root/'target/runtime.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
-config=root/'target/postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
+dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+config=root/'target/postgresql.json';config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
 select(manifest,root/'target',database=database)
 store=Store(root/'target',authority='source-test',database=database)
 collector=CollectorState(root/'collector',database=database)
