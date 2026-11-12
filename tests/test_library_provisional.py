@@ -11,7 +11,7 @@ class ProvisionalTests(unittest.TestCase):
     def test_unknown_copy_has_no_fabricated_identity_and_retry_is_idempotent(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, source, asset = setup_library(root)
+            store, reception, source, asset = setup_library(root,self)
             state = store.read()
             state['assets'][asset].pop('identity')
             state['works'].clear(); state['editions'].clear(); state['variants'].clear()
@@ -34,7 +34,7 @@ class ProvisionalTests(unittest.TestCase):
     def check_recovery(self, point):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, source, asset = setup_library(root)
+            store, reception, source, asset = setup_library(root,self)
             state=store.read(); state['assets'][asset].pop('identity'); store.save(state,expected=state['revision'])
             def crash(phase, operation):
                 if phase == point: raise RuntimeError('crash')
@@ -43,12 +43,12 @@ class ProvisionalTests(unittest.TestCase):
             writer.fault=lambda *_:None
             writer.reconcile()
             self.assertEqual(store.read()['assets'][asset]['provisional']['status'],'published')
-            self.assertEqual(len(list(writer.journals.glob('*.yaml'))),1)
+            self.assertEqual(len(writer.operations.records()),1)
 
     def test_confirmed_publication_preserves_provisional_in_recovery(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
-            store,reception,source,asset=setup_library(root)
+            store,reception,source,asset=setup_library(root,self)
             state=store.read(); identity=state['assets'][asset].pop('identity');store.save(state,expected=state['revision'])
             process_provisional(store,reception,root/'library',isolated=True,lab=False,capacity=Capacity(reserve=0))
             state=store.read();state['assets'][asset]['identity']=identity;store.save(state,expected=state['revision'])
@@ -62,7 +62,7 @@ class ProvisionalTests(unittest.TestCase):
     def test_interrupted_conversion_blocks_new_copies_and_preserves_original(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
-            store,reception,source,asset=setup_library(root)
+            store,reception,source,asset=setup_library(root,self)
             state=store.read();state['assets'][asset].pop('identity');store.save(state,expected=state['revision'])
             def crash(phase, operation):
                 if phase=='transforming':raise RuntimeError('crash')

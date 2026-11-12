@@ -68,6 +68,12 @@ class EventScopeTests(unittest.TestCase):
     def test_schedule_runs_full(self):
         self.assertEqual(set(self.run_event("schedule", {}).values()), {"true"})
 
+    def test_shared_library_module_rebuilds_application_and_reader(self):
+        (self.root / "library").mkdir()
+        (self.root / "library/catalog.py").write_text("# synthetic shared runtime module\n")
+        self.assertEqual(self.run_event("pull_request", self.pr(self.commit())),
+                         {"worker": "true", "library": "true", "byparr": "false"})
+
     def test_untrusted_sha_does_not_become_a_shell_command(self):
         self.assertEqual(set(self.run_event("pull_request", self.pr("$(touch injected)")).values()), {"true"})
         self.assertFalse((self.root / "injected").exists())

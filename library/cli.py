@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from contextlib import nullcontext
 import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from library.catalog import Catalog, LibraryError, atomic_yaml, lock
+from library.catalog import Catalog
+from library.primitives import LibraryError, atomic_yaml, lock
 from library.intake import receive
 from library.metadata import Providers, enrich
 from library.publish import Publisher, Capacity
@@ -92,13 +95,18 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> Any:
+    from library.launcher import verify_startup
+    verify_startup(args.state,audit=args.command != 'preview')
     store = Catalog(args.state)
     if args.command == 'status':
         state = store.read()
         records = store.ledger()
+        from library.operational_state import RuntimeObservation
+        try:activation=RuntimeObservation(store.backend()._database).activation(role='library')
+        except LibraryError:activation=None
         return {'schema': 1, 'revision': state['revision'], 'decisions': len(records),
                 'counts': {key: len(value) for key, value in state.items() if isinstance(value, dict)},
-                'activation': load(args.state / 'library-activation.yaml') if (args.state / 'library-activation.yaml').exists() else None}
+                'activation':activation}
     if args.command == 'replay':
         return {'status': 'replayed', 'revision': store.replay()['revision']}
     if args.command == 'report':
@@ -112,21 +120,50 @@ def run(args: argparse.Namespace) -> Any:
             raise LibraryError('Invalid decision batch')
         return decide(store, batch['requests'], author=args.author)
     if args.command == 'preview':
-        isolated_paths(args.output, args.reception)
+        if os.environ.get('BOOKSYS_READER_SOCKET'):
+            # Compose exposes this input read-only. Only the preview catalogue
+            # and derived output are new; canonical data and archives stay intact.
+            if args.reception != Path(os.environ['BOOKSYS_READER_INPUTS'])/'downloads':
+                raise LibraryError('Compose preview requires the declared read-only download namespace')
+            isolated_paths(args.output)
+            if not args.output.is_relative_to('/nas-tmp'):
+                raise LibraryError('Compose preview output requires the managed NAS work mount')
+        else:
+            isolated_paths(args.output, args.reception)
         if args.output.exists():
             raise LibraryError('Preview output must be new; no overwrite')
         args.output.mkdir(parents=True, mode=0o700)
-        preview_store = Catalog(args.output / 'state')
-        if store.path.exists():
-            preview_store.directory.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(store.path, preview_store.path)
-            if store.decisions.exists():
-                shutil.copytree(store.decisions, preview_store.decisions)
-            head = args.state / 'library-ledger-head.yaml'
-            if head.exists():
-                shutil.copy2(head, preview_store.directory / head.name)
-        receive(preview_store, args.reception, load(args.captured), load(args.submissions), load(args.queue))
-        value = report(preview_store)
+        # Preview is a detached computation. Its YAML is an export, never an authority.
+        from library.store import PreparedResult
+        from library.review import cases_for
+        from library.primitives import now
+        preview_state=store.read()
+        preview_decisions=store.backend().decisions()
+        prepared: list[PreparedResult]=[]
+        receive(store,args.reception,load(args.captured),load(args.submissions),load(args.queue),
+            prepared=prepared,media_directory=args.output/'state')
+        if store.revision != preview_state['revision']:
+            raise LibraryError('Catalogue changed during preview; use a new output directory')
+        for terminal in prepared:
+            for kind,preview_records in terminal.change.upserts.items():preview_state[kind].update(preview_records)
+            for kind,keys in terminal.change.deletes.items():
+                for key in keys:preview_state[kind].pop(key,None)
+        from library.effects import apply_effect
+        from library.decision_model import verify_record_evidence
+        for decision in preview_decisions[len(preview_state['ledger']):]:
+            if decision.get('completion_task'):
+                break  # Only the owning task may project an atomic terminal result.
+            evidence=store.decisions/f"{decision['sequence']:09d}-{decision['id']}.yaml"
+            if load(evidence)!=decision or decision['sequence']!=len(preview_state['ledger'])+1:
+                raise LibraryError('Decision evidence lost or altered')
+            verify_record_evidence(store,decision)
+            apply_effect(preview_state,decision,replay=True)
+            preview_state['ledger'].append(decision['id'])
+        if store.backend().decisions()!=preview_decisions or store.revision!=preview_state['revision']:
+            raise LibraryError('Catalogue changed during preview; use a new output directory')
+        atomic_yaml(args.output/'state/library.yaml',dict(preview_state))
+        value={'schema':1,'source_text_is_untrusted':True,'created_at':now(),
+            'catalogue_revision':preview_state['revision'],'cases':cases_for(preview_state)}
         atomic_yaml(args.output / 'review.yaml', value)
         (args.output / 'review.md').write_text(render_report(value))
         return {'status': 'preview_only', 'cases': len(value['cases']), 'output': str(args.output)}
@@ -142,7 +179,14 @@ def run(args: argparse.Namespace) -> Any:
             preflight(args.reception, args.library, args.state, args.policy)
         else:
             raise LibraryError('Runtime intake requires --policy and --library')
-        state = receive(store, args.reception, load(args.captured), load(args.submissions), load(args.queue))
+        if args.isolated:
+            captured,journal,queue=load(args.captured),load(args.submissions),load(args.queue)
+        else:
+            from library.operational_state import CollectorState,RuntimeObservation
+            captured=CollectorState(args.captured.parent,database=store.backend()._database).captured()
+            journal=CollectorState(args.submissions.parent,database=store.backend()._database).monitor()
+            queue=RuntimeObservation(store.backend()._database).queue()[0]
+        state=receive(store,args.reception,captured,journal,queue)
         return {'status': 'received', 'assets': len(state['assets']), 'origins': len(state['origins'])}
     if args.command == 'printed':
         if args.lab:
@@ -178,13 +222,14 @@ def run(args: argparse.Namespace) -> Any:
         qualification = preflight(args.reception, args.library, args.state, args.policy)
     if args.command in ('preflight', 'activate'):
         if args.command == 'activate':
-            atomic_yaml(args.state / 'library-activation.yaml', qualification)
+            from library.operational_state import RuntimeObservation
+            RuntimeObservation(store.backend()._database).activate(qualification,role='library')
         return qualification
     capacity = Capacity()
     if not (args.isolated or args.lab):
         if not args.credentials:
             raise LibraryError('Runtime writes require read-only pyLoad capacity checks')
-        from pipeline import Pyload
+        from booksys_core.downloader import Pyload
         client = Pyload(args.pyload, json.loads(args.credentials.read_text())['api_key'])
         def external_active() -> bool:
             status = client.call('status_server')
@@ -213,16 +258,25 @@ def run(args: argparse.Namespace) -> Any:
 def main() -> int:
     args = parser().parse_args()
     try:
-        if args.command in ('status', 'report', 'preview', 'preflight'):
+        if args.command in ('status', 'report', 'preflight') or (
+                args.command == 'preview' and not os.environ.get('BOOKSYS_READER_SOCKET')):
             output = run(args)
         else:
             # A local mutation is a manual cycle, serialized with the service.
             with lock(args.state / 'library-cycle.lock', blocking=False):
                 if args.command not in ('publish', 'admit', 'withdraw', 'restore', 'reconcile'):
-                    for path in (args.state / 'library-operations').glob('*.yaml'):
-                        if load(path).get('phase') not in ('committed', 'interrupted', 'capacity_aborted'):
+                    from library.operational_state import CopyOperations
+                    operations=CopyOperations(Catalog(args.state).backend()._database,'publication')
+                    for operation in operations.records():
+                        if operation.get('phase') not in ('committed','interrupted','capacity_aborted'):
                             raise LibraryError('Reconcile copy journals before a local catalogue write')
-                output = run(args)
+                from library.manual_reader import command_grant
+                stage = ('intake' if args.command in ('intake', 'preview') else 'ocr' if args.command == 'printed' else
+                         'copies' if args.command in ('publish', 'admit', 'withdraw', 'restore', 'reconcile') else None)
+                grant = (command_grant(Catalog(args.state), stage, args.command) if stage and
+                         os.environ.get('BOOKSYS_READER_SOCKET') else nullcontext())
+                with grant:
+                    output = run(args)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         if isinstance(output, list) and any(isinstance(item, dict) and item.get('status') in ('stale', 'rejected') for item in output):
             return 3

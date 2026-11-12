@@ -11,13 +11,17 @@ from test_library_intake import SOURCE
 from test_library_readers import image_bytes
 
 
-def setup_library(root):
+def setup_library(root,test):
     reception = root / 'reception'
     (reception / 'package').mkdir(parents=True)
     path = reception / 'package/album.cbz'
     with zipfile.ZipFile(path, 'w') as archive:
         archive.writestr('001.png', image_bytes())
-    store = Catalog(root / 'state')
+    from tests.postgres_fixture import create_store
+    from library.primitives import empty
+    store = Catalog(root/'state',store=create_store(test,root/'state',empty()))
+    (root/'postgresql.json').write_bytes((store.directory/'postgresql.json').read_bytes())
+    (root/'postgresql.json').chmod(0o600)
     state = receive(store, reception, {'items': {SOURCE: {'title': 'Album'}}},
         {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}},
         [{'pid': 1, 'name': 'tracked', 'folder': 'package', 'links': [
@@ -40,7 +44,7 @@ class PublishTests(unittest.TestCase):
     def test_transform_capacity_loss_cleans_only_owned_temporary_files(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             class Saturated(Capacity):
                 calls = 0
                 def check(self, path, required):
@@ -52,7 +56,7 @@ class PublishTests(unittest.TestCase):
             with self.assertRaisesRegex(LibraryError, 'capacity'):
                 publisher.publish(asset)
             self.assertEqual(list(publisher.staging.iterdir()), [])
-            operation = publisher.load_operation(next(publisher.journals.iterdir()).stem)
+            operation = publisher.load_operation(publisher.operations.records()[0]["id"])
             self.assertEqual(operation['phase'], 'capacity_aborted')
             self.assertTrue(original.exists())
             self.assertEqual(list(publisher.exposed.iterdir()), [])
@@ -62,7 +66,7 @@ class PublishTests(unittest.TestCase):
                       'after_substitution', 'published', 'committed'):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
-                store, reception, original, asset = setup_library(root)
+                store, reception, original, asset = setup_library(root,self)
                 publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
                 first = publisher.publish(asset)
                 target = root / 'library/bd' / first['target']
@@ -89,7 +93,7 @@ class PublishTests(unittest.TestCase):
     def test_external_edit_before_substitution_blocks_and_preserves_output(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
             first = publisher.publish(asset)
             target = root / 'library/bd' / first['target']
@@ -107,7 +111,7 @@ class PublishTests(unittest.TestCase):
     def test_withdrawal_and_explicit_recovery_preserve_revisions(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
             first = publisher.publish(asset)
             withdrawal = publisher.withdraw('edition', expected=store.read()['revision'])
@@ -119,7 +123,7 @@ class PublishTests(unittest.TestCase):
     def test_independent_copy_and_no_unmanaged_overwrite(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True,
                                   capacity=Capacity(reserve=0))
             result = publisher.publish(asset)
@@ -139,7 +143,7 @@ class PublishTests(unittest.TestCase):
         for phase in ('intent', 'transforming', 'transformed', 'copying', 'prepared', 'verified', 'published', 'committed'):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
-                store, reception, original, asset = setup_library(root)
+                store, reception, original, asset = setup_library(root,self)
                 def crash(point, operation):
                     if point == phase:
                         raise RuntimeError('simulated crash')
@@ -158,9 +162,15 @@ class PublishTests(unittest.TestCase):
     def test_capacity_unknown_external_writer_blocks(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             publisher = Publisher(store, reception, root / 'library', isolated=True,
                 capacity=Capacity(reserve=20 * 1024**3, free=lambda _: 20 * 1024**3))
             with self.assertRaises(LibraryError):
                 publisher.publish(asset)
             self.assertEqual(list((root / 'library/bd').iterdir()), [])
+
+    def test_default_capacity_checks_remaining_copy_without_disk_reserve(self):
+        capacity = Capacity(free=lambda _: 1024)
+        capacity.check(Path('.'), 1024)
+        with self.assertRaises(LibraryError):
+            capacity.check(Path('.'), 1025)

@@ -17,6 +17,8 @@ def run(*args: str) -> str:
     return subprocess.run(args, cwd=ROOT, capture_output=True, text=True, check=True).stdout
 
 
+from ops.compose import arguments as compose_arguments
+
 os.umask(0o077)
 assert run("docker", "info", "--format", "{{.Name}}").strip() == "booksys-host"
 worker, browser, shared = json.loads(run("docker", "inspect", "booksys-worker-1", "booksys-byparr-1", "booksys-pyload"))
@@ -32,10 +34,10 @@ tag = "booksys-worker:before-fiches-" + stamp.lower()
 run("docker", "image", "tag", worker["Image"], tag)
 (recovery / "previous-runtime.json").write_text(json.dumps({"worker_image": worker["Image"], "recovery_tag": tag,
                                                            "shared_container_id": shared["Id"]}, indent=2))
-(recovery / "compose.runtime.yaml").write_text(run("git", "show", "prior-change:compose.runtime.yaml"))
+(recovery / "compose.runtime.yaml").write_text(run("git", "show", "c478488:compose.runtime.yaml"))
 print(f"Recovery: {recovery}", flush=True)
 with (recovery / "build.log").open("w") as output:
-    build = subprocess.run(["docker", "compose", "-f", "compose.runtime.yaml", "build", "worker"],
+    build = subprocess.run(compose_arguments() + ["build", "worker"],
                            cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
 if build.returncode:
     print((recovery / "build.log").read_text()[-2500:], flush=True)
@@ -43,12 +45,12 @@ build.check_returncode()
 run("docker", "run", "--rm", "--network", "none", "--entrypoint", "/app/.venv/bin/python",
     "booksys-worker:local", "-c", "import booksys, pipeline, fiches; print('worker imports verified')")
 print("New image built and imported without network or live mounts", flush=True)
-run("docker", "compose", "-f", "compose.runtime.yaml", "stop", "worker")
+run(*compose_arguments(), "stop", "worker")
 shutil.copytree("/data/booksys/state", recovery / "state")
 before = {f["fid"] for p in api.call("get_queue_data") for f in p["links"]}
 (recovery / "queue-file-ids.json").write_text(json.dumps(sorted(before)))
 print("Worker stopped; state and original image preserved", flush=True)
-run("docker", "compose", "-f", "compose.runtime.yaml", "up", "-d", "--no-deps", "worker")
+run(*compose_arguments(), "up", "-d", "--no-deps", "worker")
 after = {f["fid"] for p in api.call("get_queue_data") for f in p["links"]}
 assert before <= after, "Existing queue files disappeared"
 assert json.loads(run("docker", "inspect", "booksys-pyload"))[0]["Id"] == shared["Id"]

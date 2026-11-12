@@ -11,7 +11,7 @@ from xml.etree import ElementTree
 
 from lxml import etree  # type: ignore[import-untyped]
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 
 def validate_xml(data: bytes) -> None:

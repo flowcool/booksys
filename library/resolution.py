@@ -5,146 +5,34 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 import yaml
 
-from library.catalog import Catalog, LibraryError, atomic_yaml, digest, lock, now, validate
+from library.catalog import Catalog
+from library.primitives import LibraryError, atomic_yaml, digest, lock, now, validate
 
-WORK_FIELDS = ('title', 'author', 'series', 'number', 'summary')
-EDITION_FIELDS = ('publisher', 'language', 'date', 'revision', 'isbn', 'reference')
-FIELDS = (*WORK_FIELDS, *EDITION_FIELDS)
-
-
-def read(path: Path) -> dict[str, Any]:
-    if path.is_symlink():
-        raise LibraryError('Symlink in resolution evidence')
-    value = yaml.safe_load(path.read_text()) if path.exists() else {}
-    if not isinstance(value, dict):
-        raise LibraryError('Invalid resolution evidence')
-    return value
-
-
-def text(value: Any, limit: int = 500) -> str:
-    if not isinstance(value, str) or len(value) > limit or '\x00' in value:
-        raise LibraryError('Invalid bounded text')
-    return value.strip()
-
-
-def identifier(value: Any) -> str:
-    if not isinstance(value, str) or not re.fullmatch('[A-Za-z0-9_-]{1,100}', value):
-        raise LibraryError('Invalid identifier')
-    return value
-
-
-def active_claims(state: dict[str, Any], asset: str) -> set[str]:
-    return {v['edition'] for v in state['variants'].values()
-            if v['asset'] == asset and v.get('active', True)}
-
-
-def apply_resolution(state: dict[str, Any], record: dict[str, Any]) -> None:
-    """Pure chronological projection; publication belongs to copy journals."""
-    if record['action'] == 'resolution_result':
-        target = state['assets'][record['target']]
-        if target.get('resolution', {}).get('decision') == record['values']['decision']:
-            target['resolution'].update(record['values'])
-        return
-    values, key = record['values'], record['target']
-    asset = state['assets'][key]
-    wid, eid = values['work_id'], values['edition_id']
-    old = asset.get('identity')
-    if old and old['edition'] != eid:
-        state['variants'][old['variant']]['active'] = False
-        previous = state['editions'][old['edition']]
-        if previous.get('selected') == old['variant']:
-            previous.pop('selected', None)
-    if values.get('edit_shared'):
-        state['works'][wid].update(copy.deepcopy(values['work']))
-        state['editions'][eid].update(copy.deepcopy(values['edition']))
-    state['works'].setdefault(wid, copy.deepcopy(values['work']))
-    state['editions'].setdefault(eid, {**copy.deepcopy(values['edition']), 'work': wid,
-                                     'evidence': {'basis': 'asset claims'}})
-    variant = digest({'asset': key, 'edition': eid})
-    state['variants'][variant] = {'asset': key, 'edition': eid, 'active': True,
-                                  'evidence': values['proof']}
-    asset['identity'] = {'work': wid, 'edition': eid, 'variant': variant,
-                         'evidence': {'decision': record['id']}}
-    if values['select']:
-        state['editions'][eid]['selected'] = variant
-    elif values.get('previous_selected') is not None:
-        state['editions'][eid]['selected'] = values['previous_selected']
-    if record['resolution_inputs'] == digest({'identity_result': asset.get('identity_result'),
-                                            'assertions': asset.get('assertions', [])}):
-        asset['contested'] = False
-    asset['resolution'] = {'decision': record['id'], 'status': 'pending',
-                           'editions': record['affected_editions']}
-
-
-def project_state(store: Catalog) -> dict[str, Any]:
-    state = store.read()
-    records = store.ledger()
-    from library.catalog import apply_effect
-    # Rebuild decision-owned fields from chronological history, without replacing
-    # intake, automatic identities, published references or copy operation state.
-    resolution_targets = {r['target'] for r in records if r['action'] == 'resolve'}
-    for variant in state['variants'].values():
-        if variant['asset'] in resolution_targets:
-            variant['active'] = False
-    if any(item not in {r['id'] for r in records} for item in state['ledger']):
-        raise LibraryError('Snapshot references missing decisions')
-    for record in records:
-        if record['action'] == 'identify_work':
-            for proof in record['values']['evidence'].get('pages', []):
-                piece = read(store.directory / 'library-resolution/pieces' / (identifier(proof['page']) + '.yaml'))
-                if digest(piece) != proof['page'] or piece.get('asset') != record['target']:
-                    raise LibraryError('Work decision proof missing or altered')
-        if record['action'] == 'resolve':
-            for notice in record['values'].get('notices', []):
-                value = read(store.directory / 'library-resolution/pieces' / (identifier(notice) + '.yaml'))
-                if digest(value) != notice:
-                    raise LibraryError('Decision notice missing or altered')
-            for proof in record['values']['proof']:
-                piece = read(store.directory / 'library-resolution/pieces' / (identifier(proof['page']) + '.yaml'))
-                if digest(piece) != proof['page']:
-                    raise LibraryError('Decision evidence missing or altered')
-        apply_effect(state, record, replay=True)
-    state['ledger'] = [r['id'] for r in records]
-    validate(state)
-    return state
-
-
-def dependencies(state: dict[str, Any], key: str, values: dict[str, Any]) -> str:
-    asset = state['assets'][key]
-    editions = {values['edition_id']}
-    if asset.get('identity'):
-        editions.add(asset['identity']['edition'])
-    fields = ('sha256', 'size', 'format', 'status', 'pages', 'page_manifest', 'identity',
-              'assertions', 'identity_result', 'contested', 'disposition', 'overrides', 'cover')
-    edition_values = {eid: state['editions'].get(eid) for eid in editions}
-    works = {e['work']: state['works'][e['work']] for e in edition_values.values() if e}
-    mapping = {eid: {k: e.get(k) for k in ('isbn', 'reference')} for eid, e in state['editions'].items()
-               if (values['edition'].get('reference') and e.get('reference') == values['edition']['reference'])
-               or (values['edition'].get('isbn') and e.get('isbn') == values['edition']['isbn'])}
-    origins = {oid: {k: state['origins'][oid].get(k) for k in
-               ('pid', 'fid', 'path', 'sha256', 'availability', 'parent_origin', 'parent_sha256', 'member')}
-               for oid in asset['origins']}
-    asset_fields = {k: asset.get(k) for k in fields}
-    if asset_fields.get('identity'):
-        asset_fields['identity'] = {k: asset_fields['identity'][k] for k in ('work', 'edition', 'variant')}
-    return digest({'asset': asset_fields, 'origins': origins,
-                   'editions': edition_values, 'works': works, 'mapping': mapping,
-                   'claims': sorted(active_claims(state, key))})
+from library.decision_model import (WORK_FIELDS, EDITION_FIELDS, FIELDS, read, text,
+    identifier, active_claims, apply_resolution, verify_record_evidence, dependencies, gate)
+from library.decision_projection import project_state
 
 
 class Resolution:
     def __init__(self, store: Catalog, reception: Path):
         self.store, self.reception = store, reception
         self.directory = store.directory / 'library-resolution'
-        self.pieces = self.directory / 'pieces'
+        from library.media_paths import pieces_root
+        self.pieces = pieces_root(store.directory)
         self.previews = self.directory / 'previews'
 
-    def state(self) -> dict[str, Any]:
+    def state(self, asset: str | None = None, *, values: dict[str, Any] | None = None, options: bool = False) -> dict[str, Any]:
+        backend = self.store.backend()
+        if backend is not None:
+            if asset is None:
+                raise LibraryError('A targeted resolution asset is required')
+            return backend.resolution_state(asset, values=values, options=options)
         return project_state(self.store)
 
     def piece(self, value: dict[str, Any]) -> str:
@@ -173,28 +61,44 @@ class Resolution:
         return key
 
     def load_piece(self, key: str) -> dict[str, Any]:
-        identifier(key)
-        value = read(self.pieces / (key + '.yaml'))
+        key = identifier(key)
+        base = os.path.realpath(self.pieces)
+        candidate = os.path.join(base, key + '.yaml')
+        normalized = os.path.realpath(candidate)
+        if not normalized.startswith(base + os.sep):
+            raise LibraryError('Evidence path escapes its directory')
+        if normalized != candidate:
+            raise LibraryError('Symlink in resolution evidence')
+        value = read(Path(normalized))
         if digest(value) != key:
             raise LibraryError('Evidence piece missing or altered')
         return value
 
     def page(self, asset_id: str, index: int) -> dict[str, Any]:
         with lock(self.store.directory / 'library-proof.lock', blocking=False):
+            from library.reader_client import endpoint
+            if endpoint():
+                from library.manual_reader import submit_page
+                return submit_page(self.store, asset_id, index)
             return self._page(asset_id, index)
 
     def _page(self, asset_id: str, index: int) -> dict[str, Any]:
         from library.origins import resolve_asset
         from library.process import bounded_run
         from library.sandbox import native_prefix, PYTHON
-        state = self.state()
+        state = self.state(asset_id)
         asset = state['assets'][asset_id]
         if asset.get('status') != 'validated' or type(index) is not int or not 1 <= index <= asset['pages']:
             raise LibraryError('Proof requires a validated page')
         source = resolve_asset(self.store, self.reception, state, asset_id)
         command = native_prefix(source, ocr=True) + [PYTHON, '-m', 'library.proof_worker',
                                                     '/tmp/input', source.suffix.lower(), str(index)]
-        result = bounded_run(command, timeout=180, stdout_limit=3 * 1024**2)
+        from library.reader_client import endpoint, execute
+        if endpoint():
+            import subprocess
+            result = subprocess.CompletedProcess(command, 0, json.dumps(execute('proof', source, {'page': index})).encode(), b'')
+        else:
+            result = bounded_run(command, timeout=180, stdout_limit=3 * 1024**2)
         if result.returncode:
             raise LibraryError('Isolated proof page reader failed')
         value = json.loads(result.stdout)
@@ -271,7 +175,7 @@ class Resolution:
                         and other is not state['editions'].get(eid)):
                     raise LibraryError('Edition reference already owned')
         if value['edition'].get('isbn'):
-            from library.metadata import isbn13
+            from library.bibliographic import isbn13
             if not isbn13(value['edition']['isbn']):
                 raise LibraryError('Invalid ISBN')
         value['reason'] = text(value['reason'], 4000)
@@ -305,14 +209,17 @@ class Resolution:
     def preview(self, asset_id: str, values: dict[str, Any]) -> dict[str, Any]:
         identifier(asset_id)
         with lock(self.store.directory / 'decisions.lock'):
-            state = self.state()
+            state = self.state(asset_id, values=values)
             asset = state['assets'][asset_id]
             if asset.get('status') != 'validated':
                 raise LibraryError('Unvalidated asset')
             values = self.validate_values(state, asset_id, values)
             eid = values['edition_id']
             if values['restore']:
-                operation = read(self.store.directory / 'library-operations' / (values['restore'] + '.yaml'))
+                from library.operational_state import CopyOperations
+                operation = CopyOperations(self.store.backend()._database,'publication').get(values['restore'])
+                if operation is None:
+                    raise LibraryError('Publication restore operation unavailable')
                 if (operation.get('phase') != 'committed' or not operation.get('previous')
                         or operation['previous']['asset'] != asset_id or operation.get('edition') != eid):
                     raise LibraryError('Recovery revision does not match the selected asset and edition')
@@ -364,35 +271,34 @@ class Resolution:
                       'recovery': [p['operation'] for _, p in published],
                       'absence_warning': 'Withdrawal precedes creation; failure can leave this book absent until recovery' if effect == 'transfer' else '',
                       'asset': asset_id, 'values': values, 'before': dependencies(state, asset_id, values),
-                      'old_publications': published, 'effect': effect, 'roles': roles,
+                      'old_publications': [[eid,publication] for eid,publication in published], 'effect': effect, 'roles': roles,
                       'affected_editions': affected, 'created_at': now(),
                       'resolution_inputs': digest({'identity_result': asset.get('identity_result'),
                                                    'assertions': asset.get('assertions', [])})}
             result['id'] = digest(result)
             self.previews.mkdir(parents=True, exist_ok=True)
             # Replace the active preview for this case. Durable pieces are never deleted.
-            atomic_yaml(self.previews / (asset_id + '.yaml'), result)
+            from library.operational_state import ResolutionPreviews
+            ResolutionPreviews(self.store.backend()._database).retain(result)
+            backend = self.store.backend()
+            if backend is not None:
+                backend.bind_preview(result['id'], asset_id)
             with lock(self.store.directory / 'library-evidence.lock'):
                 self.trim_previews()
             return result
 
     def trim_previews(self) -> None:
-        durable = {key for r in self.store.ledger() if r['action'] == 'resolve'
+        backend = self.store.backend()
+        if backend is not None:
+            durable = backend.retained_pieces()
+        else:
+            records = self.store.ledger()
+            durable = {key for r in records if r['action'] == 'resolve'
                    for key in [*[p['page'] for p in r['values']['proof']], *r['values'].get('notices', [])]}
-        durable.update(p['page'] for r in self.store.ledger() if r['action'] == 'identify_work'
+            durable.update(p['page'] for r in records if r['action'] == 'identify_work'
                        for p in r['values']['evidence'].get('pages', []))
-        previews = sorted(self.previews.glob('*.yaml'), key=lambda p: p.stat().st_mtime_ns)
-        def temporary_size() -> int:
-            return sum(p.stat().st_size for p in self.pieces.glob('*.yaml') if p.stem not in durable)
-        while temporary_size() > 64 * 1024**2 and previews:
-            previews.pop(0).unlink()
-            retained = durable | {key for p in previews for key in
-                [*[proof['page'] for proof in read(p)['values']['proof']], *read(p)['values'].get('notices', [])]}
-            for piece in self.pieces.glob('*.yaml'):
-                if piece.stem not in retained:
-                    piece.unlink()
-        if temporary_size() > 64 * 1024**2:
-            raise LibraryError('Temporary evidence budget exhausted')
+        if sum(p.stat().st_size for p in self.pieces.glob('*.yaml') if p.stem not in durable)>64*1024**2:
+            raise LibraryError('Temporary evidence budget exhausted; retained evidence requires inspection')
 
     def check_pending(self, state: dict[str, Any], asset: str, editions: list[str], supersedes: str | None) -> None:
         for key, entry in state['assets'].items():
@@ -407,18 +313,19 @@ class Resolution:
             raise LibraryError('Invalid confirmation fields')
         request_id, preview_id = identifier(request['request_id']), identifier(request['preview'])
         with lock(self.store.directory / 'decisions.lock'):
-            records = self.store.ledger()
+            backend = self.store.backend()
+            records = backend.decisions(request_id=request_id) if backend is not None else self.store.ledger()
             for record in records:
                 if record.get('request_id') == request_id:
                     if record.get('preview') != preview_id:
                         raise LibraryError('Request ID reused with different content')
                     return {'status': 'recorded', 'decision': record['id']}
-            candidates = [read(p) for p in self.previews.glob('*.yaml')]
-            preview = next((p for p in candidates if p['id'] == preview_id), None)
+            from library.operational_state import ResolutionPreviews
+            preview=ResolutionPreviews(self.store.backend()._database).get(preview_id)
             if preview is None:
                 raise LibraryError('Stale preview')
-            state = self.state()
             asset_id, values = preview['asset'], preview['values']
+            state = self.state(asset_id, values=values)
             if dependencies(state, asset_id, values) != preview['before']:
                 raise LibraryError('Stale preview; inputs changed')
             # Copy lock also covers hashing and the post-rename commit window.
@@ -426,8 +333,9 @@ class Resolution:
                 self.check_pending(state, asset_id, preview['affected_editions'], values['supersedes'])
                 for proof in values['proof']:
                     self.load_piece(proof['page'])
-                for operation in (self.store.directory / 'library-operations').glob('*.yaml'):
-                    if read(operation).get('phase') not in ('committed', 'interrupted', 'capacity_aborted'):
+                from library.operational_state import CopyOperations
+                for operation in CopyOperations(self.store.backend()._database,'publication').records():
+                    if operation.get('phase') not in ('committed', 'interrupted', 'capacity_aborted'):
                         raise LibraryError('Reconcile existing operation before confirmation')
                 record = {'request_id': request_id, 'preview': preview_id, 'target': asset_id,
                           'action': 'resolve', 'values': values, 'author': 'flowcool', 'time': now(),
@@ -440,14 +348,20 @@ class Resolution:
                 apply_resolution(proposed, {**record, 'id': 'proposed'})
                 record['expected_after'] = dependencies(proposed, asset_id, values)
                 validate(proposed)
-                record = self.store.append_decision(record)
+                record = self.store.append_decision(record, conflict=getattr(state,'conflict',None))
                 return {'status': 'recorded', 'decision': record['id']}
 
     def project(self) -> dict[str, Any]:
+        if self.store.backend() is not None:
+            self.store.project_pending()
+            return {'revision': self.store.revision}
         with lock(self.store.directory / 'decisions.lock'):
             return self._project()
 
     def _project(self) -> dict[str, Any]:
+        if self.store.backend() is not None:
+            self.store.project_pending()
+            return {'revision': self.store.revision}
         state = self.state()
         before = self.store.read()
         if state != before:
@@ -459,7 +373,8 @@ class Resolution:
             return self._search(query)
 
     def _search(self, query: str) -> dict[str, Any]:
-        from library.metadata import Providers, isbn13
+        from library.metadata import Providers
+        from library.bibliographic import isbn13
         query = text(query, 200)
         if not query:
             raise LibraryError('Empty search')
@@ -484,25 +399,51 @@ class Resolution:
         return {'candidates': candidates, 'remaining': providers.budget,
                 'reason': 'No exact edition returned; retain pending or provide manual proof' if not candidates else ''}
 
-    def outcome(self, record: dict[str, Any], status: str, reason: str) -> None:
+    def outcome(self, record: dict[str, Any], status: str, reason: str, *, prepared: list[Any] | None=None, task: Any=None) -> None:
         with lock(self.store.directory / 'decisions.lock'):
-            current = self.state()['assets'][record['target']].get('resolution', {})
-            if current.get('status') == status and current.get('reason') == reason:
-                return
-            self.store.append_decision({'action': 'resolution_result', 'target': record['target'],
-                'values': {'decision': record['id'], 'status': status, 'reason': reason},
-                'author': 'cycle', 'time': now()})
-        self.project()
+            state=self.state(record['target'])
+            current=state['assets'][record['target']].get('resolution',{})
+            if current.get('status')==status and current.get('reason')==reason:return
+            result=prepared.pop() if prepared else None
+            if prepared:
+                raise LibraryError('Multiple terminal decision results require reconciliation')
+            if result is not None:
+                for kind,values in result.change.upserts.items():state[kind].update(copy.deepcopy(values))
+                for kind,keys in result.change.deletes.items():
+                    for key in keys:state[kind].pop(key,None)
+            payload={'action':'resolution_result','target':record['target'],
+                'values':{'decision':record['id'],'status':status,'reason':reason},'author':'cycle','time':now()}
+            if task is not None:
+                payload['completion_task']={'key':task.key,'generation':task.generation}
+                payload['completion_conflict']=result.conflict if result is not None else getattr(state,'conflict',None)
+                payload['completion_parent']={name:record.get(name) for name in ('id','expected_after','affected_editions')}
+                payload['affected_editions']=record.get('affected_editions',[])
+            backend=self.store.backend()
+            retained=next((entry for entry in reversed(backend.decisions(action='resolution_result',target=record['target']))
+                if entry.get('values')==payload['values'] and entry.get('completion_task')==payload.get('completion_task')),None)
+            completion=retained or self.store.append_decision(payload,conflict=result.conflict if result is not None else getattr(state,'conflict',None))
+            if prepared is not None:
+                from library.effects import apply_effect
+                from dataclasses import replace
+                apply_effect(state,completion,replay=True)
+                state['ledger'].append(completion['id'])
+                terminal=self.store.prepare(state)
+                if result is not None:
+                    terminal=replace(terminal,conflict=result.conflict,completions=result.completions)
+                prepared.append(terminal)
+        if prepared is None:self.project()
 
-    def apply(self, publisher: Any, *, limit: int = 8) -> int:
+    def apply(self, publisher: Any, *, limit: int = 8, asset_only: str | None = None, task: Any=None, reconcile_only: bool=False) -> int:
         """Caller owns the cycle lock. Reconcile before any catalogue projection."""
-        publisher.reconcile()
+        publisher.completion_task=task
+        publisher.reconcile(**({'asset': asset_only} if asset_only is not None else {}))
         self.project()
         count = 0
-        for record in self.store.ledger():
-            if record['action'] != 'resolve':
+        backend = self.store.backend()
+        for record in backend.decisions(action='resolve', target=asset_only) if backend is not None else self.store.ledger():
+            if record['action'] != 'resolve' or (asset_only is not None and record['target'] != asset_only):
                 continue
-            state = self.store.read()
+            state = self.state(record['target'], values=record['values'])
             current = state['assets'][record['target']].get('resolution', {})
             if current.get('decision') != record['id'] or current.get('status') != 'pending':
                 continue
@@ -512,10 +453,12 @@ class Resolution:
             try:
                 key, eid = record['target'], record['values']['edition_id']
                 if record['effect'] in ('pending', 'unchanged'):
-                    self.outcome(record, 'applied', 'Identity recorded; publication ' + record['effect'])
+                    self.outcome(record,'applied','Identity recorded; publication '+record['effect'],prepared=publisher.prepared,task=task)
                     continue
                 completed = {op.get('role'): op for op in state['operations'].values()
                              if op.get('decision') == record['id'] and op['status'] == 'committed'}
+                for terminal in publisher.prepared or []:
+                    completed.update({op.get('role'):op for op in terminal.change.upserts.get('operations',{}).values() if op.get('decision')==record['id'] and op.get('status')=='committed'})
                 comparison = copy.deepcopy(state)
                 if 'withdraw' in completed:
                     # Normalize only this decision's own committed removal. All
@@ -523,6 +466,8 @@ class Resolution:
                     for old_eid, publication in record['old_publications']:
                         comparison['editions'][old_eid]['publication'] = publication
                 final_role_done = any(r in completed for r in ('create', 'replace', 'restore'))
+                if reconcile_only and not final_role_done:
+                    continue  # Exact absence never authorizes a new filesystem effect in readback.
                 if not final_role_done and dependencies(comparison, key, record['values']) != record['expected_after']:
                     raise LibraryError('Decision dependencies changed; preview again')
                 if 'withdraw' in record['roles'] and 'withdraw' not in completed:
@@ -535,44 +480,34 @@ class Resolution:
                     else:
                         publisher.preflight(key)
                     old_eid = record['old_publications'][0][0]
-                    publisher.withdraw(old_eid, expected=self.store.read()['revision'],
-                                       decision=record['id'], role='withdraw')
+                    terminal_results=publisher.prepared
+                    publisher.prepared=None
+                    try:
+                        publisher.withdraw(old_eid,expected=self.store.revision,decision=record['id'],role='withdraw')
+                    finally:publisher.prepared=terminal_results
                 if record['effect'] == 'restore':
                     if 'restore' not in completed:
-                        publisher.restore(record['values']['restore'], expected=self.store.read()['revision'],
+                        publisher.restore(record['values']['restore'], expected=self.store.revision,
                                           decision=record['id'], role='restore')
                 elif not any(role in completed for role in ('create', 'replace')):
                     publisher.publish(key, replace=record['effect'] == 'replace', decision=record['id'],
                                       role='replace' if record['effect'] == 'replace' else 'create')
-                self.outcome(record, 'applied', 'Decision applied; publication verified')
+                self.outcome(record,'applied','Decision applied; publication verified',prepared=publisher.prepared,task=task)
             except (LibraryError, OSError) as exc:
                 # Reconcile an uncertain copy before any outcome changes the
                 # catalogue revision expected by its unfinished commit.
-                publisher.reconcile()
-                done = {op.get('role') for op in self.store.read()['operations'].values()
+                publisher.reconcile(**({'asset': asset_only} if asset_only is not None else {}))
+                done = {op.get('role') for op in self.state(record['target'], values=record['values'])['operations'].values()
                         if op.get('decision') == record['id'] and op['status'] == 'committed'}
                 if set(record['roles']) <= done:
-                    self.outcome(record, 'applied', 'Decision applied; interrupted response reconciled')
+                    self.outcome(record,'applied','Decision applied; interrupted response reconciled',prepared=publisher.prepared,task=task)
                 else:
-                    self.outcome(record, 'blocked', str(exc))
+                    self.outcome(record,'blocked',str(exc),prepared=publisher.prepared,task=task)
         return count
 
 
-def gate(state: dict[str, Any], asset_id: str, decision: str | None, role: str | None) -> None:
-    identity = state['assets'][asset_id].get('identity', {})
-    eid = identity.get('edition')
-    for key, asset in state['assets'].items():
-        resolution = asset.get('resolution', {})
-        if resolution.get('status') in ('pending', 'blocked') and (key == asset_id or eid in resolution.get('editions', [])):
-            if resolution.get('decision') != decision or resolution['status'] == 'blocked':
-                raise LibraryError('Pending or blocked operator decision gates publication')
-    if decision:
-        if role not in ('create', 'replace', 'withdraw', 'restore'):
-            raise LibraryError('Invalid decision operation role')
-
-
 def case_view(service: Resolution, key: str) -> dict[str, Any]:
-    state = service.state()
+    state = service.state(key, options=True)
     asset = state['assets'][key]
     if asset.get('status') != 'validated':
         raise LibraryError('Only validated assets can be resolved')
@@ -588,12 +523,13 @@ def case_view(service: Resolution, key: str) -> dict[str, Any]:
                  'edition': {k: e[k] for k in EDITION_FIELDS if k in e}}
                 for eid, e in state['editions'].items() if not state['works'][e['work']].get('merged_into')][:100]
     recovery = []
-    for path in (service.store.directory / 'library-operations').glob('*.yaml'):
-        operation = read(path)
+    from library.operational_state import CopyOperations
+    for operation in CopyOperations(service.store.backend()._database,'publication').records():
         if operation.get('asset') == key and operation.get('previous') and operation.get('phase') == 'committed':
             recovery.append({'id': operation['id'], 'label': operation['id'] + ' / ' + operation['kind']})
     from library.review import cases_for
-    work_case = next(c for c in cases_for(state).values() if c.get('asset') == key)
+    backend = service.store.backend()
+    work_case = backend.case(key) if backend is not None else next(c for c in cases_for(state).values() if c.get('asset') == key)
     return {'asset': key, 'work_case': {'case': work_case['id'], 'version': work_case['version']},
             'identity': {k: asset['identity'][k] for k in ('work', 'edition', 'variant')} if asset.get('identity') else None, 'resolution': asset.get('resolution'),
             'publications': {eid: e['publication'] for eid, e in state['editions'].items()

@@ -1,3 +1,5 @@
+from postgres_fixture import create_catalog
+from library.operational_state import CollectorState, NativeHistory, RuntimeObservation
 import copy
 import tempfile
 import unittest
@@ -55,7 +57,7 @@ class Native:
         raise AssertionError(method)
 
 
-def fixture(root):
+def fixture(root,test):
     reception = root / 'reception'
     (reception / 'owned').mkdir(parents=True)
     original = reception / 'owned/album.cbz'
@@ -71,7 +73,16 @@ def fixture(root):
     collector = root / 'collector'
     atomic_yaml(collector / 'state.yaml', {'items': {SOURCE: record}})
     atomic_yaml(collector / 'monitor.yaml', {'submissions': {SOURCE: entry}})
-    store = Catalog(root / 'state')
+    from tests.postgres_fixture import create_store
+    from library.primitives import empty
+    from library.operational_state import CollectorState
+    import shutil
+    backend=create_store(test,root/'state',empty())
+    shutil.copyfile(root/'state/postgresql.json',collector/'postgresql.json')
+    (collector/'postgresql.json').chmod(0o600)
+    canonical=CollectorState(collector);canonical.capture(SOURCE,record);canonical.submission(SOURCE,entry)
+    RuntimeObservation(backend._database).activate({'fixture':True},role='library')
+    store = Catalog(root / 'state',store=backend)
     receive(store, reception, {'items': {SOURCE: record}}, {'submissions': {SOURCE: entry}},
             [package], incremental=True, stable_seconds=.001)
     return store, reception, collector, original, Native(package)
@@ -85,7 +96,7 @@ class RetirementTests(unittest.TestCase):
         from ops.retire_packages import main
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, collector, original, client = fixture(root)
+            store, reception, collector, original, client = fixture(root,self)
             credentials = root / 'credentials.json'
             credentials.write_text('{"api_key":"fixture"}')
             args = ['retire_packages.py', '--root', str(root), '--reception', str(reception),
@@ -108,7 +119,7 @@ class RetirementTests(unittest.TestCase):
 
     def test_stock_scan_skips_sources_without_technical_evidence_before_api_calls(self):
         with tempfile.TemporaryDirectory() as directory:
-            store, reception, collector, original, client = fixture(Path(directory))
+            store, reception, collector, original, client = fixture(Path(directory),self)
             state = store.read()
             for origin in state['origins'].values():
                 origin['availability'] = 'pending'
@@ -155,7 +166,9 @@ class RetirementTests(unittest.TestCase):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 reception, parent, captured, journal, queue = inputs(root, [('One.cbz', comic())])
-                store = Catalog(root / 'state')
+                from tests.postgres_fixture import create_store
+                from library.primitives import empty
+                store = Catalog(root/'state',store=create_store(self,root/'state',empty()))
                 state = receive(store, reception, captured, journal, queue, stable_seconds=.001)
                 oid = next(k for k, o in state['origins'].items() if o.get('bundle'))
                 origin = state['origins'][oid]
@@ -186,6 +199,10 @@ class RetirementTests(unittest.TestCase):
                 collector = root / 'collector'
                 atomic_yaml(collector / 'monitor.yaml', journal)
                 atomic_yaml(collector / 'state.yaml', captured)
+                (collector/'postgresql.json').write_bytes((store.directory/'postgresql.json').read_bytes())
+                (collector/'postgresql.json').chmod(0o600)
+                CollectorState(collector).capture(SOURCE,captured['items'][SOURCE])
+                CollectorState(collector).submission(SOURCE,journal['submissions'][SOURCE])
                 client = Native(queue[0])
                 if mode == 'missing-part': second.unlink()
                 result = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml').process(SOURCE, apply=True)
@@ -204,7 +221,7 @@ class RetirementTests(unittest.TestCase):
         from library.publish import Publisher, Capacity
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, collector, original, client = fixture(root)
+            store, reception, collector, original, client = fixture(root,self)
             state = store.read()
             asset = next(iter(state['assets']))
             apply_effect(state, {'action': 'identify', 'target': asset, 'values': {
@@ -235,7 +252,7 @@ class RetirementTests(unittest.TestCase):
     def test_interrupted_preparation_and_confirmation_resume_without_duplicate_removal(self):
         for phase in ('prepared', 'removed'):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
-                store, reception, collector, original, client = fixture(Path(directory))
+                store, reception, collector, original, client = fixture(Path(directory),self)
                 def crash(at):
                     if at == phase: raise RuntimeError('interrupted')
                 service = Retirement(client, store, reception, collector / 'monitor.yaml',
@@ -248,7 +265,7 @@ class RetirementTests(unittest.TestCase):
 
     def test_source_drift_before_removal_preserves_the_pyload_package(self):
         with tempfile.TemporaryDirectory() as directory:
-            store, reception, collector, original, client = fixture(Path(directory))
+            store, reception, collector, original, client = fixture(Path(directory),self)
             def drift(phase):
                 if phase == 'prepared':
                     original.write_bytes(b'changed during evidence write')
@@ -263,14 +280,14 @@ class RetirementTests(unittest.TestCase):
         from library.web import build_projection
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, collector, original, client = fixture(root)
+            store, reception, collector, original, client = fixture(root,self)
             credentials = root / 'credentials.json'
             credentials.write_text('{"api_key":"fixture"}')
             args = argparse.Namespace(root=root, reception=reception, captured=collector / 'state.yaml',
                 submissions=collector / 'monitor.yaml', queue=None, credentials=credentials,
                 endpoint='http://127.0.0.1:8000', asset=[], printed=False, budget=0,
                 auto=False, route_mirrors=False, retire_packages=True, pyload_scripts=None)
-            with patch('pipeline.Pyload', return_value=client), contextlib.redirect_stdout(io.StringIO()):
+            with patch('booksys_core.downloader.Pyload', return_value=client), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cycle(args), 0)
                 self.assertEqual(client.removed, [1])
                 self.assertEqual(cycle(args), 0)
@@ -280,7 +297,7 @@ class RetirementTests(unittest.TestCase):
 
     def test_finished_queue_package_is_parked_before_removal(self):
         with tempfile.TemporaryDirectory() as directory:
-            store, reception, collector, original, client = fixture(Path(directory))
+            store, reception, collector, original, client = fixture(Path(directory),self)
             client.packages[1]['dest'] = 1
             service = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml')
             self.assertEqual(service.process(SOURCE, apply=True)['outcome'], 'retired')
@@ -291,7 +308,7 @@ class RetirementTests(unittest.TestCase):
         from pipeline import run_fiche_once
         from mirror_routing import route_package
         with tempfile.TemporaryDirectory() as directory:
-            store, reception, collector, original, client = fixture(Path(directory))
+            store, reception, collector, original, client = fixture(Path(directory),self)
             record = yaml.safe_load((collector / 'state.yaml').read_text())['items'][SOURCE]
             entry = yaml.safe_load((collector / 'monitor.yaml').read_text())['submissions'][SOURCE]
             Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml').process(SOURCE, apply=True)
@@ -310,7 +327,7 @@ class RetirementTests(unittest.TestCase):
     def test_active_processing_hooks_and_unexpected_missing_packages_block_removal(self):
         for case in ('active', 'extract', 'scripts', 'missing', 'changed-url', 'changed-bytes', 'unknown-state', 'changed-fid'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
-                store, reception, collector, original, client = fixture(Path(directory))
+                store, reception, collector, original, client = fixture(Path(directory),self)
                 if case == 'active': client.active = [{'fid': 10, 'package_id': 1}]
                 if case == 'extract': client.extract = 'True'
                 if case == 'scripts': client.scripts = 'True'
@@ -326,7 +343,7 @@ class RetirementTests(unittest.TestCase):
     def test_successful_fallback_retires_both_packages_and_keeps_failed_bytes(self):
         import yaml
         with tempfile.TemporaryDirectory() as directory:
-            store, reception, collector, original, client = fixture(Path(directory))
+            store, reception, collector, original, client = fixture(Path(directory),self)
             original.write_bytes(b'failed original retained')
             state = store.read()
             for origin in state['origins'].values():
@@ -342,13 +359,14 @@ class RetirementTests(unittest.TestCase):
             captured = yaml.safe_load((collector / 'state.yaml').read_text())
             captured['items'][SOURCE]['downloads']['two'] = {'hoster': 'other', 'urls': ['https://other.example/album']}
             atomic_yaml(collector / 'state.yaml', captured)
+            CollectorState(collector).capture(SOURCE,captured['items'][SOURCE])
             journal = yaml.safe_load((collector / 'monitor.yaml').read_text())
-            atomic_yaml(collector / 'mirror-routing.yaml', {'schema': 1, 'packages': {'1': {
+            NativeHistory(collector).route('1', {
                 'source': SOURCE, 'phase': 'active', 'kind': 'fallback', 'attempt_pid': 2,
                 'attempt_name': attempt['name'], 'attempt_folder': 'fallback',
                 'original_files': [[10, client.packages[1]['links'][0]['url']]],
                 'attempt_files': [[20, 'https://other.example/album']],
-                'fallback_links': ['https://other.example/album']}}})
+                'fallback_links': ['https://other.example/album']})
             receive(store, reception, captured, journal, [attempt], stable_seconds=.001, incremental=True)
             service = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml')
             client.packages[1]['links'][0]['status'] = 99
@@ -365,14 +383,14 @@ class RetirementTests(unittest.TestCase):
     def test_bundle_waits_for_all_children_then_preserves_their_local_access(self):
         import yaml
         with tempfile.TemporaryDirectory() as directory:
-            store, reception, collector, original, client = fixture(Path(directory))
+            store, reception, collector, original, client = fixture(Path(directory),self)
             bundle = original.with_suffix('.zip')
             with zipfile.ZipFile(bundle, 'w') as archive:
                 archive.writestr('One.cbz', comic())
                 archive.writestr('Two.cbz', comic())
             package = client.packages[1]
             package['links'][0].update(name=bundle.name, size=bundle.stat().st_size)
-            store = Catalog(Path(directory) / 'bundle-state')
+            store = create_catalog(self,Path(directory) / 'bundle-state')
             captured = yaml.safe_load((collector / 'state.yaml').read_text())
             journal = yaml.safe_load((collector / 'monitor.yaml').read_text())
             receive(store, reception, captured, journal, [package], stable_seconds=.001,
@@ -392,7 +410,7 @@ class RetirementTests(unittest.TestCase):
     def test_lost_response_is_reconciled_without_resending(self):
         for removed in (False, True):
             with self.subTest(removed=removed), tempfile.TemporaryDirectory() as directory:
-                store, reception, collector, original, client = fixture(Path(directory))
+                store, reception, collector, original, client = fixture(Path(directory),self)
                 client.lose_response = removed
                 client.lose_before_removal = not removed
                 service = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml')
@@ -411,7 +429,7 @@ class RetirementTests(unittest.TestCase):
     def test_retired_download_survives_intake_restart_and_local_resolution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store, reception, collector, original, client = fixture(root)
+            store, reception, collector, original, client = fixture(root,self)
             before = original.read_bytes()
             service = Retirement(client, store, reception, collector / 'monitor.yaml', collector / 'state.yaml')
             self.assertEqual(service.process(SOURCE)['outcome'], 'eligible')

@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from booksys import CollectionError
+from booksys_core.errors import CollectionError
 
 
 def link_identity(url: str) -> str:
@@ -62,14 +62,14 @@ def select_primary(record: dict[str, Any], availability: dict[str, Any]) -> tupl
 
 def logical_snapshot(client: Any, routing: Path | None = None) -> list[dict[str, Any]]:
     """Keep original IDs and explicit old input folders after a fallback attempt."""
-    import yaml
     result = client.call('get_queue_data') + client.call('get_collector_data')
     if not isinstance(result, list) or any(not isinstance(item, dict) for item in result):
         raise CollectionError('Unexpected pyLoad package snapshot')
     ids = [item['pid'] for item in result]
     if len(ids) != len(set(ids)):
         raise CollectionError('Package appears in both pyLoad destinations')
-    value = yaml.safe_load(routing.read_text()) if routing and routing.exists() else {'packages': {}}
+    from library.operational_state import NativeHistory
+    value = NativeHistory(routing.parent).routing() if routing else {'packages':{}}
     for package in result:
         operation = value.get('packages', {}).get(str(package['pid']), {})
         folders = operation.get('input_folders', {})

@@ -87,7 +87,7 @@ jobs:
           REVISION: ${{ needs.preflight.outputs.revision }}
         run: |
           bash ops/validate_image.sh "$IMAGE" "$RUNNER_TEMP/candidate/image.oci.tar" "$REVISION" "$RUNNER_TEMP/candidate"
-          manifest=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/candidate/identity.json"))["manifest_digest"])')
+          manifest=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/candidate/identity.json"))["index_digest"])')
           docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 0 --entrypoint /app/.venv/bin/python "$manifest" - < ops/release_inventory.py > "$RUNNER_TEMP/candidate/inventory.json"
           docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 0 --entrypoint /app/.venv/bin/python "$manifest" - < ops/collect_release_notices.py > "$RUNNER_TEMP/candidate/notices.tar"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

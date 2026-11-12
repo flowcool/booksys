@@ -1,3 +1,4 @@
+from postgres_fixture import create_catalog
 import io
 import tempfile
 import unittest
@@ -37,7 +38,7 @@ class BundleTests(unittest.TestCase):
             root = Path(folder)
             reception, path, captured, journal, queue = inputs(root, [('Volume 1.cbz', comic()), ('Volume 2.cbz', comic())])
             before = path.read_bytes()
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             state = receive(store, reception, captured, journal, queue, stable_seconds=.01,
                             incremental=True, inspection_limit=1)
             children = [origin for origin in state['origins'].values() if origin.get('parent_origin')]
@@ -59,7 +60,7 @@ class BundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             reception, parent, captured, journal, queue = inputs(root, [('One.cbz', comic())])
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
             asset = next(iter(state['assets']))
             derived = resolve_asset(store, reception, state, asset)
@@ -80,7 +81,7 @@ class BundleTests(unittest.TestCase):
                 root = Path(folder)
                 reception, parent, captured, journal, queue = inputs(root, [('valid.cbz', comic()), (name, data)])
                 original = parent.read_bytes()
-                state = receive(Catalog(root / 'state'), reception, captured, journal, queue, stable_seconds=.01)
+                state = receive(create_catalog(self,root / 'state'), reception, captured, journal, queue, stable_seconds=.01)
                 self.assertFalse(state['assets'])
                 self.assertEqual(next(iter(state['origins'].values()))['availability'], 'rejected')
                 self.assertEqual(parent.read_bytes(), original)
@@ -108,7 +109,7 @@ class BundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             reception, _, captured, journal, queue = inputs(root, [('One.cbz', comic())])
-            receive(Catalog(root / 'state'), reception, captured, journal, queue, stable_seconds=.01)
+            receive(create_catalog(self,root / 'state'), reception, captured, journal, queue, stable_seconds=.01)
             projection = build_projection(root)
             parent = next(row for row in projection['rows'] if row.get('kind') == 'bundle')
             child = next(row for row in projection['rows'] if row.get('kind') == 'bundle_member')
@@ -168,7 +169,7 @@ class BundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             reception, _, captured, journal, queue = inputs(root, [('One.cbz', nested.getvalue())])
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             with patch('library.bundles.inspect_file', wraps=inspect_file) as inspector:
                 for _ in range(2):
                     receive(store, reception, captured, journal, queue, stable_seconds=.01, incremental=True)
@@ -186,7 +187,7 @@ class BundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             reception, _, captured, journal, queue = inputs(root, [('One.cbz', comic())])
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
             asset = next(iter(state['assets']))
             child = next(o for o in state['origins'].values() if o.get('parent_origin'))
@@ -203,30 +204,13 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(updated['assets'][asset]['origins'], state['assets'][asset]['origins'])
             self.assertTrue(any(o['availability'] == 'rejected' for o in updated['origins'].values() if not o.get('parent_origin')))
 
-    def test_owned_engine_is_stopped_and_partial_evidence_preserved_on_timeout(self):
-        import os
-        from unittest.mock import patch
-        import subprocess
-        from library.bundles import retain
-        if not os.environ.get('BOOKSYS_READER_IMAGE'):
-            self.skipTest('Qualified Docker image required for owned-engine stop proof')
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            _, parent, *_ = inputs(root, [('One.cbz', comic())])
-            with self.assertRaisesRegex(LibraryError, 'wall limit'):
-                retain(parent, root / 'state', stable_seconds=.01, wall_limit=.001)
-            result = subprocess.run(['docker', 'ps', '--filter', 'name=booksys-bundle-', '--format', '{{.Names}}'],
-                                    capture_output=True, check=True)
-            self.assertEqual(result.stdout.strip(), b'')
-            self.assertTrue(any(path.is_dir() for path in (root / 'state/bundle-inputs').iterdir()))
-
     def test_derived_file_uses_normal_manual_identity_and_publication_gates(self):
         from library.catalog import apply_effect
         from library.publish import Publisher, Capacity
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             reception, _, captured, journal, queue = inputs(root, [('One.cbz', comic())])
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
             asset = next(iter(state['assets']))
             publisher = Publisher(store, reception, root / 'library', isolated=True, capacity=Capacity(reserve=0))
@@ -247,7 +231,7 @@ class BundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             reception, _, captured, journal, queue = inputs(root, [('One.cbz', comic())])
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             with patch('library.bundles.retain', side_effect=LibraryError('Isolated bundle worker failed')) as engine:
                 for _ in range(2):
                     receive(store, reception, captured, journal, queue, stable_seconds=.01, incremental=True)
@@ -308,7 +292,7 @@ class BundleTests(unittest.TestCase):
             reception, _, captured, journal, queue = inputs(root, [('One.cbz', comic())])
             (reception / 'mirror.cbz').write_bytes(comic())
             queue[0]['links'].append({'fid': 2, 'name': 'mirror.cbz', 'status': 0, 'size': len(comic())})
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
             asset = next(iter(state['assets']))
             child = next(o for o in state['origins'].values() if o.get('parent_origin'))

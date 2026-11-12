@@ -11,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from library.catalog import Catalog, atomic_yaml, lock, now
 from library.intake import receive
 from library.runtime import lab_preflight
-from library.web import read_yaml
-import yaml
+from library.operational_state import CollectorState,RuntimeObservation
 
 
 def main() -> int:
@@ -24,19 +23,18 @@ def main() -> int:
     if not 1 <= len(set(args.origin)) == len(args.origin) <= 3:
         parser.error('Select one to three distinct exact origins')
     root = args.root
-    snapshots = root / 'snapshots'
-    lab_preflight(args.reception, root / 'library', root / 'state',
-                  tuple(snapshots / name for name in ('captured.yaml', 'submissions.yaml', 'queue.yaml')))
+    lab_preflight(args.reception,root/'library',root/'state')
     with lock(root / 'state/library-cycle.lock', blocking=False):
         store = Catalog(root / 'state')
         before = store.read()
         selected = {oid: before['origins'][oid] for oid in args.origin}
-        captured = read_yaml(snapshots / 'captured.yaml')
-        journal = read_yaml(snapshots / 'submissions.yaml')
+        database=store.backend()._database
+        collector=CollectorState(root/'state',database=database)
+        captured=collector.captured()
+        journal=collector.monitor()
         journal['submissions'] = {source: value for source, value in journal['submissions'].items()
                                  if source in {o['source'] for o in selected.values()}}
-        queue: list[dict[str, Any]] = yaml.load((snapshots / 'queue.yaml').read_text(),
-            Loader=getattr(yaml, 'CSafeLoader', yaml.SafeLoader))
+        queue=RuntimeObservation(database).queue()[0]
         for origin in selected.values():
             submission = journal['submissions'].get(origin['source'], {})
             packages = [p for p in queue if p['pid'] == origin['pid']]
@@ -56,7 +54,7 @@ def main() -> int:
         checkpoint = evidence / ('before-' + str(before['revision']) + '.yaml')
         if checkpoint.exists():
             raise ValueError('Recovery checkpoint already exists')
-        atomic_yaml(checkpoint, before)
+        atomic_yaml(checkpoint,dict(before))
         after = receive(store, args.reception, captured, journal, queue,
                         incremental=True, inspection_limit=3)
         atomic_yaml(evidence / 'result.yaml', {'created_at': now(), 'checkpoint': str(checkpoint),

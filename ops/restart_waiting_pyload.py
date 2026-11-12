@@ -8,11 +8,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from pipeline import Pyload
+from library.operational_state import CollectorState
 
 
 def main() -> None:
@@ -20,6 +20,8 @@ def main() -> None:
     parser.add_argument("file_id", type=int)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
+    if args.apply:
+        raise SystemExit('Historical direct pyLoad restart is retired; use a qualified native operation')
     os.umask(0o077)
     target = subprocess.check_output(
         ["docker", "info", "--format", "{{.Name}}"], text=True
@@ -33,7 +35,7 @@ def main() -> None:
     active = next(f for f in api.call("status_downloads") if f["fid"] == args.file_id)
     if not package["name"].startswith("Booksys-") or package["dest"] != 1:
         raise RuntimeError("Target is not a queued Booksys package")
-    monitor = yaml.safe_load(Path("/data/booksys/state/monitor.yaml").read_text())
+    monitor = CollectorState(Path("/data/booksys/state")).monitor()
     if not any(entry.get("status") == "queued" and entry.get("package_id") == package["pid"]
                and entry.get("name") == package["name"] for entry in monitor["submissions"].values()):
         raise RuntimeError("Package is not a confirmed collector submission")

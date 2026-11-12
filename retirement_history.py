@@ -7,9 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-import yaml
 
-from booksys import CollectionError
+from booksys_core.errors import CollectionError
 
 
 def history_path(routing: Path) -> Path:
@@ -28,11 +27,13 @@ def package_identity(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def read_history(path: Path) -> dict[str, Any]:
-    if path.is_symlink():
-        raise CollectionError('Retirement history must not be a symlink')
-    if not path.exists():
-        return {'schema': 1, 'acquisitions': {}}
-    value = yaml.safe_load(path.read_text())
+    from library.operational_state import NativeHistory
+    value = NativeHistory(path.parent).retirements()
+    return validate_history(value)
+
+
+def validate_history(value: dict[str,Any]) -> dict[str,Any]:
+    """Validate the same historical contract for runtime reads and offline import."""
     if (not isinstance(value, dict) or value.get('schema') != 1
             or not isinstance(value.get('acquisitions'), dict)):
         raise CollectionError('Invalid retirement history')

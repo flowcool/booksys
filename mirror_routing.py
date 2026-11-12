@@ -8,13 +8,15 @@ import time
 from urllib.parse import urlsplit
 from typing import Any
 
-import yaml
 
-from booksys import CollectionError
-from library.catalog import atomic_yaml, lock, now
+from booksys_core.errors import CollectionError
+from booksys_core.network_admission import native_operation, native_receipt
+from library.catalog import lock, now
+from booksys_core.values import digest
 from library.intake import reception_path
 from library.readers import fingerprint, sha256
 from mirrors import host_sets, link_identity
+from library.operational_state import NativeHistory,CollectorState,OperationalCompletion
 
 
 def package_signature(package: dict[str, Any]) -> list[list[Any]]:
@@ -34,6 +36,7 @@ def stopped(client: Any, pid: int) -> None:
         client.call('stop_downloads', write=True, file_ids=ids)
     for _ in range(20):
         if not any(item['package_id'] == pid for item in client.call('status_downloads')):
+            native_receipt(digest({'stopped_package': pid}))
             return
         time.sleep(.1)
     raise CollectionError('Owned package transfers did not stop; preserve routing intent')
@@ -62,7 +65,26 @@ def technical(origin: dict[str, Any] | None, state: dict[str, Any]) -> str:
 
 def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[str, Any],
                   state: dict[str, Any], reception: Path, path: Path, *, apply: bool = False,
-                  availability: dict[str, Any] | None = None) -> dict[str, Any]:
+                  availability: dict[str, Any] | None = None,
+                  completions: list[OperationalCompletion] | None = None,
+                  task_attempt: tuple[str, int] | None = None) -> dict[str, Any]:
+    from booksys_core.downloader import references
+    from booksys_core.values import digest
+    with references([{'kind': 'source', 'id': digest(source)},
+                     {'kind': 'operation', 'id': digest(['routing', entry.get('package_id')])}]):
+        with native_operation(client, 'routing:' + source, path):
+            result = _route_package(client, source, entry, record, state, reception, path,
+                                    apply=apply, availability=availability,completions=completions, task_attempt=task_attempt)
+            if apply and result['outcome'] in ('retired', 'unchanged', 'parked', 'fallback_active'):
+                native_receipt(digest(result))
+            return result
+
+
+def _route_package(client: Any, source: str, entry: dict[str, Any], record: dict[str, Any],
+                   state: dict[str, Any], reception: Path, path: Path, *, apply: bool = False,
+                   availability: dict[str, Any] | None = None,
+                  completions: list[OperationalCompletion] | None = None,
+                  task_attempt: tuple[str, int] | None = None) -> dict[str, Any]:
     """Read-only plan unless apply=True; caller owns operation authorization."""
     if path.resolve().is_relative_to(reception.resolve()):
         raise CollectionError('Private routing journal must stay outside reception')
@@ -70,7 +92,7 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
     if not (host == 'bookys-ebooks.com' or host.endswith('.bookys-ebooks.com')):
         raise CollectionError('Mirror routing requires a tracked Bookys source')
     with lock(path.with_suffix('.lock')):
-        journal = yaml.safe_load(path.read_text()) if path.exists() else {'schema': 1, 'packages': {}}
+        journal = NativeHistory(path.parent).routing()
         if journal.get('schema') != 1 or not isinstance(journal.get('packages'), dict):
             raise CollectionError('Invalid mirror routing journal')
         from retirement_history import history_path, read_history
@@ -124,6 +146,9 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
                 'input_folders': {str(item['fid']): package['folder'] for item in package['links']},
                 'fallback_host': candidate[0] if candidate else None, 'fallback_links': candidate[1] if candidate else [],
                 'created_at': now(), 'files': {}}
+            if task_attempt is not None:
+                operation['task_attempt'] = list(task_attempt)
+            operation['diagnostic_operation'] = digest(['routing', entry['package_id']])
             for item in package['links']:
                 if item['status'] == 0:
                     file = reception_path(reception, package['folder'], item['name'])
@@ -137,12 +162,16 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
         journal['packages'][key] = operation
         def save(phase: str) -> None:
             operation['phase'] = phase
-            atomic_yaml(path, journal)
+            if completions is not None and (phase=='active' or phase=='stopped' and operation['kind']=='park'):
+                completions.append(CollectorState(path.parent).prepare_completion('routing',key,dict(operation)))
+            else:
+                NativeHistory(path.parent).route(key,operation)
         if operation['phase'] == 'intent':
             save('intent')
             client.call('move_package', write=True, destination=0, package_id=pid)
             if owned_package(client, entry)['dest'] != 0:
                 raise CollectionError('Collector destination was not confirmed')
+            native_receipt(digest({'parked_package': pid}))
             save('parked')
         if operation['phase'] == 'parked':
             stopped(client, pid)
@@ -192,6 +221,7 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
             raise CollectionError('Fallback folder overlaps retained originals')
         operation['attempt_folder'] = attempt_package['folder']
         operation['attempt_files'] = package_signature(attempt_package)
+        native_receipt(digest(attempt_package))
         save('attempt_verified')
         client.call('move_package', write=True, destination=1, package_id=attempt_pid)
         if client.call('get_package_data', package_id=attempt_pid)['dest'] != 1:
@@ -201,6 +231,13 @@ def route_package(client: Any, source: str, entry: dict[str, Any], record: dict[
 
 
 def restore_package(client: Any, entry: dict[str, Any], operation: dict[str, Any]) -> None:
+    from booksys_core.downloader import references
+    from booksys_core.values import digest
+    with references([{'kind': 'operation', 'id': digest(['routing', entry['package_id']])}]):
+        _restore_package(client, entry, operation)
+
+
+def _restore_package(client: Any, entry: dict[str, Any], operation: dict[str, Any]) -> None:
     """Explicit rollback only; no automatic restart of old mirrors."""
     original = owned_package(client, entry)
     if package_signature(original) != operation['original_files']:

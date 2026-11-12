@@ -10,7 +10,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from booksys import BrowserError, CollectionError
+from booksys_core.errors import BrowserError, CollectionError
+from booksys_core.scheduler import Deferred
 
 ImageFetcher = Callable[[str, str], tuple[bytes, str]]
 
@@ -82,6 +83,8 @@ def write_fiche(source: str, record: dict[str, Any], package: dict[str, Any], ro
             raise CoverError("Cover retrieval not configured")
         try:
             data, extension = fetch_image(page["cover_url"], source)
+        except Deferred:
+            raise
         except BrowserError as exc:
             raise CoverBrowserError(str(exc)) from exc
         except (OSError, ValueError, CollectionError) as exc:

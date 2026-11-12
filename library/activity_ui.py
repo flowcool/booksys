@@ -2,6 +2,7 @@
 ACTIVITY_PANE = r'''<section id="activity-pane" hidden>
 <style>#activity-pane details{margin:.8em 0;padding:.8em;background:#162635;border:1px solid #345}#activity-pane li{padding:.7em 0;border-bottom:1px solid #345;overflow-wrap:anywhere}#activity-pane li p{margin:.4em 0;color:#b9c9d6}#activity-pane summary{cursor:pointer;font-weight:600}#activity-pane button:disabled{opacity:.45}</style>
 <h2>Activité</h2><p id="activity-clock">Observation en attente.</p><p id="activity-resources"></p>
+<div id="activity-queues"></div>
 <p>Collecte → téléchargements → traitement local → identification et copies. Byparr sert la collecte. Le retrait conserve les fichiers locaux.</p>
 <div id="activity-stages"></div><details><summary>Événements importants · 24 heures</summary>
 <p id="activity-history-start"></p><ol id="activity-events"></ol></details></section>
@@ -22,6 +23,9 @@ previous.onclick=()=>{page--;show()};next.onclick=()=>{page++;show()};controls.a
 if(stage.details_truncated)box.append(node('p','Liste limitée à 2 000 éléments. Les compteurs couvrent tous les éléments.'));show();return box}
 
 function render(data){el('activity-clock').textContent='Observation partagée : '+date(data.observed_at)+' · Actualisation : 30 secondes';
+const queues=el('activity-queues');queues.replaceChildren();
+for(const [name,q] of Object.entries(data.queues||{})){const c=q.counts||{};
+queues.append(node('p',name+' · tâches : '+(c.active||0)+' active / '+q.active_limit+' · '+(c.eligible||0)+' éligibles dont '+(c.resource_wait||0)+' attendent des ressources · '+(c.deferred||0)+' différées · '+(c.blocked||0)+' bloquées · observation '+q.freshness+' · acteur '+q.actor_freshness+' · plus ancienne : '+date(q.oldest_eligible_at)+' · dernier résultat : '+date(q.last_progress_at)+' · prochaine échéance : '+date(q.next_due_at)+' · attente : '+(q.resource_wait_reasons||[]).join(', ')))}
 const r=data.resources||{},space=r.data||{},mem=r.byparr_memory||{},services=r.services||{};
 const gib=v=>v===null||v===undefined?'inconnu':(v/1073741824).toFixed(2)+' GiB';
 el('activity-resources').textContent='/data libre : '+gib(space.free_bytes)+' ['+space.freshness+' · '+date(space.observed_at)+'] | Byparr : '+gib(mem.used_bytes)+' / '+gib(mem.limit_bytes)+' ['+mem.freshness+' · '+date(mem.observed_at)+'] | Services : '+Object.entries(services.states||{}).map(([k,v])=>k+' '+v).join(', ')+' ['+services.freshness+' · '+date(services.observed_at)+']';

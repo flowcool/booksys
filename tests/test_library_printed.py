@@ -3,6 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from postgres_fixture import create_store
+from library.primitives import empty
+
 from library.metadata import Providers
 
 
@@ -10,7 +13,8 @@ class PrintedIdentityTests(unittest.TestCase):
     def test_bnf_resolves_exact_ean_in_isbn10_record_without_inventing_revision(self):
         body = (Path(__file__).parent / 'fixtures/bnf-prince.xml').read_text()
         with tempfile.TemporaryDirectory() as folder:
-            p = Providers(Path(folder), fetch=lambda url: (200, body), interval=0)
+            create_store(self, Path(folder), empty())
+            p = Providers(Path(folder)/"cache", fetch=lambda url: (200, body), interval=0)
             result = p.source('bnf', '9782871297833')
             self.assertEqual(result['status'], 'ok', result)
             candidate = result['candidate']
@@ -25,7 +29,8 @@ class PrintedIdentityTests(unittest.TestCase):
         from library.printed import identify_printed
         body = (Path(__file__).parent / 'fixtures/bnf-prince.xml').read_text()
         with tempfile.TemporaryDirectory() as folder:
-            candidate = Providers(Path(folder), fetch=lambda url: (200, body), interval=0).source('bnf', '9782871297833')['candidate']
+            create_store(self, Path(folder), empty())
+            candidate = Providers(Path(folder)/"cache", fetch=lambda url: (200, body), interval=0).source('bnf', '9782871297833')['candidate']
         printed = {'status': 'ok', 'asset': 'a' * 64, 'pages': [
             {'name': '001.jpg', 'sha256': 'b' * 64, 'text': 'Takeshi Konomi\n9"782871 297833'},
             {'name': '004.jpg', 'sha256': 'c' * 64, 'text': 'Volume 2 — LES CROCHETS\nDE LA VIPERE'}],
@@ -116,7 +121,7 @@ class PrintedIdentityTests(unittest.TestCase):
         from test_library_publish import setup_library
         body = (Path(__file__).parent / 'fixtures/bnf-prince.xml').read_text()
         with tempfile.TemporaryDirectory() as folder:
-            store, _, _, asset = setup_library(Path(folder))
+            store, _, _, asset = setup_library(Path(folder),self)
             state = store.read()
             state['works'], state['editions'], state['variants'] = {}, {}, {}
             state['assets'][asset].pop('identity')
@@ -142,7 +147,8 @@ class PrintedIdentityTests(unittest.TestCase):
                  '<!DOCTYPE root [<!ENTITY a SYSTEM "file:///etc/passwd">]>' + body]
         for content in cases:
             with self.subTest(case=content[:40]), tempfile.TemporaryDirectory() as folder:
-                result = Providers(Path(folder), fetch=lambda url: (200, content), interval=0).source('bnf', '9782871297833')
+                create_store(self, Path(folder), empty())
+                result = Providers(Path(folder)/"cache", fetch=lambda url: (200, content), interval=0).source('bnf', '9782871297833')
                 self.assertEqual(result['status'], 'unavailable', result)
 
     def test_bounded_process_rejects_stdout_stderr_and_timeout(self):
@@ -163,7 +169,7 @@ class PrintedIdentityTests(unittest.TestCase):
         from test_library_publish import setup_library
         import json
         with tempfile.TemporaryDirectory() as folder:
-            store, _, _, asset = setup_library(Path(folder))
+            store, _, _, asset = setup_library(Path(folder),self)
             state = store.read()
             state['works'], state['editions'], state['variants'] = {}, {}, {}
             state['assets'][asset].pop('identity')

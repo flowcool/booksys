@@ -5,7 +5,8 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
-from library.catalog import Catalog, LibraryError, now, digest
+from library.catalog import Catalog
+from library.primitives import LibraryError, now, digest
 from library.metadata import Providers, enrich
 from library.printed import scan_printed
 from library.publish import Publisher
@@ -39,12 +40,12 @@ def ready_asset(asset: dict[str, Any], state: dict[str, Any], timestamp: float) 
 
 
 def ready_assets(store: Catalog, *, clock: Callable[[], float] = time.time) -> int:
-    state = store.read()
-    return sum(ready_asset(asset, state, clock()) for asset in state['assets'].values())
+    return sum(ready_asset(asset, store.working_set('identify', {'assets': [key]}), clock())
+               for key, asset in store.records('assets'))
 
 
 def save_attempt(store: Catalog, asset: str, attempt: dict[str, Any]) -> None:
-    current = store.read()
+    current = store.working_set('identify', {'assets': [asset]})
     current['assets'][asset]['automation'] = attempt
     store.save(current, expected=current['revision'])
     from activity import report
@@ -56,12 +57,12 @@ def save_attempt(store: Catalog, asset: str, attempt: dict[str, Any]) -> None:
 
 def process_assets(store: Catalog, reception: Path, library: Path, providers: Providers,
                    *, limit: int = 1, clock: Callable[[], float] = time.time) -> dict[str, int]:
-    initial = store.read()
     if limit <= 0:
         ready = ready_assets(store, clock=clock)
         return {'processed': 0, 'backlog': ready, 'ready_backlog': ready}
     completed = 0
-    for key, asset in initial['assets'].items():
+    for key, asset in store.records('assets'):
+        initial = store.working_set('identify', {'assets': [key]})
         if not ready_asset(asset, initial, clock()):
             continue
         attempt = dict(asset.get('automation', {}))
@@ -102,7 +103,7 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
                         raise OSError('Printed evidence engine unavailable')
                     current = enrich(store, key, providers, [])
             else:
-                current = store.read()
+                current = store.working_set('identify', {'assets': [key]})
             value = current['assets'][key]
             events = providers.events[event_start:]
             deferred = any(event.get('reason') == 'Request budget exhausted' for event in events)
@@ -141,10 +142,9 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
             record.update(outcome='retry' if attempts < 3 else 'unavailable', reason='Printed evidence engine unavailable')
         if record.get('outcome') == 'unavailable':
             record['next_attempt'] = clock() + WEEK
-        record['evidence'] = evidence_version(store.read()['assets'][key])
+        record['evidence'] = evidence_version(store.get('assets', key) or {})
         save_attempt(store, key, record)
-    current = store.read()
     backlog = sum(not asset.get('automation') or asset['automation'].get('outcome') in
-                  ('running', 'retry', 'deferred') for asset in current['assets'].values()
+                  ('running', 'retry', 'deferred') for _, asset in store.records('assets')
                   if asset.get('disposition') not in ('exclude', 'defer'))
     return {'processed': completed, 'backlog': backlog, 'ready_backlog': ready_assets(store, clock=clock)}

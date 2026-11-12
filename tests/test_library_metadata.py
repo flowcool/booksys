@@ -4,6 +4,9 @@ import unittest
 from pathlib import Path
 import yaml
 
+from postgres_fixture import create_store
+from library.primitives import empty
+
 from library.metadata import enrich, identify, parse_bdtheque, parse_mangadex, Providers
 
 
@@ -31,7 +34,7 @@ class IdentityTests(unittest.TestCase):
             def edition(self, code):
                 return {'status': 'ok', 'candidate': CANDIDATE}
         with tempfile.TemporaryDirectory() as folder:
-            store, _, _, asset = setup_library(Path(folder))
+            store, _, _, asset = setup_library(Path(folder),self)
             state = store.read()
             state['works'], state['editions'], state['variants'] = {}, {}, {}
             state['assets'][asset].pop('identity')
@@ -101,7 +104,8 @@ class ProviderTests(unittest.TestCase):
                 return 200, json.dumps({'type': {'key': '/type/edition'}, 'key': '/books/OL3M', 'title': 'Album'})
             self.fail(url)
         with tempfile.TemporaryDirectory() as folder:
-            providers = Providers(Path(folder), fetch=fetch, interval=0)
+            create_store(self, Path(folder), empty())
+            providers = Providers(Path(folder)/"cache", fetch=fetch, interval=0)
             results = providers.resolve_discovery({'candidates': [
                 {'edition_key': ['OL1M']}, {'edition_key': ['OL2M']}, {'edition_key': ['OL3M']}]})
             self.assertEqual([item['status'] for item in results], ['unavailable', 'unavailable', 'ok'])
@@ -112,7 +116,8 @@ class ProviderTests(unittest.TestCase):
             calls.append(url)
             return 429, 'rate limit'
         with tempfile.TemporaryDirectory() as folder:
-            providers = Providers(Path(folder), fetch=fetch, interval=0, budget=1)
+            create_store(self, Path(folder), empty())
+            providers = Providers(Path(folder)/"cache", fetch=fetch, interval=0, budget=1)
             first = providers.discover('Album')
             self.assertEqual(first['status'], 'unavailable')
             self.assertNotIn('public', first)
@@ -142,7 +147,7 @@ class YieldIdentityTests(unittest.TestCase):
                 return {'status':'ok','candidate':{**CANDIDATE,'source':'bnf','upstream':'bnf',
                     'edition_ref':'ark:/12148/cbfixture','url':'https://catalogue.bnf.fr/fixture'}}
         with tempfile.TemporaryDirectory() as folder:
-            store,_,_,asset=setup_library(Path(folder))
+            store,_,_,asset=setup_library(Path(folder),self)
             state=store.read();state['assets'][asset].pop('identity');state['variants'].clear();state['editions'].clear();state['works'].clear()
             state['assets'][asset]['embedded']={key:value for key,value in EMBEDDED.items() if key!='ISBN'}
             state['assets'][asset]['embedded'].update(EditionDate='2003',EditionRevision='1 edition')
@@ -152,3 +157,17 @@ class YieldIdentityTests(unittest.TestCase):
             state=store.read();state['assets'][asset].pop('identity');state['assets'][asset]['embedded']['EditionDate']='2004'
             store.save(state,expected=state['revision'])
             self.assertEqual(enrich(store,asset,Provider(),[])['assets'][asset]['identity_result']['status'],'pending')
+
+
+class ProviderReferenceTests(unittest.TestCase):
+    def test_bdtheque_reference_language_and_long_invalid_prefix(self):
+        from unittest.mock import Mock
+        from library.primitives import LibraryError
+        provider = object.__new__(Providers)
+        provider.get = Mock(return_value={'status': 'unavailable'})
+        for value in ('123/a-slug0', '٠١/a', '0' * 10000 + '/a'):
+            self.assertEqual(provider.source('bdtheque', value)['status'], 'unavailable')
+        for value in ('0' * 100000 + '!', '1/A', '1/a/b', '/a', '1/'):
+            with self.assertRaises(LibraryError):
+                provider.source('bdtheque', value)
+        self.assertEqual(provider.get.call_count, 3)

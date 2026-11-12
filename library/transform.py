@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from library.catalog import LibraryError, sync_dir
+from library.primitives import LibraryError, sync_dir
 from library.readers import fingerprint, inspect_file, sha256, worker_failure
 from library.xmlmetadata import validate_xml
 
@@ -50,25 +50,37 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
     # PDF rendering is page-wise (60 s/page), with a bounded total lab window.
     wall_limit = 1800 if source.suffix.lower() == '.pdf' else 60
     started = time.monotonic()
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        check_capacity()
-        payload: bytes | None = request
-        while True:
-            try:
-                stdout, stderr = process.communicate(payload, timeout=.1)
-                break
-            except subprocess.TimeoutExpired:
-                payload = None
-                check_capacity()
-                if time.monotonic() - started > wall_limit:
-                    raise LibraryError('Comic transformation exceeded time limit')
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.communicate()
-    if process.returncode:
-        raise LibraryError(worker_failure('Isolated comic transformation failed', process.returncode, stderr))
+    from library.decoder_ownership import prepare
+    command = prepare(command)
+    from library.reader_client import endpoint, execute
+    if endpoint():
+        rendered = execute('transform', source, json.loads(request), destination=destination)
+        stdout, stderr, returncode = json.dumps(rendered).encode(), b'', 0
+    else:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            check_capacity()
+            payload: bytes | None = request
+            while True:
+                try:
+                    stdout, stderr = process.communicate(payload, timeout=.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    payload = None
+                    check_capacity()
+                    if time.monotonic() - started > wall_limit:
+                        raise LibraryError('Comic transformation exceeded time limit')
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        returncode = process.returncode
+
+    if returncode in (125, 126, 127):
+        from library.readers import ReaderUnavailable
+        raise ReaderUnavailable('Comic transformation execution dependency unavailable')
+    if returncode:
+        raise LibraryError(worker_failure('Isolated comic transformation failed', returncode, stderr))
     outcome: dict[str, Any] = json.loads(stdout)
     if outcome['status'] != 'validated' or outcome.get('input_sha256') != asset_hash:
         raise LibraryError('Comic transformation blocked: ' + outcome.get('reason', 'input hash mismatch'))

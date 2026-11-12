@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-from library.catalog import LibraryError, digest, now
+from library.primitives import LibraryError, digest, now
 
 
 def readonly_mount(path: Path) -> bool:
@@ -78,3 +78,18 @@ def lab_preflight(reception: Path, root: Path, state: Path,
     return {'status': 'lab', 'writer_uid': os.getuid(),
             'capacity_window': 'available_space_checks_only',
             'concurrent_writer_reserve_guaranteed': False}
+
+
+def configured_scripts() -> Path:
+    configured = os.environ.get('BOOKSYS_PYLOAD_SCRIPTS_ROOT')
+    if configured:
+        target = Path(configured)
+        if not target.is_absolute() or any(p.is_symlink() for p in (target, *target.parents)) or not target.is_dir():
+            raise LibraryError('Invalid configured pyLoad scripts root')
+        return target
+    compose = Path(__file__).resolve().parents[1] / 'compose.shared.yaml'
+    volumes = yaml.safe_load(compose.read_text())['services']['pyload']['volumes']
+    roots = [v.split(':')[0] for v in volumes if isinstance(v, str) and v.split(':')[1] == '/config']
+    if len(roots) != 1 or not Path(roots[0]).is_absolute():
+        raise LibraryError('Cannot bind pyLoad scripts to the shared Compose configuration')
+    return Path(roots[0]) / 'scripts'

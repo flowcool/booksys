@@ -8,7 +8,9 @@ import json
 import re
 from typing import Any
 
-from library.catalog import Catalog, LibraryError, apply_effect, digest, lock, now, validate
+from library.catalog import Catalog
+from library.primitives import LibraryError, digest, lock, now, validate, WorkingState
+from library.effects import apply_effect
 
 ACTIONS = {'identify', 'identify_work', 'override', 'select', 'exclude', 'defer', 'merge_work', 'separate_edition'}
 
@@ -41,8 +43,15 @@ def cases_for(state: dict[str, Any]) -> dict[str, Any]:
 def report(store: Catalog) -> dict[str, Any]:
     state = store.read()
     store.ledger()  # A missing ledger is never hidden by a regenerated report.
+    cases = cases_for(state)
+    backend = store.backend()
+    if backend is not None:
+        for case in cases.values():
+            if case.get('asset'):
+                indexed = backend.case(case['asset'])
+                case.update(version=indexed['version'], evidence=indexed['evidence'])
     return {'schema': 1, 'source_text_is_untrusted': True, 'created_at': now(),
-            'catalogue_revision': state['revision'], 'cases': cases_for(state)}
+            'catalogue_revision': state['revision'], 'cases': cases}
 
 
 def render_report(value: dict[str, Any]) -> str:
@@ -124,6 +133,8 @@ def validate_request(request: Any, author: str) -> None:
 
 
 def decide(store: Catalog, requests: list[dict[str, Any]], *, author: str, locked: bool = False) -> list[dict[str, Any]]:
+    if store.backend() is not None:
+        return decide_indexed(store, requests, author=author, locked=locked)
     results = []
     # Serializes batch decisions, not hashing, copies, network or the collector.
     with nullcontext() if locked else lock(store.directory / 'decisions.lock'):
@@ -168,6 +179,65 @@ def decide(store: Catalog, requests: list[dict[str, Any]], *, author: str, locke
                 record = store.append_decision(payload)
                 proposed['ledger'].append(record['id'])
                 store.save(proposed, expected=state['revision'])
+                result.update(status='applied', decision=record['id'])
+            except (LibraryError, ValueError, KeyError, TypeError) as exc:
+                result['reason'] = str(exc)
+            results.append(result)
+    return results
+
+
+def decide_indexed(store: Catalog, requests: list[dict[str, Any]], *, author: str,
+                  locked: bool = False) -> list[dict[str, Any]]:
+    """Same closed decision interface with indexed cases and declared closures."""
+    from library.decision_model import verify_record_evidence
+    backend = store.backend()
+    if backend is None:
+        raise LibraryError('PostgreSQL authority required')
+    results = []
+    with nullcontext() if locked else lock(store.directory / 'decisions.lock'):
+        for request in requests:
+            result = {'request_id': request.get('request_id') if isinstance(request, dict) else None, 'status': 'rejected'}
+            try:
+                validate_request(request, author)
+                store.project_pending(locked=True)
+                previous = backend.decisions(request_id=request['request_id'])
+                if previous:
+                    record = previous[0]
+                    if record.get('request') != request or record.get('author') != author:
+                        raise LibraryError('Request ID reused with different content')
+                    verify_record_evidence(store, record)
+                    store.project_pending(locked=True)
+                    results.append({**result, 'status': 'applied', 'decision': record['id'], 'replay': True})
+                    continue
+                store.project_pending(locked=True)
+                with backend._database.connection() as db:
+                    binding = db.execute('SELECT kind,target FROM case_bindings WHERE id=%s', (request['case'],)).fetchone()
+                if not binding or binding[0] != 'assets':
+                    raise LibraryError('Unvalidated file cannot receive bibliographic admission')
+                asset = binding[1]
+                case = backend.case(asset)
+                if request['version'] != case['version']:
+                    results.append({**result, 'status': 'stale', 'reason': 'Case inputs changed'})
+                    continue
+                values = request['values']
+                refs = {'assets': [asset]}
+                for kind, field in (('works', 'work_id'), ('works', 'source_work_id'), ('editions', 'edition_id')):
+                    if values.get(field):
+                        refs.setdefault(kind, []).append(values[field])
+                state = store.working_set(request['action'], refs)
+                if not isinstance(state,WorkingState) or state.conflict is None:
+                    raise LibraryError('Decision requires original scoped inputs')
+                payload = {'request_id': request['request_id'], 'request': copy.deepcopy(request),
+                    'target': asset, 'action': request['action'], 'values': values, 'author': author,
+                    'time': now(), 'case_version': case['version']}
+                if request['action'] == 'identify':
+                    payload['resolution_inputs'] = digest({'identity_result': state['assets'][asset].get('identity_result'),
+                                                          'assertions': state['assets'][asset].get('assertions', [])})
+                proposed = copy.deepcopy(state)
+                apply_effect(proposed, payload)
+                validate(proposed)
+                record = store.append_decision(payload,conflict=state.conflict)
+                store.project_pending(locked=True)
                 result.update(status='applied', decision=record['id'])
             except (LibraryError, ValueError, KeyError, TypeError) as exc:
                 result['reason'] = str(exc)

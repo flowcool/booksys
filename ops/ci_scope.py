@@ -49,6 +49,8 @@ def scope(paths: list[str] | None) -> dict[str, bool]:
             selected["worker"] = True
         elif path == "Dockerfile.library" or path.startswith("library/"):
             selected["library"] = True
+            if path.startswith("library/"):
+                selected["worker"] = True
         elif path == "Dockerfile.byparr" or path.startswith("ops/byparr/"):
             selected["byparr"] = True
         elif path.startswith("tests/test_library_") or path.startswith("tests/fixtures/french-metadata/"):

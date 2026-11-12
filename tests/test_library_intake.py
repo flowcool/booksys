@@ -1,3 +1,4 @@
+from postgres_fixture import create_catalog
 import tempfile
 import unittest
 import zipfile
@@ -19,7 +20,7 @@ class IntakeTests(unittest.TestCase):
             source = reception / 'album.cbz'
             with zipfile.ZipFile(source, 'w') as archive:
                 archive.writestr('001.png', image_bytes())
-            store = Catalog(root / 'state'); actual = source.stat().st_size
+            store = create_catalog(self,root / 'state'); actual = source.stat().st_size
             captured = {'items': {SOURCE: {'title': 'Album'}}}
             journal = {'submissions': {SOURCE: {'status': 'queued', 'name': 'tracked', 'package_id': 1}}}
             queue = [{'pid': 1, 'name': 'tracked', 'folder': '', 'links': [
@@ -59,7 +60,7 @@ class IntakeTests(unittest.TestCase):
                 {'fid': index, 'name': path.name, 'status': status, 'size': path.stat().st_size + 777}
                 for index, (path, status) in enumerate([(truncated, 0), (corrupt, 0), (good, 7)], 1)]}]
             with patch('library.intake.inspect_file', wraps=inspect_file) as reader:
-                state = receive(Catalog(root / 'state'), reception, captured, journal, queue, stable_seconds=.01)
+                state = receive(create_catalog(self,root / 'state'), reception, captured, journal, queue, stable_seconds=.01)
                 self.assertEqual(reader.call_count, 2)
             self.assertFalse(state['assets'])
             self.assertEqual({o['fid']: o['availability'] for o in state['origins'].values()},
@@ -76,7 +77,7 @@ class IntakeTests(unittest.TestCase):
             original = (reception / 'booksys/album.cbz').read_bytes()
             (reception / 'booksys/mirror.cbz').write_bytes(original)
             (reception / 'lunii/manual.cbz').write_bytes(original)
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             journal = {'submissions': {SOURCE: {'status': 'queued', 'package_id': 1, 'name': 'tracked'}}}
             captured = {'items': {SOURCE: {'title': 'Untrusted source title'}}}
             queue = [{'pid': 1, 'name': 'tracked', 'folder': 'booksys', 'links': [
@@ -102,7 +103,7 @@ class IntakeTests(unittest.TestCase):
             path = reception / 'album.cbz'
             with zipfile.ZipFile(path, 'w') as archive:
                 archive.writestr('001.png', image_bytes())
-            store = Catalog(root / 'state')
+            store = create_catalog(self,root / 'state')
             state = store.read()
             oid = digest({'source': SOURCE, 'pid': 1, 'fid': 1})
             state['origins'][oid] = {'source': SOURCE, 'pid': 1, 'fid': 1, 'path': 'album.cbz',

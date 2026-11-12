@@ -35,6 +35,18 @@ def image_bytes():
 
 
 class ReaderTests(unittest.TestCase):
+    def test_container_setup_failure_never_labels_source_corrupt(self):
+        import subprocess
+        from unittest.mock import patch
+        from library.readers import ReaderUnavailable
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'album.cbz'
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('001.png', image_bytes())
+            with patch('library.readers.subprocess.run', return_value=subprocess.CompletedProcess([],125,b'',b'setup')):
+                with self.assertRaises(ReaderUnavailable):
+                    inspect_file(path, stable_seconds=0)
+
     def test_three_digit_volume_is_not_multipart_but_split_zip_is(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'ZzNavy.-.135.cbz'
@@ -109,6 +121,20 @@ class ReaderTests(unittest.TestCase):
             self.assertEqual(result['status'], 'validated', result)
             path.write_bytes(rar_bytes('001.png', image_bytes(), flags=2))
             self.assertEqual(inspect_file(path, stable_seconds=0.01)['status'], 'pending')
+
+    def test_rar_with_compressed_comment_validates_without_changing_source(self):
+        # RARcomment\n block from markokr/rarfile v4.2, commit 984fcbe,
+        # test/files/rar3-comment-plain.rar. License: fixtures/rarfile-LICENSE.txt.
+        comment = (Path(__file__).parent/'fixtures/rar3-comment.cmt').read_bytes()
+        raw = rar_bytes('001.png', image_bytes())
+        raw = raw[:20] + comment + raw[20:]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'commented.cbr'
+            path.write_bytes(raw)
+            result = inspect_file(path, stable_seconds=.01)
+            self.assertEqual(result['status'], 'validated', result)
+            self.assertEqual(result['pages'], 1)
+            self.assertEqual(path.read_bytes(), raw)
 
     def test_archive_rejections_and_nested_groups(self):
         entries = [('nested.zip', b'PK', 'pending'), ('../page.png', image_bytes(), 'rejected'), ('bad.png', b'bad', 'rejected')]

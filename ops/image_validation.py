@@ -45,8 +45,10 @@ def identity(path: Path, revision: str) -> dict[str, str]:
                     candidates.append((descriptor, document))
 
         index = read("index.json")
-        for descriptor in index["manifests"]:
-            visit(descriptor)
+        if len(index["manifests"]) != 1:
+            raise ValueError("Expected exactly one retained OCI root descriptor")
+        root_descriptor = index["manifests"][0]
+        visit(root_descriptor)
         if len(candidates) != 1:
             raise ValueError("Expected exactly one linux/amd64 runtime image")
         descriptor, manifest = candidates[0]
@@ -59,20 +61,22 @@ def identity(path: Path, revision: str) -> dict[str, str]:
         archive_digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return {"source": SOURCE, "revision": revision, "platform": "linux/amd64",
             "config_digest": image_id, "manifest_digest": str(descriptor["digest"]),
+            "index_digest": str(root_descriptor["digest"]),
             "archive_sha256": "sha256:" + archive_digest}
 
 
-def security_findings(vulnerabilities: dict[str, Any], secrets: dict[str, Any]) -> list[str]:
-    if not isinstance(vulnerabilities.get("Results"), list) or not isinstance(secrets.get("Results"), list):
+def security_findings(vulnerabilities: dict[str, Any], scan_report: dict[str, Any]) -> list[str]:
+    if not isinstance(vulnerabilities.get("Results"), list) or not isinstance(scan_report.get("Results"), list):
         raise ValueError("Missing Trivy scan results")
     findings = []
     for result in vulnerabilities["Results"]:
         for finding in result.get("Vulnerabilities", []):
             if finding["Severity"] in {"HIGH", "CRITICAL"} and finding.get("FixedVersion"):
                 findings.append("vulnerability:" + finding["VulnerabilityID"])
-    for result in secrets["Results"]:
-        for finding in result.get("Secrets", []):
-            findings.append("secret:" + finding["RuleID"])
+    # Publish only a count; identifiers and matched bytes stay in the scanner report.
+    detection_count = sum(len(result.get("Secrets", [])) for result in scan_report["Results"])
+    if detection_count:
+        findings.append("secret-count:" + str(detection_count))
     return findings
 
 
@@ -92,11 +96,11 @@ def main() -> int:
         return 0
     expected = json.loads(args.identity.read_text())
     vulnerabilities = json.loads(args.vulnerabilities.read_text())
-    secrets = json.loads(args.secrets.read_text())
-    for report in (vulnerabilities, secrets):
+    scan_report = json.loads(args.secrets.read_text())
+    for report in (vulnerabilities, scan_report):
         if report.get("Metadata", {}).get("ImageID") != expected["config_digest"]:
             raise ValueError("Scanned image differs from retained OCI artifact")
-    findings = security_findings(vulnerabilities, secrets)
+    findings = security_findings(vulnerabilities, scan_report)
     print(json.dumps({"blocking_findings": findings}, indent=2))
     return int(bool(findings))
 

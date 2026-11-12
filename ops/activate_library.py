@@ -27,6 +27,8 @@ def main() -> None:
     parser.add_argument('--expected-unit-sha256', required=True)
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--recover-missing-reader', action='store_true',
+                        help='Recover an absent reader image; preserve the installed controller and unit settings')
     args = parser.parse_args()
     os.umask(0o077)
     if run('hostname') != 'booksys-host' or ROOT.is_symlink() or UNIT.is_symlink():
@@ -39,7 +41,18 @@ def main() -> None:
                   if line.startswith('Environment=BOOKSYS_READER_IMAGE=')]
     if len(old_images) != 1:
         raise RuntimeError('Expected one existing reader image')
-    run('docker', 'image', 'inspect', old_images[0])
+    if args.recover_missing_reader:
+        if run('docker', 'info', '--format', '{{.Name}}') != 'booksys-host':
+            raise RuntimeError('Unexpected recovery Docker daemon')
+        try:
+            run('docker', 'image', 'inspect', old_images[0])
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode != 1 or 'No such image:' not in (exc.stderr or ''):
+                raise
+        else:
+            raise RuntimeError('Previous reader exists; use ordinary activation')
+    else:
+        run('docker', 'image', 'inspect', old_images[0])
     image = json.loads(run('docker', 'image', 'inspect', args.image))[0]['Id']
     if run('git', '-C', str(ROOT), 'status', '--porcelain'):
         raise RuntimeError('Commit the complete candidate before activation')
@@ -58,11 +71,15 @@ def main() -> None:
     args.evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     (args.evidence/'previous.service').write_bytes(previous)
     (args.evidence/'activation.json').write_text(json.dumps(proof, indent=2))
-    template = (ROOT/'ops/booksys-library.service').read_text()
-    template = template.replace('/opt/booksys', str(ROOT))
-    template = '\n'.join('Environment=BOOKSYS_READER_IMAGE='+image
-                         if line.startswith('Environment=BOOKSYS_READER_IMAGE=') else line
-                         for line in template.splitlines())+'\n'
+    if args.recover_missing_reader:
+        template = previous_text.replace('Environment=BOOKSYS_READER_IMAGE='+old_images[0],
+                                         'Environment=BOOKSYS_READER_IMAGE='+image, 1)
+    else:
+        template = (ROOT/'ops/booksys-library.service').read_text()
+        template = template.replace('/opt/booksys', str(ROOT))
+        template = '\n'.join('Environment=BOOKSYS_READER_IMAGE='+image
+                             if line.startswith('Environment=BOOKSYS_READER_IMAGE=') else line
+                             for line in template.splitlines())+'\n'
     candidate = args.evidence/'candidate.service'
     candidate.write_text(template)
     # Atomic unit replacement; do not touch any catalogue or downloader state.

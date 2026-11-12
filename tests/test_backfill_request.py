@@ -10,15 +10,21 @@ from pathlib import Path
 import yaml
 
 from booksys import DEFAULT_CATEGORY
+from postgres_fixture import create_store
+from library.primitives import empty
+from library.operational_state import CollectorState
 
 
 class BackfillRequestTests(unittest.TestCase):
     def test_completed_batch_is_retained_before_fifty_page_request(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            store=create_store(self,directory,empty())
+            state=CollectorState(directory)
             previous = b'version: 1\nstatus: complete\npages_requested: 10\npages: {}\nitems: {}\nsubmitted: 200\n'
             target = directory / 'backfill.yaml'
             target.write_bytes(previous)
+            state.start_backfill(yaml.safe_load(previous))
             tree = ast.parse(Path('ops/start_backfill.py').read_text())
             self.assertTrue(any(isinstance(n, ast.If) and '__name__' in ast.unparse(n.test) for n in tree.body))
             self.assertFalse(any(isinstance(n, ast.With) for n in tree.body))
@@ -30,10 +36,11 @@ class BackfillRequestTests(unittest.TestCase):
             self.assertEqual(len(archives), 1)
             self.assertEqual(archives[0].read_bytes(), previous)
             self.assertEqual(archives[0].stat().st_mode & 0o777, 0o400)
-            job = yaml.safe_load(target.read_text())
+            job = state.backfill()
             self.assertEqual((job['pages_requested'], job['next_page'], job['status']),
                              (50, DEFAULT_CATEGORY, 'pending'))
-            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(target.read_bytes(),previous)
+            self.assertEqual(len(list((directory/'backfill-requests').glob('*.yaml'))),1)
             first = target.read_bytes()
             retry = subprocess.run([sys.executable, 'ops/start_backfill.py', '--directory', str(directory),
                                     '--pages', '50', '--archive-completed'], capture_output=True, text=True, env=environment)
@@ -46,12 +53,15 @@ class BackfillRequestTests(unittest.TestCase):
         from booksys import CollectionError
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            store=create_store(self,directory,empty())
+            state=CollectorState(directory)
             for pages in (0, 51, True):
                 with self.assertRaises(CollectionError):
                     record_request(directory, pages)
             self.assertFalse((directory / 'backfill.yaml').exists())
             original = b'version: 1\nstatus: complete\n'
             (directory / 'backfill.yaml').write_bytes(original)
+            state.start_backfill(yaml.safe_load(original))
             with self.assertRaises(CollectionError):
                 record_request(directory, 50)
             self.assertEqual((directory / 'backfill.yaml').read_bytes(), original)
@@ -63,9 +73,12 @@ class BackfillRequestTests(unittest.TestCase):
         import hashlib
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            store=create_store(self,directory,empty())
+            state=CollectorState(directory)
             previous = b'version: 1\nstatus: complete\n'
             (directory / 'backfill.yaml').write_bytes(previous)
-            with patch('ops.start_backfill.os.replace', side_effect=OSError('Interrupted')):
+            state.start_backfill(yaml.safe_load(previous))
+            with patch.object(CollectorState,'start_backfill',side_effect=OSError('Interrupted')):
                 with self.assertRaises(OSError):
                     record_request(directory, 50, archive_completed=True)
             self.assertEqual((directory / 'backfill.yaml').read_bytes(), previous)

@@ -5,17 +5,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import yaml
 from pipeline import Pyload
 
 root = Path("/data/booksys")
 credentials = json.loads((root / "secrets/pyload.json").read_text())
 api = Pyload("http://127.0.0.1:8000", credentials["api_key"])
-monitor = yaml.safe_load((root / "state/monitor.yaml").read_text())
+from library.operational_state import CollectorState
+collector = CollectorState(root / "state")
+monitor = collector.monitor()
 from mirrors import logical_snapshot
 queue = logical_snapshot(api, root / "state/mirror-routing.yaml")
-backfill_path = root / "state/backfill.yaml"
-backfill = yaml.safe_load(backfill_path.read_text()) if backfill_path.exists() else None
+backfill = collector.backfill()
 backfill_summary = None if backfill is None else {
     "status": backfill["status"], "pages_requested": backfill["pages_requested"],
     "pages_captured": len(backfill["pages"]), "unique_items": len(backfill["items"]),
@@ -34,10 +34,9 @@ result = {
     "downloaded_files": [{"name": str(p.relative_to(root / "downloads")), "bytes": p.stat().st_size}
                          for p in sorted((root / "downloads").rglob("*")) if p.is_file()][:50],
 }
-fiche_path = root / "state/fiches.yaml"
-if fiche_path.exists():
+progress = collector.fiches()
+if progress["items"]:
     from collections import Counter
-    progress = yaml.safe_load(fiche_path.read_text())
     result["fiches"] = {"tracked": len(progress["items"]),
                         "total": sum(e["status"] == "queued" for e in monitor["submissions"].values()),
                         "states": dict(Counter(e["status"] for e in progress["items"].values()))}

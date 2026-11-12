@@ -18,7 +18,7 @@ class ByteReader(Protocol):
     def read(self, size: int = -1) -> bytes: ...
 import zipfile
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 POLICY = 'comic-bundle-2'
 MAX_SOURCE = 4 * 1024**3

@@ -4,11 +4,35 @@ import tempfile
 import unittest
 from pathlib import Path
 from activity import Activity, read_activity
+from postgres_fixture import create_store,create_activity
+from library.primitives import empty
+from library.operational_state import CollectorState,NativeHistory,StatusObservations
+from library.codec import encode
+from unittest.mock import patch
+
+def setup(test,root):
+    store=create_store(test,root/"state",empty())
+    for directory in (root,root/"collector",root/"collector/activity",root/"evidence/activity"):
+        directory.mkdir(parents=True,exist_ok=True)
+        selector=directory/"postgresql.json"
+        selector.write_bytes((root/"state/postgresql.json").read_bytes());selector.chmod(0o600)
+    create_activity(test,root,authority="activity",timestamp=0)
+    for directory in (root/"collector/activity",root/"evidence/activity"):
+        (directory/"activity-authority.yaml").write_bytes((root/"activity-authority.yaml").read_bytes())
+    return store
+
+def catalog_fixture(store,value):
+    with store._database.connection(write=True) as db:
+        for kind in ("origins","assets"):
+            for key,item in value.get(kind,{}).items():
+                db.execute(f"INSERT INTO {kind}(id,revision,payload) VALUES (%s,1,%s)",(key,store.prepare(item)[0]))
+
 
 class ActivityTests(unittest.TestCase):
     def test_restart_keeps_events_and_heartbeat_is_not_progress(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            store=setup(self,root)
             a = Activity(root, 'collection', clock=lambda: 100000)
             a.report('working', 'backfill', item='source-1')
             a.report('waiting', 'lock', reason='Processing lock occupied')
@@ -58,8 +82,9 @@ class ActivityTests(unittest.TestCase):
                     {'pid': 2, 'links': [{'fid': 12, 'status': 12, 'name': 'unowned'}]}]
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            write_yaml(root/'collector/monitor.yaml', {'submissions': {'bookys-source': {'package_id': 1}}})
-            write_yaml(root/'collector/state.yaml', {'items': {'bookys-source': {'title': 'Album'}}})
+            store=setup(self,root)
+            CollectorState(root/'collector').submission('bookys-source',{'package_id':1})
+            CollectorState(root/'collector').capture('bookys-source',{'title':'Album'})
             observer = Observer(root, root/'collector', clock=lambda: 1000)
             client = Client()
             observer.sample_downloads(client)
@@ -86,10 +111,11 @@ class ActivityTests(unittest.TestCase):
         from activity import write_yaml
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            write_yaml(root/'evidence/activity-dashboard.yaml', {'stages': {'collection': {
+            store=setup(self,root)
+            StatusObservations(store._database).save_activity( {'stages': {'collection': {
                 'state': 'waiting', 'reason': 'Lock occupied', 'password': 'secret',
                 'items': [{'title': '<script>evil()</script>', 'url': 'https://private/secret'}]}}})
-            before = (root/'evidence/activity-dashboard.yaml').read_bytes()
+            before = StatusObservations(store._database).activity()
             server = ThreadingHTTPServer(('127.0.0.1', 0), handler(root))
             thread = threading.Thread(target=server.serve_forever);thread.start()
             try:
@@ -100,7 +126,7 @@ class ActivityTests(unittest.TestCase):
                                 value = response.read().decode()
                                 self.assertNotIn('secret', value)
                                 self.assertIn('<script>evil()</script>', value)
-                self.assertEqual(before, (root/'evidence/activity-dashboard.yaml').read_bytes())
+                self.assertEqual(before, StatusObservations(store._database).activity())
                 self.assertIn('activity-tab', PAGE)
                 self.assertNotIn('innerHTML', PAGE)
             finally:
@@ -111,8 +137,8 @@ class ActivityTests(unittest.TestCase):
         from activity import write_yaml
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            write_yaml(root/'collector/activity/collection.yaml', {'current': {
-                'state': 'working', 'operation': 'Backfill', 'session_started': 900, 'observed_at': 1000}})
+            store=setup(self,root)
+            Activity(root/'collector/activity','collection',clock=lambda:900).report('working','Backfill')
             observer = Observer(root, root/'collector', clock=lambda: 1001)
             observer.container_started['collection'] = 999
             self.assertEqual(observer.snapshot()['stages']['collection']['state'], 'unknown')
@@ -125,6 +151,7 @@ class ActivityTests(unittest.TestCase):
         from activity import prune
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            store=setup(self,root)
             recorder = Activity(root, 'byparr', clock=lambda: 100000)
             recorder.report('blocked', 'Cloudflare', reason='Browser challenge')
             recorder.report('working', 'Recovery')
@@ -141,7 +168,8 @@ class ActivityTests(unittest.TestCase):
         from activity import write_yaml
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            write_yaml(root/'state/library.yaml', {'origins': {
+            store=setup(self,root)
+            catalog_fixture(store, {'origins': {
                 'bundle': {'availability': 'bundle'}, 'part': {'availability': 'multipart_member'},
                 'retry': {'availability': 'pending', 'reason': 'Intake budget deferred', 'intake_next_attempt': 1400}}, 'assets': {}})
             observer = Observer(root, root/'collector', clock=lambda: 1000)
@@ -149,9 +177,12 @@ class ActivityTests(unittest.TestCase):
             local = observer.snapshot()['stages']['local']
             self.assertEqual(local['counts']['waiting files'], 1)
             self.assertEqual(local['items'][0]['next_attempt'], 1400)
-            (root/'state/library.yaml').write_text('unreadable: [')
+            # A failed canonical read must retain the last successful observation.
+            from library.primitives import LibraryError
+            broken=patch('library.store.Store.check',side_effect=LibraryError('storage_busy'))
             observer.clock = lambda: 1100
-            local = observer.snapshot()['stages']['local']
+            with broken:
+                local = observer.snapshot()['stages']['local']
             self.assertEqual(local['counts']['waiting files'], 1)
             self.assertEqual(local['queue_freshness'], 'unavailable')
             self.assertEqual(local['queue_observed_at'], 1000)
@@ -160,12 +191,14 @@ class ActivityTests(unittest.TestCase):
         from activity import write_yaml
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            store=setup(self,root)
             write_yaml(root/'local.yaml', {'current': [], 'events': []})
             Activity(root, 'local').report('working', 'Validation')
 
     def test_byte_progress_does_not_create_significant_events(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            store=setup(self,root)
             a = Activity(root, 'downloads', clock=lambda: 100000)
             a.report('working', 'Downloading')
             for _ in range(600):
@@ -179,11 +212,12 @@ class ActivityTests(unittest.TestCase):
         from activity import write_yaml
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            write_yaml(root/'collector/package-retirement.yaml', {'acquisitions': {}})
-            write_yaml(root/'evidence/retirement-cycle.yaml', {'results': [{'source': 'source', 'outcome': 'blocked'}]})
+            store=setup(self,root)
+            # Empty canonical retirement history is valid.
+            StatusObservations(store._database).save_retirement( {'results': [{'source': 'source', 'outcome': 'blocked'}]})
             observer = Observer(root, root/'collector', clock=lambda: 1000)
             observer.save()
-            (root/'evidence/retirement-cycle.yaml').unlink()
+            with store._database.connection(write=True) as db:db.execute('DELETE FROM retirement_observation')
             stage = observer.snapshot()['stages']['retirement']
             self.assertEqual(stage['counts']['retained acquisitions (last inspection)'], 1)
             self.assertEqual(stage['queue_freshness'], 'unavailable')
@@ -197,9 +231,10 @@ class ActivityTests(unittest.TestCase):
                     {'pid': 99, 'links': [{'fid': 13, 'status': 13}, {'fid': 8, 'status': 8}, {'fid': 9, 'status': 9}]}]
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            write_yaml(root/'collector/monitor.yaml', {'submissions': {'source': {'package_id': 1}}})
-            write_yaml(root/'collector/state.yaml', {'items': {'source': {'title': 'Album'}}})
-            write_yaml(root/'collector/mirror-routing.yaml', {'packages': {'1': {'source': 'source', 'pid': 1, 'attempt_pid': 99}}})
+            store=setup(self,root)
+            CollectorState(root/'collector').submission('source',{'package_id':1})
+            CollectorState(root/'collector').capture('source',{'title':'Album'})
+            NativeHistory(root/'collector').route('1',{'source':'source','pid':1,'attempt_pid':99})
             observer = Observer(root, root/'collector', clock=lambda: 1000)
             observer.sample_downloads(Client())
             counts = observer.snapshot()['stages']['downloads']['counts']
@@ -211,7 +246,8 @@ class ActivityTests(unittest.TestCase):
         from activity import write_yaml
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            write_yaml(root/'state/library.yaml', {'origins': {'o': {'source': 's', 'sha256': 'asset', 'availability': 'validated'}},
+            store=setup(self,root)
+            catalog_fixture(store, {'origins': {'o': {'source': 's', 'sha256': 'asset', 'availability': 'validated'}},
                 'assets': {'asset': {'sha256': 'asset', 'resolution': {'status': 'pending'}}}})
             a = Activity(root/'evidence/activity', 'identity', clock=lambda: 1000)
             a.report('working', 'Metadata request', item='asset')
@@ -231,6 +267,7 @@ class ActivityTests(unittest.TestCase):
         import subprocess
         import sys
         with tempfile.TemporaryDirectory() as folder:
+            setup(self,Path(folder))
             script = "from pathlib import Path; from activity import Activity; import sys; Activity(Path(sys.argv[1]), 'collection', clock=lambda: 100000).report('waiting', 'Lock', reason='Processing lock occupied')"
             subprocess.run([sys.executable, '-c', script, folder], check=True)
             before = read_activity(Path(folder), 'collection')['events']
@@ -241,8 +278,10 @@ class ActivityTests(unittest.TestCase):
         from library.activity import Observer
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            (root/'state').mkdir()
-            (root/'state/library.yaml').write_text('origins: {one: {availability: pending}}\nassets: {}\ncover: '+('a'*(33*1024*1024)))
+            store=setup(self,root)
+            catalog_fixture(store,{'origins':{'one':{'availability':'pending'}}})
+            with store._database.connection(write=True) as db:
+                db.execute("UPDATE origins SET payload=%s WHERE id='one'",(store.prepare({'availability':'pending','cover':'a'*(33*1024*1024)})[0],))
             observer = Observer(root, root/'collector', clock=lambda: 1000)
             stage = observer.snapshot()['stages']['local']
             self.assertEqual(stage['queue_freshness'], 'current')

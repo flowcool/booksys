@@ -1,0 +1,30 @@
+{
+  "inventory_sha256": "3e6bd29417d030317a696222558a53af822d0abae600640c28a07de33ebc9bf5",
+  "notices_archive_sha256": "e46581e6bde904465f52cb865c9d4d400a5fb4a8e2a82da240869bcc108a954f",
+  "files": {
+    "libpq5-17.11-copyright.txt": {
+      "sha256": "afcc052a946b4117667527211b4ca303f07044f5585222f4c8f577e0764b2123",
+      "bytes": 12934,
+      "installed_path": "usr/share/doc/libpq5/copyright",
+      "source": "debian_postgresql-17_17.11-0_deb13u1"
+    },
+    "psycopg-3.3.8-LICENSE.txt": {
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "bytes": 7652,
+      "installed_path": "app/.venv/lib/python3.14/site-packages/psycopg-3.3.8.dist-info/licenses/LICENSE.txt",
+      "source": "python-psycopg-3.3.8"
+    },
+    "psycopg-c-3.3.8-LICENSE.txt": {
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "bytes": 7652,
+      "installed_path": "app/.venv/lib/python3.14/site-packages/psycopg_c-3.3.8.dist-info/licenses/LICENSE.txt",
+      "source": "python-psycopg-c-3.3.8"
+    },
+    "supervisor-4.3.0-LICENSES.txt": {
+      "sha256": "4c35fda9f70bb7883fd94e5a4d5addd88ad1a6d5d15e21c9d17c4d96fdc5e369",
+      "bytes": 5152,
+      "installed_path": "app/.venv/lib/python3.14/site-packages/supervisor-4.3.0.dist-info/LICENSES.txt",
+      "source": "python-supervisor-4.3.0"
+    }
+  }
+}

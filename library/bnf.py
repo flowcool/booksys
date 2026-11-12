@@ -5,7 +5,7 @@ import re
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 SRU = '{http://www.loc.gov/zing/srw/}'
 MARC = '{info:lc/xmlns/marcxchange-v2}'

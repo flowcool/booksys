@@ -7,7 +7,7 @@ import shutil
 import sys
 import sysconfig
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 
 PYTHON = '/runtime/python/bin/python'
 
@@ -32,7 +32,8 @@ def native_prefix(source: Path, *, output: Path | None = None, ocr: bool = False
         raise LibraryError('Unsupported native Python runtime layout')
     command += ['--ro-bind', str(library), '/runtime/python/lib',
                 '--ro-bind', str(executable), PYTHON,
-                '--ro-bind', str(Path(__file__).resolve().parent), '/app/library']
+                '--ro-bind', str(Path(__file__).resolve().parent), '/app/library',
+                '--ro-bind', str(Path(__file__).resolve().parents[1] / 'booksys_core'), '/app/booksys_core']
     packages = []
     for kind in ('purelib', 'platlib'):
         host_path = str(Path(sysconfig.get_path(kind)).resolve())

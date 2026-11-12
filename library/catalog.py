@@ -8,183 +8,119 @@ import json
 import os
 import re
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from library.store import Store, PreparedResult
 
 import yaml
 
 
-class LibraryError(Exception):
-    """A failed gate. Preserve evidence and stop dependent operations."""
-
-
-def digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
-                                     separators=(',', ':')).encode()).hexdigest()
-
-
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def sync_dir(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def atomic_yaml(path: Path, value: Any, *, exclusive: bool = False) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(fd, 'w') as out:
-            yaml.safe_dump(value, out, allow_unicode=True, sort_keys=True)
-            out.flush()
-            os.fsync(out.fileno())
-        if exclusive:
-            os.chmod(temporary, 0o444)
-            os.link(temporary, path)
-            temporary.unlink()
-        else:
-            os.replace(temporary, path)
-        sync_dir(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-@contextmanager
-def lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('a') as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError as exc:
-            raise LibraryError('Another library operation is active') from exc
-        yield
-
-
-TABLES = ('works', 'editions', 'variants', 'assets', 'artifacts', 'origins', 'cases', 'operations')
-
-
-def empty() -> dict[str, Any]:
-    return {'schema': 1, 'revision': 0, 'ledger': [], **{key: {} for key in TABLES}}
-
-
-def validate(state: Any) -> None:
-    if not isinstance(state, dict) or set(state) != {'schema', 'revision', 'ledger', *TABLES}:
-        raise LibraryError('Invalid catalogue keys')
-    if state['schema'] != 1 or type(state['revision']) is not int or state['revision'] < 0:
-        raise LibraryError('Unsupported catalogue schema or revision')
-    if not isinstance(state['ledger'], list) or not all(isinstance(x, str) for x in state['ledger']):
-        raise LibraryError('Invalid decision references')
-    for table in TABLES:
-        if not isinstance(state[table], dict):
-            raise LibraryError('Catalogue tables must be keyed maps')
-        for key, record in state[table].items():
-            if not isinstance(key, str) or not isinstance(record, dict):
-                raise LibraryError('Invalid entity')
-    requirements = {'works': ('title',), 'editions': ('work', 'language', 'publisher', 'evidence'),
-                    'variants': ('edition', 'asset'), 'assets': ('sha256', 'size', 'format', 'origins'),
-                    'origins': ('source', 'pid', 'fid', 'path', 'sha256')}
-    for table, fields in requirements.items():
-        for key, record in state[table].items():
-            if any(field not in record for field in fields):
-                raise LibraryError(f'Missing {table} fields: {key}')
-    for edition in state['editions'].values():
-        if edition['work'] not in state['works']:
-            raise LibraryError('Edition references missing work')
-    for variant in state['variants'].values():
-        if variant['edition'] not in state['editions'] or variant['asset'] not in state['assets']:
-            raise LibraryError('Variant references missing edition or asset')
-    for key, asset in state['assets'].items():
-        if not re.fullmatch('[0-9a-f]{64}', key) or asset['sha256'] != key:
-            raise LibraryError('Invalid asset identity')
-        if any(origin not in state['origins'] for origin in asset['origins']):
-            raise LibraryError('Asset references missing origin')
-        if type(asset['size']) is not int or asset['size'] <= 0 or asset['format'] not in ('pdf', 'cbz', 'cbr'):
-            raise LibraryError('Invalid asset size or format')
-        admission = asset.get('admission')
-        if admission is not None:
-            target = Path(str(admission.get('target', '')))
-            if (admission.get('status') not in ('holding', 'classified') or target.is_absolute()
-                    or '..' in target.parts or not target.parts
-                    or target.parts[0] != ('holding' if admission['status'] == 'holding' else 'classified')
-                    or not re.fullmatch('[0-9a-f]{32}', str(admission.get('operation', '')))
-                    or not re.fullmatch('[0-9a-f]{64}', str(admission.get('signature', '')))
-                    or set(admission.get('manifest', {})) != {'book.cbz', 'fiche.md'}
-                    or any(not re.fullmatch('[0-9a-f]{64}', str(v)) for v in admission['manifest'].values())):
-                raise LibraryError('Invalid work admission record')
-        provisional = asset.get('provisional')
-        if provisional is not None:
-            if (not isinstance(provisional, dict) or provisional.get('target') != key
-                    or provisional.get('edition_status') != 'unknown'
-                    or provisional.get('artifact_format') != 'cbz'
-                    or provisional.get('status') not in ('published', 'recovered')
-                    or not re.fullmatch('[0-9a-f]{32}', str(provisional.get('operation', '')))
-                    or not isinstance(provisional.get('manifest'), dict)
-                    or set(provisional['manifest']) != {'book.cbz', 'fiche.md'}
-                    or any(not re.fullmatch('[0-9a-f]{64}', str(value))
-                           for value in provisional['manifest'].values())
-                    or (provisional['status'] == 'recovered' and provisional.get('recovery') !=
-                        'provisional-' + provisional['operation'])):
-                raise LibraryError('Invalid provisional publication record')
-        identity = asset.get('identity')
-        if identity and (identity.get('work') not in state['works'] or
-                         identity.get('edition') not in state['editions'] or
-                         identity.get('variant') not in state['variants']):
-            raise LibraryError('Asset identity references missing entity')
-    for key, origin in state['origins'].items():
-        if (not all(isinstance(origin[k], str) for k in ('source', 'path')) or
-                type(origin['pid']) is not int or type(origin['fid']) is not int):
-            raise LibraryError('Invalid origin IDs or path')
-        path = Path(origin['path'])
-        if path.is_absolute() or '..' in path.parts:
-            raise LibraryError('Unsafe origin path')
-        if origin.get('parent_origin'):
-            parent = state['origins'].get(origin['parent_origin'])
-            if (not parent or origin.get('parent_sha256') != parent.get('sha256')
-                    or origin.get('member_sha256') != origin['sha256']
-                    or not isinstance(origin.get('member'), str)
-                    or not origin['path'].startswith('bundle-inputs/' + str(parent['sha256']) + '/')):
-                raise LibraryError('Invalid bundle child provenance')
-        if origin['sha256'] is not None and not re.fullmatch('[0-9a-f]{64}', origin['sha256']):
-            raise LibraryError('Invalid origin hash')
-    for edition_id, edition in state['editions'].items():
-        selected = edition.get('selected')
-        if selected and (selected not in state['variants'] or state['variants'][selected]['edition'] != edition_id):
-            raise LibraryError('Selected variant belongs to a different edition')
+from library.primitives import (LibraryError, digest, now, sync_dir, atomic_yaml, lock,
+                                TABLES, empty, validate, WorkingState)
+from library.effects import apply_effect
 
 
 class Catalog:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, *, store: Store | None = None):
+        from library.store import Store
         self.directory = directory
         self.path = directory / 'library.yaml'
         self.decisions = directory / 'library-decisions'
+        if store is None:
+            from library.authority import read_manifest
+            manifest = read_manifest(directory)
+            store = Store(directory, authority=manifest['authority_id'])
+        self._store = store
+
+    def backend(self) -> Store:
+        return self._store
+
+    @property
+    def revision(self) -> int:
+        return self._store.revision
+
+    def get(self, kind: str, ident: str) -> dict[str, Any] | None:
+        return self._store.get(kind, ident)
+
+    def records(self, kind: str, *, media: bool = False) -> Iterator[tuple[str, dict[str, Any]]]:
+        for ident in self._store.ids(kind):
+            record = self._store.get(kind, ident, media=media)
+            if record is not None:
+                yield ident, record
+
+    def working_set(self, action: str, refs: dict[str, list[str]], *, media: bool = True) -> dict[str, Any]:
+        return self.result_set(action, refs, media=media)
+
+    def result_set(self, action: str, refs: dict[str, list[str]], *,
+                   claims: dict[str, list[str]] | None = None, media: bool = True) -> dict[str, Any]:
+        """Prepare remote/expensive work without holding a transaction open."""
+        backend = self.backend()
+        from library.conflicts import snapshot
+        with backend._database.connection() as db:
+            state, token = snapshot(backend, db, action, refs, claims or {}, media=media)
+        if media:
+            from library.codec import encode
+            for kind, records in token['covers'].items():
+                for ident, cover in records.items():
+                    state[kind][ident] = backend.restore(encode({'record':state[kind][ident],'cover':cover}))
+        result = WorkingState(state)
+        result.media_omitted = not media
+        result.conflict = token
+        return result
+
+    def extend_result(self, token: dict[str, Any], refs: dict[str, list[str]]) -> dict[str, Any]:
+        from library.conflicts import snapshot, verify
+        backend = self.backend()
+        merged = {kind: sorted(set(ids) | set(refs.get(kind, []))) for kind, ids in token['refs'].items()}
+        for kind, ids in refs.items():
+            merged.setdefault(kind, ids)
+        with backend._database.connection() as db:
+            verify(backend, db, token)
+            _, result = snapshot(backend, db, token['action'], merged, token['claims'], media=token['media'])
+        return result
+
+    def verify_result(self, token: dict[str, Any]) -> None:
+        from library.conflicts import verify
+        backend = self.backend()
+        with backend._database.connection() as db:
+            verify(backend, db, token)
 
     def read(self) -> dict[str, Any]:
-        if self.path.exists():
-            loader = getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
-            value = yaml.load(self.path.read_text(), Loader=loader)
-        else:
-            value = empty()
-        validate(value)
-        return dict(value)
+        return WorkingState(self._store.export())
+
+    def prepare(self, state: dict[str, Any]) -> PreparedResult:
+        """Detach the result before the short durable completion transaction."""
+        from library.codec import encode
+        from library.store import Change, PreparedResult
+        if not isinstance(state, WorkingState):
+            raise LibraryError('PostgreSQL mutation requires a declared working set')
+        change = Change()
+        for kind in TABLES:
+            before, after = state.original[kind], state[kind]
+            updates = {ident: copy.deepcopy(record) for ident, record in after.items()
+                       if ident not in before or encode(record) != encode(before[ident])}
+            if state.media_omitted:
+                for ident, record in updates.items():
+                    if 'cover' not in record and 'cover' not in before.get(ident, {}):
+                        retained = self._store.get(kind, ident)
+                        if retained is not None and 'cover' in retained:
+                            record['cover'] = retained['cover']
+            if updates:
+                change.upserts[kind] = updates
+            removed = sorted(set(before) - set(after))
+            if removed:
+                change.deletes[kind] = removed
+        if state['ledger'] != state.original['ledger']:
+            change.ledger = list(state['ledger'])
+        return PreparedResult(change, copy.deepcopy(state.conflict), int(state['revision']))
 
     def save(self, state: dict[str, Any], *, expected: int) -> None:
-        validate(state)
-        with lock(self.directory / 'library.lock'):
-            current = self.read()
-            if current['revision'] != expected:
-                raise LibraryError('Stale catalogue revision')
-            result = copy.deepcopy(state)
-            result['revision'] = expected + 1
-            atomic_yaml(self.path, result)
+        prepared = self.prepare(state)
+        self._store.commit(prepared.change, expected_revision=expected, conflict=prepared.conflict)
 
     def ledger(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -200,118 +136,107 @@ class Catalog:
                     record.get('previous') != (records[-1]['id'] if records else None)):
                 raise LibraryError('Decision evidence lost or altered')
             records.append(record)
-        checkpoint = self.directory / 'library-ledger-head.yaml'
-        if checkpoint.exists():
-            head = yaml.safe_load(checkpoint.read_text())
-            ids = [r['id'] for r in records]
-            if head['count'] > len(ids) or (head['count'] and ids[head['count'] - 1] != head['head']):
-                raise LibraryError('Decision ledger is incomplete; admission suspended')
+        indexed = self._store.decisions()
+        if len(indexed) > len(records) or any(record != records[index] for index,record in enumerate(indexed)):
+            raise LibraryError('Decision ledger is incomplete; admission suspended')
         return records
 
-    def append_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Caller owns decision.lock. Ledger precedes effects and checkpoint."""
-        records = self.ledger()
-        record = {**payload, 'schema': 2 if payload['action'] in ('resolve', 'resolution_result') else 1, 'sequence': len(records) + 1,
-                  'previous': records[-1]['id'] if records else None}
-        record['id'] = digest(record)
-        atomic_yaml(self.decisions / f"{record['sequence']:09d}-{record['id']}.yaml", record, exclusive=True)
-        atomic_yaml(self.directory / 'library-ledger-head.yaml',
-                    {'count': len(records) + 1, 'head': record['id']})
+    def append_decision(self, payload: dict[str, Any], *, conflict: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Caller owns the process decision exclusion; immutable bytes precede indexing."""
+        backend = self.backend()
+        self.decisions.mkdir(parents=True, exist_ok=True)
+        # A retained suffix is resumed with the same immutable input only.
+        indexed=backend.decision_head()
+        sequence=indexed['sequence'] if indexed else 0
+        if indexed:
+            head=self.decisions/f"{sequence:09d}-{indexed['id']}.yaml"
+            if not head.is_file() or yaml.safe_load(head.read_text())!=indexed:
+                raise LibraryError('Decision evidence lost or altered')
+        # Startup audits the full prefix. Appends inspect only the predecessor and
+        # at most one retained suffix payload, under the existing process lock.
+        suffix=[]
+        for path in self.decisions.glob('*.yaml'):
+            try:position=int(path.name.split('-',1)[0])
+            except ValueError:raise LibraryError('Invalid decision record') from None
+            if position>sequence:
+                suffix.append(path)
+                if len(suffix)>1:
+                    raise LibraryError('Reconcile interrupted decision append before confirmation')
+        if suffix:
+            retained: dict[str,Any]=yaml.safe_load(suffix[0].read_text())
+            if not isinstance(retained,dict):
+                raise LibraryError('Invalid decision record')
+            actual={key:value for key,value in retained.items()
+                    if key not in ('schema','sequence','previous','id')}
+            expected={**actual,'schema':2 if actual.get('action') in ('resolve','resolution_result') else 1,
+                      'sequence':sequence+1,'previous':indexed['id'] if indexed else None}
+            if (actual!=payload or retained!={**expected,'id':digest(expected)}
+                    or suffix[0].name!=f"{sequence+1:09d}-{retained['id']}.yaml"):
+                raise LibraryError('Reconcile interrupted decision append before confirmation')
+            backend.index_decision(retained)
+            return retained
+        record = backend.reserve_decision(payload,conflict=conflict)
+        path = self.decisions / f"{record['sequence']:09d}-{record['id']}.yaml"
+        if not path.exists():
+            atomic_yaml(path, record, exclusive=True)
+        elif yaml.safe_load(path.read_text()) != record:
+            raise LibraryError('Decision differs from retained immutable evidence')
+        backend.index_decision(record)
         return record
 
-    def replay(self) -> dict[str, Any]:
-        if any(r['action'] in ('resolve', 'identify_work') for r in self.ledger()):
-            from library.resolution import Resolution
-            return Resolution(self, Path('.')).project()
-        with lock(self.directory / 'decisions.lock'):
-            state = self.read()
-            records = self.ledger()
-            available = {r['id'] for r in records}
-            if any(item not in available for item in state['ledger']):
-                raise LibraryError('Snapshot references missing decisions')
-            # Overrides are a projection of canonical decisions, not an index
-            # authority. Rebuild them even when a restored index claims replay.
-            for asset in state['assets'].values():
-                asset['overrides'] = {}
-            for record in records:
+    def project_pending(self, *, locked: bool = False) -> None:
+        backend = self.backend()
+        with nullcontext() if locked else lock(self.directory / 'decisions.lock'):
+            # The append may have committed its reservation before writing any
+            # immutable bytes. Recover that exact payload before chain indexing.
+            for record in backend.pending_decisions():
+                path = self.decisions / f"{record['sequence']:09d}-{record['id']}.yaml"
+                if not path.exists():
+                    atomic_yaml(path,record,exclusive=True)
+                elif yaml.safe_load(path.read_text()) != record:
+                    raise LibraryError('Decision differs from retained immutable evidence')
+            # Recovery indexes retained immutable bytes without repeating an effect.
+            for record in self.ledger():
+                backend.index_decision(record)
+            with backend._database.connection() as db:
+                _, applied = backend.check(db)
+            for record in backend.decisions(after=len(applied)):
+                if record.get('completion_task'):
+                    break  # The owning task must project this result in its completion transaction.
+                values = record.get('values', {})
+                refs = {'assets': [record['target']]}
+                for table, key in (('works', 'work_id'), ('editions', 'edition_id'), ('works', 'source_work_id')):
+                    if values.get(key):
+                        refs.setdefault(table, []).append(values[key])
+                refs.setdefault('editions', []).extend(record.get('affected_editions', []))
+                claims={field:[str(values['edition'][field])] for field in ('isbn','reference') if values.get('edition',{}).get(field)}
+                state = self.result_set(record['action'],refs,claims=claims)
+                if record['sequence'] != len(state['ledger']) + 1:
+                    raise LibraryError('Non-prefix decision projection')
+                from library.decision_model import verify_record_evidence
+                verify_record_evidence(self, record)
                 apply_effect(state, record, replay=True)
-            state['ledger'] = [record['id'] for record in records]
-            self.save(state, expected=state['revision'])
-            return self.read()
+                state['ledger'].append(record['id'])
+                prepared = self.prepare(state)
+                from dataclasses import asdict
+                from library.codec import encode
+                from library.store import _projection
+                capability=_projection.set((encode(record),encode(asdict(prepared.change))))
+                try:
+                    backend.commit(prepared.change, expected_revision=prepared.revision,
+                                   conflict=prepared.conflict, commit_key='decision-project:' + record['id'])
+                finally:
+                    _projection.reset(capability)
+
+    def replay(self) -> dict[str, Any]:
+        """Audit immutable evidence and project the pending prefix forward."""
+        from library.decision_model import verify_record_evidence
+        with lock(self.directory / 'decisions.lock'):
+            for record in self.ledger():
+                verify_record_evidence(self, record)
+            self.project_pending(locked=True)
+        return self.read()
 
 
-def apply_effect(state: dict[str, Any], decision: dict[str, Any], *, replay: bool = False) -> None:
-    if decision['action'] in ('resolve', 'resolution_result'):
-        from library.resolution import apply_resolution
-        apply_resolution(state, decision)
-        return
-    action, target, values = decision['action'], decision['target'], decision['values']
-    if target not in state['assets']:
-        raise LibraryError('Decision target missing after restore; restore inventory first')
-    asset = state['assets'][target]
-    if action == 'identify_work':
-        if asset.get('identity') or asset.get('resolution'):
-            raise LibraryError('Resolve existing edition ownership before work-only confirmation')
-        if not values.get('work', {}).get('title') or not values.get('evidence'):
-            raise LibraryError('Work confirmation requires a title and evidence')
-        result = {'status': 'identified', 'work': copy.deepcopy(values['work']),
-                  'edition_status': 'unknown', 'field_conflicts': {}, 'reason': 'Operator confirmed work',
-                  'evidence': copy.deepcopy(values['evidence']), 'decision': decision.get('id')}
-        asset['work_decision'] = result
-        asset['work_result'] = copy.deepcopy(result)
-    elif action == 'identify':
-        work, edition = values['work'], values['edition']
-        wid, eid = values['work_id'], values['edition_id']
-        if any(not edition.get(k) for k in ('language', 'publisher', 'evidence')) or not work.get('title'):
-            raise LibraryError('Manual identity requires work and edition evidence')
-        claims = {v['edition'] for v in state['variants'].values() if v['asset'] == target}
-        if not replay and claims and claims != {eid}:
-            raise LibraryError('Asset ownership conflict')
-        if not replay and eid in state['editions'] and state['editions'][eid]['work'] != wid:
-            raise LibraryError('Edition ownership conflict')
-        state['works'][wid] = copy.deepcopy(work)
-        managed = {k: v for k, v in state['editions'].get(eid, {}).items() if k in ('selected', 'publication')}
-        state['editions'][eid] = {**copy.deepcopy(edition), 'work': wid, **managed}
-        vid = digest({'asset': target, 'edition': eid})
-        state['variants'][vid] = {'edition': eid, 'asset': target}
-        asset['identity'] = {'work': wid, 'edition': eid, 'variant': vid, 'evidence': edition['evidence']}
-        asset['disposition'] = 'pending'
-        conflict_inputs = digest({'identity_result': asset.get('identity_result'),
-                                  'assertions': asset.get('assertions', [])})
-        if not replay or decision.get('resolution_inputs') == conflict_inputs:
-            asset['contested'] = False
-    elif action == 'override':
-        asset.setdefault('overrides', {}).update(values)
-    elif action in ('exclude', 'defer'):
-        asset['disposition'] = action
-    elif action == 'select':
-        identity = asset.get('identity')
-        if not identity:
-            raise LibraryError('Unknown edition cannot be selected')
-        state['editions'][identity['edition']]['selected'] = identity['variant']
-    elif action == 'merge_work':
-        source = values['source_work_id']
-        destination = values['work_id']
-        if source not in state['works'] or destination not in state['works'] or source == destination:
-            raise LibraryError('Merge requires two distinct known works')
-        if not values.get('evidence'):
-            raise LibraryError('Merge evidence is required')
-        for edition in state['editions'].values():
-            if edition['work'] == source:
-                edition['work'] = destination
-        for entry in state['assets'].values():
-            if entry.get('identity', {}).get('work') == source:
-                entry['identity']['work'] = destination
-        state['works'][source]['merged_into'] = destination
-    elif action == 'separate_edition':
-        identity = asset.get('identity')
-        if not identity or not values.get('evidence') or not values.get('work', {}).get('title'):
-            raise LibraryError('Separation requires an edition and explicit work evidence')
-        wid = values['work_id']
-        state['works'][wid] = copy.deepcopy(values['work'])
-        state['editions'][identity['edition']]['work'] = wid
-        for entry in state['assets'].values():
-            if entry.get('identity', {}).get('edition') == identity['edition']:
-                entry['identity']['work'] = wid
-    else:
-        raise LibraryError('Unsupported decision action')
+__all__ = ['Catalog', 'LibraryError', 'digest', 'now', 'sync_dir', 'atomic_yaml', 'lock',
+           'TABLES', 'empty', 'validate', 'WorkingState', 'apply_effect']

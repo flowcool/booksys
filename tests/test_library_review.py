@@ -1,3 +1,4 @@
+from postgres_fixture import create_catalog
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,7 +15,7 @@ class ReviewTests(unittest.TestCase):
     def test_manual_edition_with_evidence_can_publish_without_embedded_identity(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             state = store.read()
             state['works'] = {}
             state['editions'] = {}
@@ -57,7 +58,7 @@ class ReviewTests(unittest.TestCase):
         from library.metadata import Providers, enrich
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, _, asset = setup_library(root)
+            store, reception, _, asset = setup_library(root,self)
             state = store.read()
             state['works'], state['editions'], state['variants'] = {}, {}, {}
             state['assets'][asset].pop('identity')
@@ -113,7 +114,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_invalid_identity_never_enters_immutable_ledger(self):
         with tempfile.TemporaryDirectory() as folder:
-            store, _, _, asset = setup_library(Path(folder))
+            store, _, _, asset = setup_library(Path(folder),self)
             case = next(v for v in report(store)['cases'].values() if v.get('asset') == asset)
             request = {'request_id': 'invalid-selected', 'case': case['id'], 'version': case['version'],
                 'action': 'identify', 'values': {'work_id': 'work', 'edition_id': 'edition',
@@ -126,7 +127,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_batch_is_versioned_immutable_and_idempotent(self):
         with tempfile.TemporaryDirectory() as folder:
-            store = Catalog(Path(folder))
+            store = create_catalog(self,Path(folder))
             state = store.read()
             for asset in ('a' * 64, 'b' * 64):
                 state['assets'][asset] = {'sha256': asset, 'size': 4, 'format': 'cbz', 'origins': [],

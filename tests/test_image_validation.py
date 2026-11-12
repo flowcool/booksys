@@ -47,6 +47,10 @@ class ImageValidationTests(unittest.TestCase):
             result = identity(path, "a" * 40)
             self.assertEqual(result["config_digest"], config)
             self.assertEqual(result["manifest_digest"], manifest)
+            with tarfile.open(path) as archive:
+                root = json.load(archive.extractfile("index.json"))
+            self.assertEqual(result["index_digest"], root["manifests"][0]["digest"])
+            self.assertNotEqual(result["index_digest"], manifest)
             self.assertTrue(result["archive_sha256"].startswith("sha256:"))
 
     def test_wrong_source_revision_or_platform_refuses_artifact(self):
@@ -65,7 +69,7 @@ class ImageValidationTests(unittest.TestCase):
 
     def test_secrets_block_at_any_severity_and_empty_scan_cannot_pass(self):
         self.assertEqual(security_findings({"Results": []}, {"Results": [
-            {"Secrets": [{"RuleID": "fixture", "Severity": "LOW"}]}]}), ["secret:fixture"])
+            {"Secrets": [{"RuleID": "fixture", "Severity": "LOW", "Match": "synthetic-sensitive-value"}]}]}), ["secret-count:1"])
         with self.assertRaises(ValueError):
             security_findings({}, {})
 
@@ -108,7 +112,7 @@ elif args[0] == "stop":
 ''')
         docker.chmod(0o755)
         env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                   MANIFEST=manifest, CALLS=str(root / "calls.jsonl"),
+                   MANIFEST=identity(archive, "a" * 40)["index_digest"], CALLS=str(root / "calls.jsonl"),
                    PROBE_RESULT=str(probe), LOGS_RESULT=str(logs),
                    INSPECT_RESULT=str(inspect), STOP_RESULT=str(stop))
         result = subprocess.run(["bash", "ops/validate_image.sh", "byparr", str(archive),
@@ -135,7 +139,7 @@ elif args[0] == "stop":
         with tempfile.TemporaryDirectory() as directory:
             result, calls = self.readiness_failure(directory)
             self.assertEqual(result.returncode, 42, result.stderr)
-            self.assertNotIn("--rm", next(c for c in calls if c[0] == "run"))
+            self.assertNotIn("--rm", next(c for c in calls if c[0] == "run" and "-d" in c))
             self.assertLess(calls.index(["logs", "owned-readiness-probe"]),
                             calls.index(["stop", "--time", "10", "owned-readiness-probe"]))
             self.assertEqual(calls[-1], ["rm", "owned-readiness-probe"])

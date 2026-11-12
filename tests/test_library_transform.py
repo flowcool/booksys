@@ -16,7 +16,7 @@ class TransformTests(unittest.TestCase):
     def test_catalogue_metadata_replaces_conflicting_source_xml_without_reencoding(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            store, reception, original, asset = setup_library(root)
+            store, reception, original, asset = setup_library(root,self)
             state = store.read()
             state['assets'][asset]['overrides'] = {'title': 'Validated & corrected title', 'genres': ['Adventure']}
             source = root / 'source.cbz'

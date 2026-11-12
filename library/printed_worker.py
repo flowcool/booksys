@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from library.catalog import LibraryError
+from library.primitives import LibraryError
 from library.reader_worker import inspect_archive
 from library.readers import sha256
 from library.process import bounded_run
@@ -32,7 +32,7 @@ def main() -> None:
         if suffix == '.pdf':
             from library.pdf_pages import convert_pdf_pages
             indices = [p['page'] for p in selected]
-            from library.reader_worker import inspect_pdf
+            from library.pdf_inspection import inspect_pdf
             count = inspect_pdf(path)['pages']
             actual_indices = sorted(set([*range(1, min(4, count) + 1), *range(max(1, count - 3), count + 1)]))
             if indices != actual_indices:
