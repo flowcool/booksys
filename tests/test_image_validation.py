@@ -69,7 +69,7 @@ class ImageValidationTests(unittest.TestCase):
 
     def test_secrets_block_at_any_severity_and_empty_scan_cannot_pass(self):
         self.assertEqual(security_findings({"Results": []}, {"Results": [
-            {"Secrets": [{"RuleID": "fixture", "Severity": "LOW", "Match": "synthetic-sensitive-value"}]}]}), ["secret:fixture"])
+            {"Secrets": [{"RuleID": "fixture", "Severity": "LOW", "Match": "synthetic-sensitive-value"}]}]}), ["secret-count:1"])
         with self.assertRaises(ValueError):
             security_findings({}, {})
 

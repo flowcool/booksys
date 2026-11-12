@@ -73,10 +73,10 @@ def security_findings(vulnerabilities: dict[str, Any], scan_report: dict[str, An
         for finding in result.get("Vulnerabilities", []):
             if finding["Severity"] in {"HIGH", "CRITICAL"} and finding.get("FixedVersion"):
                 findings.append("vulnerability:" + finding["VulnerabilityID"])
-    # Report rule identifiers only. Matched bytes remain in the retained scanner report.
-    for result in scan_report["Results"]:
-        for finding in result.get("Secrets", []):
-            findings.append("secret:" + finding["RuleID"])
+    # Publish only a count; identifiers and matched bytes stay in the scanner report.
+    detection_count = sum(len(result.get("Secrets", [])) for result in scan_report["Results"])
+    if detection_count:
+        findings.append("secret-count:" + str(detection_count))
     return findings
 
 
