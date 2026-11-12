@@ -406,3 +406,36 @@ class EvidenceIdentifierTests(unittest.TestCase):
         with self.assertRaises(LibraryError):
             Resolution.load_piece(SimpleNamespace(pieces=directory), '../outside')
         self.assertEqual(directory.mock_calls, [])
+
+    def test_piece_read_keeps_valid_missing_tampered_and_symlink_contract(self):
+        import yaml
+        from types import SimpleNamespace
+        from library.resolution import Resolution
+        from library.primitives import LibraryError, digest
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pieces = root / 'pieces'
+            pieces.mkdir()
+            service = SimpleNamespace(pieces=pieces)
+            value = {'fixture': 'retained'}
+            key = digest(value)
+            path = pieces / (key + '.yaml')
+            path.write_text(yaml.safe_dump(value))
+            self.assertEqual(Resolution.load_piece(service, key), value)
+            with self.assertRaisesRegex(LibraryError, 'missing or altered'):
+                Resolution.load_piece(service, 'missing')
+            path.write_text('fixture: changed')
+            with self.assertRaisesRegex(LibraryError, 'missing or altered'):
+                Resolution.load_piece(service, key)
+            path.unlink()
+            outside = root / 'outside.yaml'
+            outside.write_text(yaml.safe_dump(value))
+            path.symlink_to(outside)
+            with self.assertRaises(LibraryError):
+                Resolution.load_piece(service, key)
+            path.unlink()
+            inside = pieces / 'inside.yaml'
+            inside.write_text(yaml.safe_dump(value))
+            path.symlink_to(inside)
+            with self.assertRaisesRegex(LibraryError, 'Symlink'):
+                Resolution.load_piece(service, key)

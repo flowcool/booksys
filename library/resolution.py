@@ -5,6 +5,7 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -61,7 +62,14 @@ class Resolution:
 
     def load_piece(self, key: str) -> dict[str, Any]:
         key = identifier(key)
-        value = read(self.pieces / (key + '.yaml'))
+        base = os.path.realpath(self.pieces)
+        candidate = os.path.join(base, key + '.yaml')
+        normalized = os.path.realpath(candidate)
+        if not normalized.startswith(base + os.sep):
+            raise LibraryError('Evidence path escapes its directory')
+        if normalized != candidate:
+            raise LibraryError('Symlink in resolution evidence')
+        value = read(Path(normalized))
         if digest(value) != key:
             raise LibraryError('Evidence piece missing or altered')
         return value
