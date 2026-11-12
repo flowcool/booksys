@@ -7,7 +7,7 @@ cat > "$destination/skopeo" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 mkdir -p "$RUNNER_TEMP/skopeo-tmp"
-exec docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+exec docker run --rm -i --read-only --cap-drop ALL --security-opt no-new-privileges \
   --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,size=64m \
   --mount "type=bind,source=$RUNNER_TEMP,target=$RUNNER_TEMP" \
   --env REGISTRY_AUTH_FILE --env "TMPDIR=$RUNNER_TEMP/skopeo-tmp" \
