@@ -90,6 +90,17 @@ wheel libraries against exact vendored versions. Version labels or upstream URLs
 alone cannot prove that source correspondence. See [redistribution](redistribution.md).
 
 Publish `corresponding-source.tar.gz` and `manifest.json` beside the binaries.
+GitHub limits each release asset to less than 2 GiB. For the initial v0.1.0, the
+retained archive exceeds that limit. `release-recovery.yml` reuses the original
+qualified run 43171690522 and its three exact OCI archives. It splits the same
+source archive into two bounded parts. `manifest.json` retains the full source
+ledger and records each part's size/SHA256 and the original whole archive SHA256.
+Concatenate the parts in their recorded order to recover that exact archive.
+The recovery signer identity is
+`https://github.com/flowcool/booksys/.github/workflows/release-recovery.yml@refs/heads/main`.
+Verification also pins its exact reviewed control commit with
+`--certificate-github-workflow-sha`. The retained build provenance still names
+the original source revision; the recovery workflow does not build images.
 Keep them available for the applicable license period. Package descriptions and
 release notes must point directly to these source assets. Actual anonymous source
 and image downloads are part of release acceptance, after package visibility is
@@ -103,10 +114,12 @@ Do not substitute authentication success for a public pull.
 
 After that change, dispatch `release-verification.yml` from protected main with
 the exact source revision and the `sha256:` digests of `manifest.json` and
-`corresponding-source.tar.gz` from the completed publication plan. The read-only
+the original whole `corresponding-source.tar.gz`, plus the reviewed recovery
+signer workflow commit. The read-only
 workflow streams and hashes the public sources without credentials. Its three
 ephemeral jobs use an empty registry auth file, verify the original release's
-keyless identity, pull each exact graph, check SBOM/provenance and run the existing
+recovery keyless identity and control commit, pull each exact graph, check
+SBOM/provenance and run the existing
 synthetic image probes. The existing validation helper also scans each downloaded
 artifact. This check binds the public retrieval to the qualified image. The jobs
 retain reports only, without downloading image archives to the operator's host.

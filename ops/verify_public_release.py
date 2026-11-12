@@ -50,7 +50,7 @@ def verify_image(archive: Path, revision: str, expected: str) -> dict[str, str]:
     return actual
 
 
-def download(url: str, expected: str, retain: bool = False) -> tuple[bytes, int]:
+def download(url: str, expected: str, retain: bool = False, whole: Any = None) -> tuple[bytes, int]:
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected):
         raise ValueError("An exact qualified SHA256 is required")
     checksum = hashlib.sha256()
@@ -61,6 +61,8 @@ def download(url: str, expected: str, retain: bool = False) -> tuple[bytes, int]
             raise ValueError("Asset redirected outside HTTPS")
         while chunk := response.read(1024 * 1024):
             checksum.update(chunk)
+            if whole is not None:
+                whole.update(chunk)
             size += len(chunk)
             if retain:
                 if size > 10 * 1024 * 1024:
@@ -92,8 +94,8 @@ def main() -> None:
     assets = {item["name"]: item for item in release["assets"]}
     proof: dict[str, Any] = {"release": release["html_url"], "revision": args.revision, "authenticated": False, "assets": {}}
     args.output.mkdir(parents=True, exist_ok=False)
-    for name, expected in (("manifest.json", args.manifest_sha256),
-                           ("corresponding-source.tar.gz", args.source_sha256)):
+    manifest: dict[str, Any] = {}
+    for name, expected in (("manifest.json", args.manifest_sha256),):
         asset = assets[name]
         if asset.get("digest") != expected:
             raise ValueError("Release asset digest differs from the qualified plan")
@@ -106,6 +108,24 @@ def main() -> None:
             if manifest["revision"] != args.revision or set(manifest["images"]) != {"worker", "library", "byparr"}:
                 raise ValueError("Unexpected corresponding-source manifest")
             (args.output / name).write_bytes(content)
+    if not args.manifest_only:
+        archive = manifest["source_archive"]
+        if archive["sha256"] != args.source_sha256 or len(archive["parts"]) != 2:
+            raise ValueError("Unexpected whole source binding")
+        whole = hashlib.sha256()
+        total = 0
+        for index, part in enumerate(archive["parts"]):
+            name = f"corresponding-source.tar.gz.part-{index:03d}"
+            if part["name"] != name or not 0 < part["size"] < 2 * 1024**3 or assets[name].get("digest") != part["sha256"]:
+                raise ValueError("Unexpected source part binding")
+            _, size = download(assets[name]["browser_download_url"], part["sha256"], whole=whole)
+            if size != part["size"]:
+                raise ValueError("Anonymous source part size mismatch")
+            total += size
+            proof["assets"][name] = {"sha256": part["sha256"], "size": size, "url": assets[name]["browser_download_url"]}
+        if "sha256:" + whole.hexdigest() != args.source_sha256 or total != archive["size"]:
+            raise ValueError("Anonymous reassembled source differs from the original qualified archive")
+        proof["whole_archive"] = {"sha256": args.source_sha256, "size": total}
     (args.output / "anonymous-source-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
 
 
