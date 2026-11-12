@@ -39,12 +39,6 @@ def _run_cycle(args: Any) -> dict[str, Any]:
         stage = name
         event_stage = 'retirement' if name == 'retirement' else 'identity' if name in ('metadata', 'admission') else 'local'
         emit(service='library', stage=event_stage, code='started')
-        from activity import report
-        target = 'local' if name in ('intake', 'recovery', 'queue_snapshot') else 'retirement' if name == 'retirement' else 'identity'
-        for other in ('local', 'identity', 'retirement'):
-            if other != target:
-                report(other, 'waiting', 'Sequential cycle', reason='Waiting for ' + name)
-        report(target, 'working', name)
         statuses.save_cycle( {'status': 'running', 'started_at': started_at,
             'stage': stage, 'stage_started_at': now(), 'heavy_turn': turn})
     try:
@@ -89,10 +83,10 @@ def _run_cycle(args: Any) -> dict[str, Any]:
 
         def command(name: str, *arguments: Any) -> Any:
             # Arguments retain the former local call shape. No CLI parsing occurs.
-            from library.publish import Publisher
+            from library.admission import AdmissionPublisher
             from library.intake import receive
             from library.documents import load
-            publisher = Publisher(Catalog(state), args.reception, library, lab=True)
+            publisher = AdmissionPublisher(Catalog(state), args.reception, library, lab=True)
             if name == 'reconcile':
                 return publisher.reconcile()
             if name == 'activate':
@@ -106,23 +100,11 @@ def _run_cycle(args: Any) -> dict[str, Any]:
             if name == 'printed':
                 from library.printed import scan_printed
                 return scan_printed(Catalog(state), arguments[1], args.reception)
-            if name == 'publish':
-                return publisher.publish(arguments[1])
-            if name == 'report':
-                from library.review import report, render_report
-                value = report(Catalog(state))
-                atomic_yaml(evidence / 'review.yaml', value)
-                (evidence / 'review.md').write_text(render_report(value))
-                return value
             raise LibraryError('Unknown cycle action')
 
         common = ['--lab', '--reception', args.reception, '--library', library]
         progress('recovery')
         command('reconcile', *common)  # Must precede intake/activation/projection after crash.
-        from library.resolution import Resolution
-        from library.publish import Publisher
-        store = Catalog(state)
-        Resolution(store, args.reception).apply(Publisher(store, args.reception, library, lab=True))
         progress('intake')
         if args.auto:
             from library.intake import receive
@@ -216,20 +198,10 @@ def _run_cycle(args: Any) -> dict[str, Any]:
             if args.printed:
                 command('printed', '--asset', asset, *common)
             enriched = enrich(store, asset, providers, [])
-            current = enriched['assets'][asset]
-            publication = (enriched['editions'][current['identity']['edition']].get('publication')
-                           if current.get('identity') else None)
-            if publication and publication['asset'] == asset:
-                continue  # Existing exports require an explicit replacement, never an automatic rewrite.
-            identity = current.get('identity')
-            if (identity and current['status'] == 'validated' and not current.get('contested')
-                    and current.get('disposition') not in ('exclude', 'defer')
-                    and enriched['editions'][identity['edition']].get('selected') == identity['variant']
-                    and {v['edition'] for v in enriched['variants'].values() if v['asset'] == asset and v.get('active', True)} == {identity['edition']}):
-                command('publish', '--asset', asset, *common)
+            from library.admission import AdmissionPublisher, eligible
+            if eligible(enriched, asset):
+                AdmissionPublisher(store, args.reception, library, lab=True).publish_asset(asset)
         command('reconcile', *common)
-        if not args.auto:
-            command('report', '--output', evidence / 'review.yaml')
         retirement_results = []
         if getattr(args, 'retire_packages', False):
             if not args.credentials or args.queue:
@@ -245,11 +217,9 @@ def _run_cycle(args: Any) -> dict[str, Any]:
             receive(Catalog(state), args.reception, collector.captured(),
                     collector.monitor(), queue_value, incremental=True, inspection_limit=0)
         backend = store.backend()
-        current = store.working_set('retire', {'origins': backend.ids('origins'), 'editions': backend.ids('editions')}
+        current = store.working_set('retire', {'origins': backend.ids('origins')}
                                     if backend is not None else {}, media=False)
-        published = {edition['publication']['asset'] for edition in current['editions'].values()
-                     if edition.get('publication')}
-        published.update(key for key, asset in current['assets'].items() if asset.get('admission'))
+        published = {key for key, asset in current['assets'].items() if asset.get('admission')}
         origin_counts = {'published': 0, 'pending': 0, 'rejected': 0}
         for origin in current['origins'].values():
             kind = ('rejected' if origin['availability'] == 'rejected' else
@@ -263,14 +233,11 @@ def _run_cycle(args: Any) -> dict[str, Any]:
                    'published': len(published), 'pending_assets': len(set(current['assets']) - published),
                    'classified': sum(a.get('admission', {}).get('status') == 'classified' for a in current['assets'].values()),
                    'holding': sum(a.get('admission', {}).get('status') == 'holding' for a in current['assets'].values()),
-                   'origin_counts': origin_counts, 'report': str(evidence / 'review.md'),
+                   'origin_counts': origin_counts,
                    'concurrent_writer_reserve_guaranteed': False}
         statuses.save_cycle( summary)
         from library.views import build_projection
         atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
-        from activity import report
-        for activity_stage in ('local', 'identity', 'retirement'):
-            report(activity_stage, 'sleeping', 'Cycle complete')
         emit(service='library', stage='local', code='completed', duration_ms=int((time.monotonic() - started) * 1000))
         return summary
     except (LibraryError, CollectionError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -285,7 +252,4 @@ def _run_cycle(args: Any) -> dict[str, Any]:
         statuses.save_cycle( failure)
         from library.views import build_projection
         atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
-        from activity import report
-        for activity_stage in ('local', 'identity', 'retirement'):
-            report(activity_stage, 'blocked', 'Cycle error', reason='Cycle failed during ' + stage)
         return failure

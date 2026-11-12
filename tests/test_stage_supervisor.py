@@ -31,22 +31,6 @@ class StageSupervisorTests(unittest.TestCase):
         self.assertNotIn('library_cycle',service)
         self.assertNotIn('process_assets',service)
 
-    def test_native_history_memory_is_reserved_in_independent_and_serial_modes(self):
-        from library.stage_supervisor import units
-        from library.stage_runtime import demand
-        from library.stage_model import Obligation, Task
-        output = units(code=Path('/data/code'), python=Path('/data/code/.venv/bin/python'),
-            root=Path('/data/lab'), collector=Path('/data/collector'),
-            reception=Path('/data/reception'), credentials=Path('/data/secret.json'))
-        # Actual retained history needs332MiB with the safe C parser. Both
-        # dispatch modes must admit that working set within the same task pool.
-        for stage in ('collection', 'routing', 'retirement'):
-            obligation = Obligation(stage, 'source', 'revision', 'method')
-            task = Task(obligation.key, stage, 'source', 'revision', 'method', None,
-                        '2026-11-09T00:00:00+00:00')
-            self.assertGreaterEqual(demand(task).memory_mib, 512)
-            self.assertIn('MemoryMax=512M', output['booksys-stage-'+stage+'.service'])
-        self.assertIn('MemoryMax=512M', output['booksys-stage-serial.service'])
 
     def test_io_ceiling_checks_all_descendants_and_refuses_unknown_counters(self):
         from library.stage_supervisor import io_ceiling

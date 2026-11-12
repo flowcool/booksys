@@ -15,11 +15,9 @@ import zlib
 
 FRAME_LIMIT = 4 * 1024**2
 REQUEST_LIMIT = 65536
-LANES = {'read': (2, 8, 1.5), 'slow': (2, 0, 180.), 'decision': (1, 2, 1.5), 'diagnostics': (1, 3, 1.5)}
-ACTIONS = {'status': 'read', 'library': 'read', 'activity': 'read', 'fiche': 'read', 'cover': 'read',
-           'token': 'read', 'proof': 'read', 'relationships': 'read', 'diagnostics': 'diagnostics',
-           'page': 'slow', 'search': 'slow', 'case': 'decision', 'preview': 'decision',
-           'confirm': 'decision', 'confirm-work': 'decision'}
+LANES = {'read': (2, 8, 1.5), 'diagnostics': (1, 3, 1.5)}
+ACTIONS = {'status': 'read', 'library': 'read', 'fiche': 'read', 'cover': 'read',
+           'relationships': 'read', 'diagnostics': 'diagnostics'}
 
 
 class IPCError(ValueError):
@@ -160,25 +158,20 @@ class Controller:
             if time.monotonic() - admitted >= LANES[lane][2]:
                 self.respond(ident, error='Request deadline expired before dispatch')
                 return
-            if lane == 'decision':
-                from library.locking import bounded_acquisition
-                with bounded_acquisition(min(admitted + LANES[lane][2], time.monotonic() + .5)):
-                    result = self.invoke(action, value)
-            else:
-                result = self.invoke(action, value)
+            result = self.invoke(action, value)
             if time.monotonic() - admitted > LANES[lane][2]:
                 self.respond(ident, error='Request deadline expired; dispatched completion unknown')
             else:
                 targets = self.recipients(ident)
                 try:
-                    if action in ('status', 'activity'):
+                    if action == 'status':
                         raw = result.body if isinstance(result, EncodedJSON) else json.dumps(
                             result, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode()
                         if len(raw) > 16 * 1024**2:
                             raise ValueError('Compatibility body exceeds bound')
                         result = EncodedJSON(raw, base64.b64encode(zlib.compress(raw, level=1)).decode())
                     for recipient in targets:
-                        self.channel.result(recipient, result, chunks=action in ('status', 'activity'))
+                        self.channel.result(recipient, result, chunks=action == 'status')
                 except (TypeError, ValueError):
                     for recipient in targets:
                         self.respond(recipient, error='Response exceeds bound; ownership view incomplete')
@@ -207,7 +200,7 @@ class Controller:
                     except Exception:
                         self.respond(ident, error='Forbidden request envelope')
                         continue
-                share = lane == 'diagnostics' or action in {'status', 'library', 'activity', 'relationships'}
+                share = lane == 'diagnostics' or action in {'status', 'library', 'relationships'}
                 group_key = json.dumps([action, value], sort_keys=True, separators=(',', ':')) if share else None
                 if group_key is not None:
                     with self.group_lock:

@@ -16,8 +16,8 @@ from booksys_core.diagnostics import parse_event
 
 DOCKER_SOURCES = {'worker': ('booksys-worker-1', 'worker'), 'byparr': ('booksys-byparr-1', 'byparr')}
 UNIT = 'booksys-library.service'
-COMPOSE_ROLES = ('controller', 'discovery', 'collection', 'intake', 'processing',
-                 'copies', 'routing', 'retirement', 'byparr', 'pyload', 'reader-launcher')
+COMPOSE_ROLES = ('controller', 'discovery', 'collection', 'intake', 'ocr', 'metadata',
+                 'copies', 'routing', 'retirement', 'byparr', 'pyload')
 
 
 def timestamp(value: str) -> float:

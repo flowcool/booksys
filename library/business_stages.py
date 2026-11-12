@@ -21,29 +21,20 @@ class BusinessStages:
         self.catalog, self.reception, self.library = catalog, reception, library
         self.providers, self.capacity, self.isolated = providers, capacity, isolated
 
-    def discover(self, tasks: StageTasks, *, now: datetime, after: str = '', limit: int = 100) -> int:
+    def discover(self, tasks: StageTasks, *, now: datetime, after: str = '', limit: int = 100, keys: list[str] | None = None) -> int:
         count = 0
         backend = self.catalog.backend()
         if backend is None:
             raise LibraryError('Independent stages require PostgreSQL authority')
-        for key, asset in backend.scan('assets', after=after, limit=limit):
-            current = asset.get('resolution', {})
-            if current.get('status') == 'pending' and current.get('decision'):
-                record = backend.decision(current['decision'])
-                if record is None or record.get('target') != key or record.get('action') != 'resolve':
-                    raise LibraryError('Pending decision binding is unavailable')
-                tasks.discover(Obligation('copies', 'decision:' + record['id'], record['id'], METHODS['manual']), now=now)
-                count += 1
+        if keys is None:
+            items = backend.scan('assets', after=after, limit=limit)
+        else:                               # an incremental pass: only the assets written since the last one
+            found = ((key, backend.get('assets', key)) for key in keys)
+            items = [(key, record) for key, record in found if record is not None]
+        for key, asset in items:
             state = self.catalog.working_set('identify', {'assets': [key]}, media=False)
             for obligation in self.obligations(state, key, now=now):
-                task = tasks.discover(obligation, now=now)
-                if obligation.stage == 'metadata' and task.blocked == 'attempts_exhausted' and self.providers.admission is not None:
-                    from library.dependency_recovery import DependencyRecovery
-                    prior = state['assets'][key].get('stage_metadata', {})
-                    proof = DependencyRecovery(self.providers.admission.path.parent/'dependency-readiness.yaml').proof(
-                        prior.get('failed_dependencies', {}))
-                    if proof:
-                        tasks.recover_dependency(task.key, proof=proof, now=now)
+                tasks.discover(obligation, now=now)
                 count += 1
         return count
 
@@ -68,8 +59,8 @@ class BusinessStages:
             revision = (prior['evaluation'] if not changed and (prior.get('outcome') in ('retry', 'defer') or method_changed) and prior.get('evaluation') else
                         digest({'evidence': evidence, 'evaluation': prior.get('next_at', '')}))
             result.append(Obligation('metadata', key, revision, METHODS['metadata'],
-                due_at=due if not changed else now, replay=not bool(asset.get('identity'))))
-        if (prior and not asset.get('identity') and asset.get('work_result', {}).get('status') != 'identified'
+                due_at=due if not changed else now))
+        if (prior and asset.get('work_result', {}).get('status') != 'identified'
                 and asset.get('printed', {}).get('status') != 'ok'):
             result.append(Obligation('ocr', key, digest({'asset': key, 'pages': asset.get('page_manifest'),
                 'format': asset['format']}), METHODS['ocr']))
@@ -78,17 +69,7 @@ class BusinessStages:
             result.append(Obligation('copies', key, desired['signature'], METHODS['copies']))
         return result
 
-    def scopes(self, task: Task) -> list[str]:
-        from library.stage_execution import record_scopes
-        asset = self.decision_asset(task) if task.entity.startswith('decision:') else task.entity
-        return record_scopes(self.catalog.working_set('identify', {'assets': [asset]}, media=False))
-
     def execute(self, task: Task, *, now: datetime) -> str | StepResult:
-        from library.stage_execution import effect_scopes
-        with effect_scopes(self.catalog.directory, self.scopes(task)):
-            return self._execute(task, now=now)
-
-    def _execute(self, task: Task, *, now: datetime) -> str | StepResult:
         if task.stage == 'metadata':
             start = len(self.providers.events)
             from library.metadata import prepare_enrichment
@@ -131,84 +112,32 @@ class BusinessStages:
             state, result = prepare_printed(self.catalog, task.entity, self.reception)
             return StepResult('done' if result['status'] == 'ok' else 'retry',
                               prepared=self.catalog.prepare(state), successors=self.obligations(state, task.entity, now=now))
-        if task.stage == 'copies' and task.entity.startswith('decision:'):
-            from library.resolution import Resolution
-            from library.publish import Publisher
-            decision_results: list[Any]=[]
-            decision_writer = Publisher(self.catalog, self.reception, self.library, capacity=self.capacity,
-                isolated=self.isolated, lab=not self.isolated, local_recovery=True,prepared=decision_results)
-            Resolution(self.catalog,self.reception).apply(decision_writer,limit=1,asset_only=self.decision_asset(task),task=task)
-            if len(decision_results)>1:raise LibraryError('Multiple decision results require reconciliation')
-            return StepResult('done',prepared=decision_results[0] if decision_results else None)
         if task.stage == 'copies':
             from library.store import PreparedResult
             copy_results: list[PreparedResult]=[]
             writer = AdmissionPublisher(self.catalog, self.reception, self.library,
                 capacity=self.capacity, isolated=self.isolated, lab=not self.isolated, local_recovery=True,prepared=copy_results)
-            result=writer.publish_asset(task.entity)
+            writer.publish_asset(task.entity)
             if len(copy_results)>1:
                 raise LibraryError('Copies prepared multiple terminal records; preserve journal')
-            return StepResult('done',proof='copies:'+digest(result),prepared=copy_results[0] if copy_results else None)
+            return StepResult('done',prepared=copy_results[0] if copy_results else None)
         raise LibraryError('Stage requires its native source adapter')
 
-    def local_failure(self, task: Task) -> str:
-        if task.stage != 'copies':
-            return ''
-        from library.publish import Publisher
-        from library.provisional import ProvisionalPublisher
-        asset = self.decision_asset(task) if task.entity.startswith('decision:') else task.entity
-        try:
-            owned = []
-            for writer_type in (Publisher, AdmissionPublisher, ProvisionalPublisher):
-                writer = writer_type(self.catalog, self.reception, self.library, capacity=self.capacity,
-                    isolated=self.isolated, lab=not self.isolated, local_recovery=True)
-                for operation in writer.operations.records():
-                    # Validate every namespace before declaring a local scope.
-                    if writer.operation_applies(operation, asset):
-                        owned.append(operation)
-            return 'local-journals:' + digest(owned) if owned else ''
-        except (LibraryError, OSError, KeyError, ValueError, TypeError):
-            return ''
-
     def receipt(self, task: Task) -> tuple[str,str] | StepResult:
-        """Recover canonical local outcomes after acting-process exclusion.
+        """Read the publication directory and its journal before another copy attempt.
 
         Reconciliation may finish an existing journal. It never starts a fresh
         conversion. Retained partial files remain available as evidence.
         """
-        asset_id = self.decision_asset(task) if task.entity.startswith('decision:') else task.entity
+        asset_id = task.entity
         if task.stage == 'copies':
-            from library.publish import Publisher
             pending_results: list[Any]=[]
-            writer=Publisher(self.catalog,self.reception,self.library,capacity=self.capacity,isolated=self.isolated,lab=not self.isolated,local_recovery=True,prepared=pending_results)
-            if task.entity.startswith('decision:'):
-                from library.resolution import Resolution
-                Resolution(self.catalog,self.reception).apply(writer,limit=1,asset_only=asset_id,task=task,reconcile_only=True)
-            else:
-                writer.reconcile(asset=asset_id)
+            writer=AdmissionPublisher(self.catalog,self.reception,self.library,capacity=self.capacity,isolated=self.isolated,lab=not self.isolated,local_recovery=True,prepared=pending_results)
+            writer.reconcile(asset=asset_id)
             if len(pending_results)>1:raise LibraryError('Multiple recovered copy results require reconciliation')
-            if pending_results:return StepResult('done',proof='retained-copy-result',prepared=pending_results[0])
+            if pending_results:return StepResult('done',prepared=pending_results[0])
         asset = self.catalog.get('assets', asset_id)
         if asset is None:
             return 'absent', 'asset-absent:' + task.input_revision
-        if task.stage == 'metadata':
-            prior = asset.get('stage_metadata', {})
-            complete = prior.get('evaluation') == task.input_revision and prior.get('outcome') == 'done'
-        elif task.stage == 'ocr':
-            complete = asset.get('printed', {}).get('status') == 'ok'
-        elif task.entity.startswith('decision:'):
-            resolution = asset.get('resolution', {})
-            complete = (resolution.get('decision') == task.entity.removeprefix('decision:')
-                        and resolution.get('status') == 'applied')
-        else:
-            complete = asset.get('admission', {}).get('signature') == task.input_revision
+        complete = asset.get('admission', {}).get('signature') == task.input_revision
         return ('done' if complete else 'absent'), 'local-outcome:' + digest(asset)
-
-    def decision_asset(self, task: Task) -> str:
-        backend = self.catalog.backend()
-        if backend is None:
-            raise LibraryError('Decision task requires PostgreSQL authority')
-        record = backend.decision(task.entity.removeprefix('decision:'))
-        if record is None or record.get('action') != 'resolve':
-            raise LibraryError('Decision task binding changed')
-        return str(record['target'])

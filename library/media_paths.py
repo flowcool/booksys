@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from library.primitives import LibraryError
@@ -15,10 +16,6 @@ def media_root(variable: str, default: Path) -> Path:
     return root
 
 
-def pieces_root(directory: Path) -> Path:
-    return media_root('BOOKSYS_PIECES_ROOT', directory/'library-resolution/pieces')
-
-
 def bundle_inputs(directory: Path) -> Path:
     return media_root('BOOKSYS_BUNDLE_INPUT_ROOT', directory/'bundle-inputs')
 
@@ -28,11 +25,10 @@ def writer_uid(path: Path) -> int:
     configured = os.environ.get('BOOKSYS_NAS_WRITER_UID')
     if not configured:
         return os.getuid()
-    from library.nas_storage import unescape
     matches = []
     for line in Path('/proc/self/mountinfo').read_text().splitlines():
         row = line.split()
-        mount = Path(unescape(row[4]))
+        mount = Path(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), row[4]))
         if path.absolute().is_relative_to(mount):
             separator = row.index('-')
             matches.append((len(mount.parts), row[separator+1], row[separator+2]))

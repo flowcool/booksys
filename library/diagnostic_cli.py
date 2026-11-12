@@ -4,7 +4,6 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Any
 
 from booksys_core.diagnostics import utc
 from library.diagnostic_reader import DiagnosticReader, Filter
@@ -25,21 +24,15 @@ def main(argv: list[str] | None = None, *, reader: DiagnosticReader | None = Non
         parser.add_argument('--' + field)
     parser.add_argument('--older', action='store_true', help='Allow one explicit retained window older than24h')
     parser.add_argument('--stack', action='store_true', help='Include filtered project stack locations')
-    parser.add_argument('--compose', action='store_true', help='Use fixed Compose sources through the restricted launcher IPC')
     args = parser.parse_args(argv)
     try:
         query = Filter(start=utc_epoch(args.start), end=utc_epoch(args.end), service=args.service,
             stage=args.stage, reason=args.reason, ref_kind=args.ref_kind, ref=args.ref, cycle_id=args.cycle_id)
         if reader is None:
-            from library.log_sources import LiveSource, COMPOSE_ROLES
-            from library.compose_diagnostics import RemoteSource, refresh_sources
-            sources: Any = ([RemoteSource(name,args.root/'state') for name in COMPOSE_ROLES] if args.compose
-                           else [LiveSource(name) for name in ('worker', 'byparr', 'library')])
-            if args.compose:
-                refresh_sources(sources)
-            else:
-                for source in sources:
-                    source.refresh()
+            from library.log_sources import LiveSource
+            sources = [LiveSource(name) for name in ('worker', 'byparr', 'library')]
+            for source in sources:
+                source.refresh()
             reader = DiagnosticReader(sources, args.root / 'evidence/diagnostic-reader.lock')
         result = reader.query(query, cursor=args.cursor, older=args.older, stacks=args.stack)
         rows = result.pop('events')

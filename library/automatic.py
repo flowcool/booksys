@@ -9,7 +9,6 @@ from library.catalog import Catalog
 from library.primitives import LibraryError, now, digest
 from library.metadata import Providers, enrich
 from library.printed import scan_printed
-from library.publish import Publisher
 
 
 METHOD = 'work-metadata-2026-11-08-v3'
@@ -23,7 +22,7 @@ def evidence_version(asset: dict[str, Any]) -> str:
 
 
 def ready_asset(asset: dict[str, Any], state: dict[str, Any], timestamp: float) -> bool:
-    if (asset.get('resolution') or asset.get('disposition') in ('exclude', 'defer') or
+    if (asset.get('disposition') in ('exclude', 'defer') or
             asset.get('status') != 'validated' or not any(state['origins'][origin].get('availability') == 'validated'
                                                          for origin in asset['origins'])):
         return False
@@ -48,11 +47,6 @@ def save_attempt(store: Catalog, asset: str, attempt: dict[str, Any]) -> None:
     current = store.working_set('identify', {'assets': [asset]})
     current['assets'][asset]['automation'] = attempt
     store.save(current, expected=current['revision'])
-    from activity import report
-    if attempt.get('outcome') != 'running':
-        report('identity', 'waiting' if attempt.get('outcome') in ('pending', 'retry', 'deferred') else 'sleeping',
-               'Metadata result', item=asset, reason='Metadata ' + str(attempt.get('outcome')),
-               next_attempt=attempt.get('next_attempt'), progressed=True)
 
 
 def process_assets(store: Catalog, reception: Path, library: Path, providers: Providers,
@@ -76,8 +70,6 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
             continue
         if completed >= limit or providers.budget <= 0:
             break
-        from activity import report
-        report('identity', 'working', 'Metadata', item=key, title=next((h.get('title', '') for h in asset.get('captured_hints', {}).values()), ''))
         completed += 1
         reused_identity = attempt.get('outcome') == 'identified'
         attempts = int(attempt.get('attempts', 0)) + (0 if reused_identity else 1)
@@ -90,7 +82,7 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
                 current = enrich(store, key, providers, [])
                 value = current['assets'][key]
                 work_identified = value.get('work_result', {}).get('status') == 'identified'
-                if not work_identified and not value.get('identity') and asset.get('printed', {}).get('status') != 'ok':
+                if not work_identified and asset.get('printed', {}).get('status') != 'ok':
                     try:
                         printed = scan_printed(store, key, reception)
                     except LibraryError as exc:
@@ -110,12 +102,11 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
             temporary = any(event.get('status') == 'unavailable' and
                 (event.get('http_status', 0) == 429 or event.get('http_status', 0) >= 500 or
                  ('reason' in event and event['reason'] != 'Request budget exhausted')) for event in events)
-            identity = value.get('identity')
             work_identified = value.get('work_result', {}).get('status') == 'identified'
             record['reason'] = value.get('work_result', value.get('identity_result', {})).get('reason', 'Identity is unknown')
-            if deferred and not identity and not work_identified:
+            if deferred and not work_identified:
                 record.update(outcome='deferred', attempts=max(0, attempts - 1), next_attempt=0)
-            elif temporary and not identity and not work_identified:
+            elif temporary and not work_identified:
                 record['outcome'] = 'retry' if attempts < 3 else 'unavailable'
                 record['reason'] = 'Metadata source temporarily unavailable'
             else:
@@ -123,19 +114,6 @@ def process_assets(store: Catalog, reception: Path, library: Path, providers: Pr
                 record['next_attempt'] = clock() + WEEK
                 if work_identified:
                     record['outcome'] = 'identified'
-                if identity and not value.get('contested'):
-                    edition = current['editions'][identity['edition']]
-                    if edition.get('selected') == identity['variant']:
-                        if not value.get('admission'):
-                            # Failed writes stop the cycle. Never resend them as transport retries.
-                            try:
-                                from library.admission import AdmissionPublisher
-                                AdmissionPublisher(store, reception, library, lab=True).publish_asset(key)
-                            except (LibraryError, OSError):
-                                record.update(outcome='unavailable', reason='Publication failed; inspect journal before retry')
-                                save_attempt(store, key, record)
-                                raise
-                        record.update(outcome='published', reason='Validated edition published')
         except OSError:
             if record.get('outcome') == 'unavailable':
                 raise

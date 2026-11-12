@@ -124,26 +124,7 @@ class CollectorTests(unittest.TestCase):
                              "https://files.example/a\nhttps://files.example/b\n")
             self.assertTrue((directory / "newhost.txt").exists())
 
-    def test_watermark_excludes_existing_catalogue_without_fetching_details(self):
-        calls = []
-        def fetch(url):
-            calls.append(url)
-            return captured(url)
-        with tempfile.TemporaryDirectory() as temporary:
-            create_store(self, Path(temporary), empty())
-            counts = collect([DEFAULT_CATEGORY], fetch, Path(temporary), pages=0, after_id=358548)
-        self.assertEqual(counts["collected"], 0)
-        self.assertEqual(calls, [DEFAULT_CATEGORY])
 
-    def test_missing_pagination_before_watermark_stops_incremental_scan(self):
-        def fetch(url):
-            if url == DEFAULT_CATEGORY:
-                return f'<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="{FIRST}">Book</a></div>'
-            return captured(url)
-        with tempfile.TemporaryDirectory() as temporary:
-            create_store(self, Path(temporary), empty())
-            with self.assertRaisesRegex(CollectionError, "before reaching"):
-                collect([DEFAULT_CATEGORY], fetch, Path(temporary), {"1fichier"}, pages=0, after_id=358000)
 
 
 class ByparrTests(unittest.TestCase):

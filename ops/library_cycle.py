@@ -37,8 +37,6 @@ def main() -> int:
     parser.add_argument('--retire-packages', action='store_true', help='Retire one technically complete Booksys acquisition after a successful cycle')
     parser.add_argument('--pyload-scripts', type=Path, help='Audited local pyLoad scripts directory; must contain no scripts')
     args = parser.parse_args()
-    from activity import bind, report
-    bind(args.root / 'evidence/activity', 'local', 'identity', 'retirement')
     inputs = (args.captured, args.submissions, *(p for p in (args.queue, args.credentials) if p))
     try:
         lab_preflight(args.reception, args.root / 'library', args.root / 'state', inputs)
@@ -49,8 +47,6 @@ def main() -> int:
     except LibraryError as exc:
         value = {'status': 'skipped' if str(exc) == 'Another library operation is active' else 'blocked',
                  'reason': str(exc)}
-        report('local', 'waiting' if value['status'] == 'skipped' else 'blocked', 'Cycle gate',
-               reason='Processing lock occupied' if value['status'] == 'skipped' else 'Cycle preflight failed')
         print(json.dumps(value))
         return 0 if value['status'] == 'skipped' else 2
 

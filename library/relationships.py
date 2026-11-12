@@ -16,7 +16,7 @@ from library.store import Store, RELATIONS
 
 Node = tuple[str, str]
 Edge = tuple[Node, Node, str]
-SINGULAR = {'assets': 'asset', 'origins': 'origin', 'works': 'work', 'editions': 'edition', 'operations': 'operation'}
+SINGULAR = {'assets': 'asset', 'origins': 'origin'}
 
 
 class Relationships:
@@ -74,14 +74,6 @@ class Relationships:
                 if first_kind in SINGULAR and second_kind in SINGULAR:
                     for first, second in db.execute(f'SELECT source,target FROM {relation}'):
                         edge(node(SINGULAR[first_kind], first), node(SINGULAR[second_kind], second), relation)
-            for edition, asset in db.execute('SELECT e.target,a.target FROM variant_edition e JOIN variant_asset a ON a.source=e.source'):
-                edge(node('edition', edition), node('asset', asset), 'edition_variant_asset')
-            for ident, target, action, sequence in db.execute('SELECT id,target,action,sequence FROM ledger_records'):
-                decision = node('decision', ident, action=action, applied=sequence <= len(applied))
-                if target:
-                    edge(decision, node('asset', target), 'decision_target')
-            for decision, edition in db.execute('SELECT decision,edition FROM decision_editions'):
-                edge(node('decision', decision), node('edition', edition), 'decision_edition')
         for source, record in (submissions or {}).get('submissions', {}).items():
             if not isinstance(source, str) or not isinstance(record, dict):
                 raise LibraryError('Invalid collection observation')

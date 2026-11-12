@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
-import os
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -11,60 +10,10 @@ from library.catalog import Catalog
 from library.store import PreparedResult
 from library.relocation import matches_retained
 from library.primitives import LibraryError, digest, now
-from library.readers import inspect_file, fingerprint, sha256, READER_POLICY, ReaderUnavailable
+from library.readers import inspect_file, fingerprint, sha256, READER_POLICY
 
 
 from library.reception import reception_path as reception_path
-
-
-def _receive_retired(state: dict[str, Any], store: Catalog, root: Path,
-                     source: str, package: dict[str, Any]) -> None:
-    evidence = package.get('retirement_proof', {})
-    recorded = evidence.get('origins', {})
-    files = evidence.get('files', {})
-
-    def check_file(relative: str, scope: str) -> None:
-        proof = files.get(scope + '/' + relative)
-        if not proof or proof.get('path') != relative or proof.get('scope') != scope:
-            raise LibraryError('Retired input lacks retained technical proof')
-        base = root if scope == 'reception' else store.directory
-        if scope == 'state' and relative.startswith('bundle-inputs/'):
-            from library.media_paths import bundle_inputs
-            path = reception_path(bundle_inputs(store.directory), str(Path(relative).relative_to('bundle-inputs').parent), Path(relative).name)
-        else:
-            path = reception_path(base, str(Path(relative).parent), Path(relative).name)
-        if not matches_retained(path, proof['fingerprint'], proof.get('sha256')):
-            raise LibraryError('Retired input changed or disappeared')
-
-    def check_parent(origin: dict[str, Any]) -> None:
-        check_file(origin['path'], 'reception')
-        if origin.get('bundle'):
-            check_file('bundle-inputs/' + origin['sha256'] + '/manifest.yaml', 'state')
-        for part in origin.get('source_parts', []):
-            check_file(part['path'], 'reception')
-
-    for oid, origin in state['origins'].items():
-        if origin['source'] != source or origin['pid'] != package['pid']:
-            continue
-        origin['retirement'] = package['retirement']
-        try:
-            prior = recorded.get(oid, {})
-            fields = ('source', 'pid', 'fid', 'path', 'sha256', 'parent_origin',
-                      'parent_sha256', 'member', 'bundle', 'source_parts', 'multipart_parent')
-            if not prior or any(origin.get(k) != prior.get(k) for k in fields):
-                raise LibraryError('Retired origin differs from retained technical proof')
-            if origin.get('parent_origin'):
-                check_file(origin['path'], 'state')
-                parent = state['origins'][origin['parent_origin']]
-                check_parent(parent)
-            else:
-                # Failed or cancelled redundant links need not have a local file.
-                if 'reception/' + origin['path'] in files:
-                    check_parent(origin)
-                elif origin.get('availability') in ('validated', 'bundle', 'multipart_member'):
-                    raise LibraryError('Retired validated input lacks a retained file')
-        except (LibraryError, OSError, KeyError, TypeError) as exc:
-            origin.update(availability='rejected', reason=str(exc))
 
 
 def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[str, Any],
@@ -118,9 +67,10 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                     origin['availability'] = 'package_missing'
             continue
         if package['name'] != submission['name']:
-            raise LibraryError('Tracked pyLoad package identity changed')
-        if package.get('retirement'):
-            _receive_retired(state, store, root, source, package)
+            # pyLoad gave the id of a released package to a new one: ours is gone. One such package must not stop the sweep.
+            for origin in state['origins'].values():
+                if origin['pid'] == pid and origin['source'] == source:
+                    origin['availability'] = 'package_missing'
             continue
         from library.multipart import is_multipart, receive_parts
         inspected += receive_parts(state, media_directory or store.directory, root, source, package, captured['items'][source],
@@ -189,8 +139,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             (previous.get('availability') == 'pending' and 'Nested container' in previous.get('reason', ''))):
                         from library.bundles import receive_bundle
                         from library.bundle_worker import POLICY
-                        engine_policy = digest({'bundle': POLICY, 'reader': READER_POLICY,
-                                                'image': os.environ.get('BOOKSYS_READER_IMAGE', 'native')})
+                        engine_policy = digest({'bundle': POLICY, 'reader': READER_POLICY})
                         temporary_bundle = any(text in previous.get('reason', '').lower() for text in
                             ('isolated bundle worker failed', 'cannot create isolated bundle engine', 'wall limit'))
                         same_attempt = (previous.get('fingerprint') == stamp and
@@ -226,7 +175,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             'Reader policy differs from controller'))
                     if (incremental and not retry_due and not policy_retry and previous.get('fingerprint') == stamp
                             and previous.get('path') == origin['path']
-                            and previous.get('availability') in ('validated', 'rejected', 'pending')):
+                            and previous.get('availability') in ('validated', 'rejected', 'pending')
+                            and previous.get('reason') != 'Decoder unavailable; retry later'):
                         if previous.get('availability') == 'validated' and previous.get('sha256') not in state['assets']:
                             raise LibraryError('Cached origin references missing asset')
                         state['origins'][oid] = {**previous, **size_fields, 'observed_at': origin['observed_at'], 'transfer_status': 0, 'transfer_error': bool(item.get('error'))}
@@ -236,8 +186,6 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         state['origins'][oid] = origin
                         continue
                     inspected += 1
-                    from activity import report
-                    report('local', 'working', 'Validate file', item=oid, title=captured['items'][source].get('title', ''))
                     result = inspect_file(path, stable_seconds=stable_seconds)
                     if result['status'] == 'rejected':
                         from booksys_core.diagnostics import emit
@@ -281,8 +229,6 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         if oid not in asset['origins']:
                             asset['origins'].append(oid)
                         asset['captured_hints'][source] = captured['items'][source]
-            except ReaderUnavailable:
-                raise
             except (LibraryError, OSError) as exc:
                 from booksys_core.diagnostics import emit, exception_details
                 emit(service='library', stage='local', code='failed',
@@ -300,10 +246,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
         prepared.append(store.prepare(state))
         return state
     store.save(state, expected=state['revision'])
-    from activity import report
     completed_after = {(oid, o.get('sha256'), o.get('availability')) for oid, o in state['origins'].items()
                        if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
-    report('local', 'sleeping', 'Intake committed', progressed=bool(completed_after - completed_before))
     if backend is None:
         return store.read()
     from library.primitives import WorkingState

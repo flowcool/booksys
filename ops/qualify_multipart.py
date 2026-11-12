@@ -118,7 +118,7 @@ def verify_ends(output: Path) -> dict[str, Any]:
     actual = {item['member']:item['sha256'] for item in manifest['members'] if item['kind'] == 'comic'}
     if actual != expected or manifest.get('volume_end_verified') is not True:
         raise LibraryError('Final engine changed the retained child set or lacks end proof')
-    result = {'image':os.environ.get('BOOKSYS_READER_IMAGE'), 'volume_end_verified':True,
+    result = {'volume_end_verified':True,
               'same_child_hashes':True,'members':len(actual),'manifest':str(directory / 'manifest.yaml'),
               'manifest_sha256':sha256(directory / 'manifest.yaml')}
     atomic_yaml(output / 'final-end-proof.yaml',result)

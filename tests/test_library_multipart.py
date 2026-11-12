@@ -45,37 +45,3 @@ class MultipartTests(unittest.TestCase):
                 self.assertIn({'unfinished':'Awaiting part','missing':'Missing part',
                                'symlink':'symlink','unsupported':'Unsupported multipart'}[mode],reasons)
 
-    def test_unrelated_rars_with_volume_names_are_not_a_complete_set(self):
-        import tempfile
-        from pathlib import Path
-        from library.bundles import retain
-        from test_library_readers import rar_bytes
-        from test_library_bundles import comic
-        with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder); reception=root/'reception'; reception.mkdir()
-            parts=[reception/f'A.part{i}.rar' for i in (1,2)]
-            for part in parts: part.write_bytes(rar_bytes('One.cbz',comic()))
-            with self.assertRaisesRegex(LibraryError,'untracked|Missing part'):
-                retain(parts[0],root/'state',stable_seconds=0,parts=parts)
-            self.assertFalse(any((root/'state/bundle-inputs').glob('[0-9a-f]'*64)))
-
-
-    def test_reader_reports_container_setup_failure_separately_from_limits(self):
-        import tempfile
-        import subprocess
-        from pathlib import Path
-        from unittest.mock import patch
-        from library.readers import inspect_file, ReaderUnavailable
-        from test_library_bundles import comic
-        with tempfile.TemporaryDirectory() as folder:
-            source=Path(folder)/'comic.cbz';source.write_bytes(comic())
-            failed=subprocess.CompletedProcess([],125,b'',b'docker: No such image: retained-candidate')
-            with patch('library.readers.subprocess.run',return_value=failed):
-                with self.assertRaises(ReaderUnavailable) as error:
-                    inspect_file(source,stable_seconds=0)
-            self.assertIn('container setup failure',str(error.exception))
-            self.assertIn('No such image',str(error.exception))
-            self.assertNotIn('resource limit',str(error.exception))
-            with patch('library.readers.subprocess.run',side_effect=subprocess.TimeoutExpired('worker',45)):
-                result=inspect_file(source,stable_seconds=0)
-            self.assertIn('wall limit',result['reason'])

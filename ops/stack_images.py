@@ -25,8 +25,7 @@ def main() -> None:
     revision = command('git', 'rev-parse', 'HEAD')
     args.evidence.mkdir(parents=True, exist_ok=False)
     images = {}
-    for role, dockerfile, target in (('app', 'Dockerfile.stack', 'application'),
-            ('reader', 'Dockerfile.stack', 'reader'), ('launcher', 'Dockerfile.stack', 'launcher')):
+    for role, dockerfile, target in (('app', 'Dockerfile.stack', 'application'),):
         tag = 'booksys-'+role+':compose-'+revision[:12]
         argv = ['docker', 'build', '-f', dockerfile, '--build-arg', 'BOOKSYS_REVISION='+revision, '-t', tag]
         if target:
@@ -41,7 +40,7 @@ def main() -> None:
 from library.authority import code_digest
 assert sys.version_info[:2] == (3,14)
 print(json.dumps({'application_sha256': code_digest(), 'python': sys.version, 'psycopg': psycopg.__version__}))'''
-    for role in ('app', 'reader', 'launcher'):
+    for role in ('app',):
         container = command('docker', 'create', '--name', 'booksys-'+role+'-probe-'+revision[:12], '--network=none', '--read-only',
             '--cap-drop=ALL', '--security-opt=no-new-privileges', '--entrypoint=/app/.venv/bin/python',
             images[role]['id'], '-c', probe)
@@ -64,7 +63,7 @@ print(json.dumps({'application_sha256': code_digest(), 'python': sys.version, 'p
              'retention': 'Named local images retained; no prune or automatic cleanup',
              'limits': 'Clean retrieval succeeded now; future registry and Debian snapshot availability is not guaranteed'}
     (args.evidence/'images.json').write_text(json.dumps(value, indent=2)+'\n')
-    print('Built three identified images; stopped probes and exact application digests retained')
+    print('Built one identified image; stopped probes and exact application digests retained')
 
 
 if __name__ == '__main__':

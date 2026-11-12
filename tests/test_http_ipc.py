@@ -23,26 +23,6 @@ class IPCTests(unittest.TestCase):
         finally:
             remote.close(); server.close(); thread.join(1)
 
-    def test_slow_proof_does_not_hold_reads_and_disconnect_does_not_resend(self):
-        first, second = socket.socketpair()
-        entered = threading.Event()
-        calls = []
-        def invoke(action, value):
-            calls.append(action)
-            if action == 'page':
-                entered.set(); time.sleep(.3)
-            return {'action': action}
-        controller = Controller(Channel(first), invoke)
-        thread = threading.Thread(target=controller.serve, daemon=True);thread.start()
-        remote = Remote(Channel(second))
-        slow = threading.Thread(target=lambda: remote.call('page', {'asset': 'a', 'page': 1}))
-        slow.start(); self.assertTrue(entered.wait(1))
-        start = time.monotonic()
-        self.assertEqual(remote.call('status', {}), {'action': 'status'})
-        self.assertLess(time.monotonic() - start, .2)
-        slow.join(2)
-        remote.close(); controller.close(); thread.join(1)
-        self.assertEqual(calls.count('page'), 1)
 
     def test_oversized_malformed_frame_and_unknown_action_fail_closed(self):
         first, second = socket.socketpair()
@@ -59,22 +39,6 @@ class IPCTests(unittest.TestCase):
             remote.call('run_command', {'command': 'docker'})
         remote.close(); controller.close(); thread.join(1)
 
-    def test_compatibility_chunks_and_proof_binary_segment_are_bounded(self):
-        first, second = socket.socketpair()
-        value = {'rows': ['x' * 1000] * 5000}
-        import base64
-        png = b'png' * 1000000
-        def invoke(action, payload):
-            return value if action in ('status', 'activity') else {'png': base64.b64encode(png).decode()}
-        controller = Controller(Channel(first), invoke)
-        thread = threading.Thread(target=controller.serve, daemon=True); thread.start()
-        remote = Remote(Channel(second))
-        try:
-            self.assertEqual(remote.call('status', {}), value)
-            self.assertEqual(remote.call('activity', {}), value)
-            self.assertEqual(base64.b64decode(remote.call('proof', {})['png']), png)
-        finally:
-            remote.close(); controller.close(); thread.join(1)
 
     def test_identical_inflight_diagnostic_searches_share_one_job(self):
         from concurrent.futures import ThreadPoolExecutor

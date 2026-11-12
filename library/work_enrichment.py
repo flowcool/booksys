@@ -7,7 +7,7 @@ from library.asset_evidence import bind_evidence
 from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
-from library.work_identity import evaluate_work, classify_work, merge_work_decision
+from library.work_identity import evaluate_work, classify_work
 
 
 def printed_concordance(evidence: dict[str, Any], asset: dict[str, Any],
@@ -119,12 +119,6 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     result['attempts'] = attempts
     result['evidence'] = evidence
     result['updated_at'] = now()
-    from library.cover_candidates import compare_covers, METHOD as COVER_METHOD
-    hashes = {str(c.get('edition_ref')): c.get('cover_hash') for c in candidates}
-    comparisons = compare_covers((asset.get('printed') or {}).get('cover_hash'), hashes)
-    result['cover_comparison'] = {'method': COVER_METHOD, 'candidates': comparisons,
-        'status': 'compared' if comparisons else 'unavailable',
-        'reason': '' if comparisons else 'No qualified reference cover bytes; media robots policy retained'}
     if not candidates and not evidence.get('identity_conflicts'):
         statuses = {a['status'] for a in attempts}
         result['source_status'] = ('unavailable' if statuses - {'ok', 'no_candidate'} else 'no_candidate')
@@ -142,7 +136,4 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
         result['classification'] = classification
         result['work'].update({k: classification[k] for k in ('family', 'genres', 'adult', 'recommended_age')})
         result['field_conflicts'].update(classification['field_conflicts'])
-    # Explicit work decisions are replayable and take precedence over enrichment.
-    if asset.get('work_decision'):
-        result = merge_work_decision(result, asset['work_decision'])
     asset['work_result'] = result

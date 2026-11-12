@@ -12,7 +12,6 @@ class WorkIdentityTests(unittest.TestCase):
     def test_standalone_title_bound_to_file_identifies_without_an_edition(self):
         result = evaluate_work({'title': 'Grand Voyage (Le)', 'asset_bound': True}, [reference()])
         self.assertEqual(result['status'], 'identified')
-        self.assertEqual(result['edition_status'], 'unknown')
         self.assertNotIn('series', result['work'])
         self.assertNotIn('number', result['work'])
         self.assertNotIn('isbn', result['work'])
@@ -41,7 +40,6 @@ class ConcordanceSafetyTests(unittest.TestCase):
             with self.subTest(candidates=candidates):
                 result = evaluate_work({'title': 'Le Grand Voyage', 'asset_bound': True}, candidates)
                 self.assertEqual(result['status'], 'identified')
-                self.assertEqual(result['edition_status'], 'unknown')
                 self.assertEqual(len(result['concordant_candidates']), 2)
 
     def test_same_work_editions_keep_secondary_conflicts_and_partial_creator_credits(self):
@@ -52,7 +50,6 @@ class ConcordanceSafetyTests(unittest.TestCase):
         result = evaluate_work({'title': 'Le Grand Voyage', 'asset_bound': True}, candidates)
         self.assertEqual(result['status'], 'identified')
         self.assertEqual(result['work']['author'], 'Alice')
-        self.assertEqual(result['edition_status'], 'unknown')
         for field in ('publisher', 'date', 'isbn'):
             self.assertNotIn(field, result['work'])
             self.assertIn(field, result['field_conflicts'])

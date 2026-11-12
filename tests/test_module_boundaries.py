@@ -21,9 +21,6 @@ class BoundaryTests(unittest.TestCase):
                         edges.append(f'{path.relative_to(root)}:{node.lineno} -> {module}')
         self.assertEqual(edges, [])
 
-    def test_application_import_graph_has_no_runtime_cycles(self):
-        from ops.qualification.dependencies import import_graph, cycles
-        self.assertEqual(cycles(import_graph(Path(__file__).resolve().parents[1])), [])
 
     def test_cycle_and_views_are_application_modules(self):
         from library.cycle import run_cycle

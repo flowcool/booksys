@@ -7,7 +7,6 @@ from pathlib import Path
 import signal
 import socket
 import threading
-import re
 from typing import Any, Iterator
 
 from library.primitives import LibraryError
@@ -48,12 +47,10 @@ def notify(message: str) -> None:
 
 
 def units(*, code: Path, python: Path, root: Path, collector: Path, reception: Path,
-          credentials: Path, reader_image: str = '') -> dict[str, str]:
+          credentials: Path) -> dict[str, str]:
     paths = (code, python, root, collector, reception, credentials)
     if any(not path.is_absolute() or any(c.isspace() or c in '%$"\\' for c in str(path)) for path in paths):
         raise LibraryError('Unit paths must be absolute and require no expansion')
-    if reader_image and not re.fullmatch('sha256:[0-9a-f]{64}', reader_image):
-        raise LibraryError('Supervisor requires the qualified immutable reader ID')
     result = {'booksys.slice': '[Unit]\nDescription=Booksys shared business envelope\n[Slice]\nCPUQuota=200%\nMemoryMax=3584M\nMemorySwapMax=0\nTasksMax=384\n'}
     for queue in (*QUEUES, 'discovery', 'serial'):
         memory = 512 if queue in ('collection', 'routing', 'retirement', 'discovery', 'serial') else 256
@@ -67,9 +64,7 @@ def units(*, code: Path, python: Path, root: Path, collector: Path, reception: P
             f'Slice=booksys.slice\nCPUQuota=25%\nMemoryMax={memory}M\nMemorySwapMax=0\nTasksMax=48\n'
             'KillMode=control-group\nDelegate=no\nTimeoutStopSec=5\nWatchdogSec=15\nRestart=on-failure\nRestartSec=5\n'
             'Environment=BOOKSYS_ADMISSION_STATE=' + str(root/'state') + '\n'
-            'Environment=BOOKSYS_ACTIVITY_DIR=' + str(root/'state/activity') + '\n'
             'Environment=TMPDIR=/data/tmp\nEnvironment=XDG_CACHE_HOME=/data/cache/flow\n'
-            + ('Environment=BOOKSYS_READER_IMAGE=' + reader_image + '\n' if reader_image else '') +
             '[Install]\nWantedBy=multi-user.target\n')
     return result
 

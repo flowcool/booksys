@@ -3,9 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from contextlib import nullcontext
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +12,8 @@ from library.catalog import Catalog
 from library.primitives import LibraryError, atomic_yaml, lock
 from library.intake import receive
 from library.metadata import Providers, enrich
-from library.publish import Publisher, Capacity
-from library.review import decide, render_report, report
+from library.admission import AdmissionPublisher
+from library.publication import Capacity
 from library.runtime import preflight, lab_preflight
 
 
@@ -37,12 +34,6 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument('--state', type=Path, required=True)
     commands = result.add_subparsers(dest='command', required=True)
     commands.add_parser('status')
-    commands.add_parser('replay')
-    report_cmd = commands.add_parser('report')
-    report_cmd.add_argument('--output', type=Path, required=True)
-    decisions = commands.add_parser('decide')
-    decisions.add_argument('--batch', type=Path, required=True)
-    decisions.add_argument('--author', choices=['flowcool'], required=True)
     intake = commands.add_parser('intake')
     intake.add_argument('--reception', type=Path, required=True)
     intake.add_argument('--captured', type=Path, required=True)
@@ -53,12 +44,6 @@ def parser() -> argparse.ArgumentParser:
     intake_mode.add_argument('--lab', action='store_true')
     intake.add_argument('--policy', type=Path)
     intake.add_argument('--library', type=Path)
-    preview = commands.add_parser('preview')
-    preview.add_argument('--reception', type=Path, required=True)
-    preview.add_argument('--captured', type=Path, required=True)
-    preview.add_argument('--submissions', type=Path, required=True)
-    preview.add_argument('--queue', type=Path, required=True)
-    preview.add_argument('--output', type=Path, required=True)
     printed_cmd = commands.add_parser('printed')
     printed_cmd.add_argument('--asset', required=True)
     printed_cmd.add_argument('--reception', type=Path, required=True)
@@ -71,7 +56,7 @@ def parser() -> argparse.ArgumentParser:
     enrich_cmd.add_argument('--asset', required=True)
     enrich_cmd.add_argument('--source', action='append', default=[], help='provider:reference')
     enrich_cmd.add_argument('--budget', type=int, default=12)
-    for name in ('publish', 'admit', 'reconcile', 'withdraw', 'restore', 'preflight', 'activate'):
+    for name in ('admit', 'reconcile', 'preflight', 'activate'):
         command = commands.add_parser(name)
         command.add_argument('--reception', type=Path, required=True)
         command.add_argument('--library', type=Path, required=True)
@@ -81,92 +66,23 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument('--policy', type=Path)
         command.add_argument('--credentials', type=Path)
         command.add_argument('--pyload', default='http://127.0.0.1:8000')
-        if name in ('publish', 'admit'):
+        if name == 'admit':
             command.add_argument('--asset', required=True)
-        if name == 'publish':
-            command.add_argument('--replace', action='store_true')
-        if name == 'withdraw':
-            command.add_argument('--edition', required=True)
-        if name == 'restore':
-            command.add_argument('--operation', required=True)
-        if name in ('withdraw', 'restore'):
-            command.add_argument('--expected', required=True, type=int)
     return result
 
 
 def run(args: argparse.Namespace) -> Any:
     from library.launcher import verify_startup
-    verify_startup(args.state,audit=args.command != 'preview')
+    verify_startup(args.state)
     store = Catalog(args.state)
     if args.command == 'status':
         state = store.read()
-        records = store.ledger()
         from library.operational_state import RuntimeObservation
         try:activation=RuntimeObservation(store.backend()._database).activation(role='library')
         except LibraryError:activation=None
-        return {'schema': 1, 'revision': state['revision'], 'decisions': len(records),
+        return {'schema': 1, 'revision': state['revision'],
                 'counts': {key: len(value) for key, value in state.items() if isinstance(value, dict)},
                 'activation':activation}
-    if args.command == 'replay':
-        return {'status': 'replayed', 'revision': store.replay()['revision']}
-    if args.command == 'report':
-        value = report(store)
-        atomic_yaml(args.output, value)
-        args.output.with_suffix('.md').write_text(render_report(value))
-        return {'status': 'written', 'cases': len(value['cases']), 'output': str(args.output)}
-    if args.command == 'decide':
-        batch = load(args.batch)
-        if not isinstance(batch, dict) or set(batch) != {'schema', 'requests'} or batch['schema'] != 1 or not isinstance(batch['requests'], list):
-            raise LibraryError('Invalid decision batch')
-        return decide(store, batch['requests'], author=args.author)
-    if args.command == 'preview':
-        if os.environ.get('BOOKSYS_READER_SOCKET'):
-            # Compose exposes this input read-only. Only the preview catalogue
-            # and derived output are new; canonical data and archives stay intact.
-            if args.reception != Path(os.environ['BOOKSYS_READER_INPUTS'])/'downloads':
-                raise LibraryError('Compose preview requires the declared read-only download namespace')
-            isolated_paths(args.output)
-            if not args.output.is_relative_to('/nas-tmp'):
-                raise LibraryError('Compose preview output requires the managed NAS work mount')
-        else:
-            isolated_paths(args.output, args.reception)
-        if args.output.exists():
-            raise LibraryError('Preview output must be new; no overwrite')
-        args.output.mkdir(parents=True, mode=0o700)
-        # Preview is a detached computation. Its YAML is an export, never an authority.
-        from library.store import PreparedResult
-        from library.review import cases_for
-        from library.primitives import now
-        preview_state=store.read()
-        preview_decisions=store.backend().decisions()
-        prepared: list[PreparedResult]=[]
-        receive(store,args.reception,load(args.captured),load(args.submissions),load(args.queue),
-            prepared=prepared,media_directory=args.output/'state')
-        if store.revision != preview_state['revision']:
-            raise LibraryError('Catalogue changed during preview; use a new output directory')
-        for terminal in prepared:
-            for kind,preview_records in terminal.change.upserts.items():preview_state[kind].update(preview_records)
-            for kind,keys in terminal.change.deletes.items():
-                for key in keys:preview_state[kind].pop(key,None)
-        from library.effects import apply_effect
-        from library.decision_model import verify_record_evidence
-        for decision in preview_decisions[len(preview_state['ledger']):]:
-            if decision.get('completion_task'):
-                break  # Only the owning task may project an atomic terminal result.
-            evidence=store.decisions/f"{decision['sequence']:09d}-{decision['id']}.yaml"
-            if load(evidence)!=decision or decision['sequence']!=len(preview_state['ledger'])+1:
-                raise LibraryError('Decision evidence lost or altered')
-            verify_record_evidence(store,decision)
-            apply_effect(preview_state,decision,replay=True)
-            preview_state['ledger'].append(decision['id'])
-        if store.backend().decisions()!=preview_decisions or store.revision!=preview_state['revision']:
-            raise LibraryError('Catalogue changed during preview; use a new output directory')
-        atomic_yaml(args.output/'state/library.yaml',dict(preview_state))
-        value={'schema':1,'source_text_is_untrusted':True,'created_at':now(),
-            'catalogue_revision':preview_state['revision'],'cases':cases_for(preview_state)}
-        atomic_yaml(args.output / 'review.yaml', value)
-        (args.output / 'review.md').write_text(render_report(value))
-        return {'status': 'preview_only', 'cases': len(value['cases']), 'output': str(args.output)}
     if args.command == 'intake':
         if args.lab:
             if args.library is None:
@@ -210,7 +126,7 @@ def run(args: argparse.Namespace) -> Any:
             refs.append(tuple(source.split(':', 1)))
         providers = Providers(args.state / 'library-provider-cache', budget=min(50, max(0, args.budget)))
         state = enrich(store, args.asset, providers, refs)
-        return {'status': 'enriched', 'identity': state['assets'][args.asset].get('identity_result')}
+        return {'status': 'enriched', 'identity': state['assets'][args.asset].get('work_result')}
     if args.lab:
         qualification = lab_preflight(args.reception, args.library, args.state)
     elif args.isolated:
@@ -242,14 +158,8 @@ def run(args: argparse.Namespace) -> Any:
         return AdmissionPublisher(store, args.reception, args.library,
             isolated=args.isolated, lab=args.lab,
             exclusive=qualification['status'] == 'qualified', capacity=capacity).publish_asset(args.asset)
-    publisher = Publisher(store, args.reception, args.library, isolated=args.isolated, lab=args.lab,
+    publisher = AdmissionPublisher(store, args.reception, args.library, isolated=args.isolated, lab=args.lab,
         exclusive=qualification['status'] == 'qualified', capacity=capacity)
-    if args.command == 'publish':
-        return publisher.publish(args.asset, replace=args.replace)
-    if args.command == 'withdraw':
-        return publisher.withdraw(args.edition, expected=args.expected)
-    if args.command == 'restore':
-        return publisher.restore(args.operation, expected=args.expected)
     if args.command == 'reconcile':
         return publisher.reconcile()
     raise LibraryError('Unknown command')
@@ -258,25 +168,18 @@ def run(args: argparse.Namespace) -> Any:
 def main() -> int:
     args = parser().parse_args()
     try:
-        if args.command in ('status', 'report', 'preflight') or (
-                args.command == 'preview' and not os.environ.get('BOOKSYS_READER_SOCKET')):
+        if args.command in ('status', 'preflight'):
             output = run(args)
         else:
             # A local mutation is a manual cycle, serialized with the service.
             with lock(args.state / 'library-cycle.lock', blocking=False):
-                if args.command not in ('publish', 'admit', 'withdraw', 'restore', 'reconcile'):
+                if args.command not in ('admit', 'reconcile'):
                     from library.operational_state import CopyOperations
-                    operations=CopyOperations(Catalog(args.state).backend()._database,'publication')
+                    operations=CopyOperations(Catalog(args.state).backend()._database,'admission')
                     for operation in operations.records():
                         if operation.get('phase') not in ('committed','interrupted','capacity_aborted'):
                             raise LibraryError('Reconcile copy journals before a local catalogue write')
-                from library.manual_reader import command_grant
-                stage = ('intake' if args.command in ('intake', 'preview') else 'ocr' if args.command == 'printed' else
-                         'copies' if args.command in ('publish', 'admit', 'withdraw', 'restore', 'reconcile') else None)
-                grant = (command_grant(Catalog(args.state), stage, args.command) if stage and
-                         os.environ.get('BOOKSYS_READER_SOCKET') else nullcontext())
-                with grant:
-                    output = run(args)
+                output = run(args)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         if isinstance(output, list) and any(isinstance(item, dict) and item.get('status') in ('stale', 'rejected') for item in output):
             return 3

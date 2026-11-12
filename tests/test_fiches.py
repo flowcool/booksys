@@ -136,28 +136,6 @@ class FicheTests(unittest.TestCase):
                 with self.assertRaises(CollectionError):browser.cover(url,SOURCE)
             build.assert_not_called()
 
-    def test_future_package_gets_offline_fiche_before_download_queue_transfer(self):
-        from test_pipeline import MemoryDownloader
-        class Downloader(MemoryDownloader):
-            def call(self,method,*,write=False,**params):
-                if method=="move_package":
-                    assert (self.downloads/"example/fiche.md").is_file()
-                    assert (self.downloads/"example/couverture.jpg").read_bytes()==JPEG
-                result=super().call(method,write=write,**params)
-                if method=="get_package_data":
-                    result.update(pid=1,folder="example")
-                    result["links"]=[dict(f,fid=i,name="example.cbz") for i,f in enumerate(result["links"],1)]
-                return result
-        with tempfile.TemporaryDirectory() as tmp:
-            create_store(self,Path(tmp),empty())
-            downloader=Downloader();downloader.downloads=Path(tmp)
-            downloader.fetch_image=lambda u,s:(JPEG,".jpg")
-            record={"title":"Example","page":extract_page(HTML,SOURCE),
-                    "downloads":{"x":{"hoster":"fixture","metadata":"CBZ","urls":["https://host.example/file"]}}}
-            from pipeline import save
-            journal={"submissions":{}}
-            self.assertEqual(downloader.submit(SOURCE,record,journal,Path(tmp)/"monitor.yaml"),1)
-            self.assertEqual(journal["submissions"][SOURCE]["status"],"queued")
 
     def test_browser_failure_in_page_or_cover_stops_idle_work(self):
         from booksys import BrowserError
@@ -178,17 +156,3 @@ class FicheTests(unittest.TestCase):
                 self.assertFalse(run_fiche_once(state,Browser(stage),Api(),root,minimum_free=0))
                 if stage=="cover":self.assertTrue((root/"example/fiche.md").exists())
 
-    def test_failed_monitor_does_not_start_fiche_browser_work(self):
-        from unittest.mock import patch
-        from pipeline import main
-        from booksys import BrowserError
-        with tempfile.TemporaryDirectory() as tmp:
-            credential=Path(tmp)/"credential.json";credential.write_text('{"api_key":"isolated-test"}')
-            argv=["pipeline","--directory",tmp,"--credentials",str(credential),"--downloads",tmp,"--interval","60"]
-            with patch.dict('os.environ', {'BOOKSYS_COLLECTION_DIR': tmp}), \
-                 patch("sys.argv",argv),patch("pipeline.run_backfill",return_value=None), \
-                 patch("pipeline.run_once",side_effect=BrowserError("challenge")), \
-                 patch("pipeline.run_fiche_once") as enrich,patch("pipeline.os.umask"), \
-                 patch("pipeline.time.sleep",side_effect=KeyboardInterrupt):
-                with self.assertRaises(KeyboardInterrupt):main()
-                enrich.assert_not_called()

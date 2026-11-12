@@ -14,11 +14,6 @@ def project(queue: str, value: dict[str, Any], *, auxiliary: dict[str, Any] | No
     items: dict[str, Any] = {}
     bindings: dict[str,Any]={}
     auxiliary = auxiliary or {}
-    if queue == 'collection' and value.get('version') == 1 and 'pages_requested' in value:
-        items = {} if value.get('status') == 'complete' else {'backfill': {'input_revision': digest(value), 'method': METHODS['backfill']}}
-        bindings={'backfill':{'kind':'backfill','identity':'current','original':digest({k:v for k,v in value.items() if k not in ('pages','items','next_page','submitted','status','completed_at')})}}
-        return {'items': items, '_native': {'bindings':bindings,'queue': queue, 'inputs': {key: row['input_revision'] for key, row in items.items()},
-        'guards': {key: digest({'due': row.get('due_at'), 'blocked': row.get('blocked', '')}) for key, row in items.items()}}}
     if value.get('version') != 1 or not isinstance(value.get('submissions'), dict) or not isinstance(value.get('categories'), dict):
         raise LibraryError('Invalid native monitor')
     deadline = value.get('schedule', {}).get('not_before')
@@ -32,9 +27,8 @@ def project(queue: str, value: dict[str, Any], *, auxiliary: dict[str, Any] | No
         for source, checkpoint in value['categories'].items():
             key = 'category-' + digest(source)
             category_due = max(deadline_at,
-                               datetime.fromisoformat(checkpoint['last_success']).timestamp() + 300 if checkpoint.get('last_success') else 0)
-            revision = digest({'category': checkpoint, 'collection': value.get('collection_checkpoint'),
-                               'source': value.get('source_checkpoint')})
+                               datetime.fromisoformat(checkpoint['last_cycle']).timestamp() + 300 if checkpoint.get('last_cycle') else 0)
+            revision = digest(checkpoint)
             bindings[key]={'kind':'category','identity':source,'original':digest(checkpoint)}
             items[key] = {'input_revision': revision, 'method': METHODS['collection'], 'due_at': instant(datetime.fromtimestamp(category_due, timezone.utc)), 'blocked': blocked}
     for source, entry in value['submissions'].items():

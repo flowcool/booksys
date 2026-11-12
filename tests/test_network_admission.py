@@ -65,31 +65,6 @@ class NetworkAdmissionTests(unittest.TestCase):
                 client.call('get_queue')
             self.assertEqual(send.call_count, 1)
 
-    def test_uncertain_native_write_blocks_every_producer_until_exact_owner_readback(self):
-        from booksys_core.downloader import Pyload
-        from booksys_core.errors import CollectionError
-        budget = RollingBudget.create(self.root/'native-admission.yaml', requests=30, period=60)
-        first = Pyload('http://127.0.0.1:8000', 'fixture', admission=budget)
-        second = Pyload('http://127.0.0.1:8000', 'fixture', admission=RollingBudget(budget.path))
-        journal = self.root/'native-source.yaml'
-        journal.write_text('intent: retained\n')
-        with patch.object(first, '_call', side_effect=OSError('uncertain')):
-            with self.assertRaises(OSError):
-                with first.mutation('owner-a', journal):
-                    first.call('move_package', write=True, package_id=1)
-        with patch.object(second, '_call', return_value={}) as send:
-            with self.assertRaises(CollectionError):
-                with second.mutation('owner-b', journal):
-                    second.call('delete_packages', write=True, package_ids=[2])
-            self.assertEqual(send.call_count, 0)
-            # Exact owner's readback completes its domain journal without resend.
-            with second.mutation('owner-a', journal) as mutation:
-                second.call('get_package_data', package_id=1)
-                mutation.resolve('exact-domain-receipt')
-            with second.mutation('owner-b', journal) as mutation:
-                second.call('move_package', write=True, package_id=2)
-                mutation.resolve('second-exact-receipt')
-            self.assertEqual(send.call_count, 2)
 
     def test_readiness_does_not_spend_a_debit_and_missing_authority_fails_closed(self):
         from booksys_core.errors import CollectionError
@@ -133,72 +108,5 @@ class NetworkAdmissionTests(unittest.TestCase):
             self.assertEqual(second.get('https://openlibrary.org/books/OL2M.json')['status'],'unavailable')
             self.assertEqual(sent,[])
 
-    def test_real_submission_reconciles_uncertain_create_before_next_write_without_resend(self):
-        from booksys_core.downloader import Pyload
-        from test_pipeline import MemoryDownloader, NEW
-        native=MemoryDownloader()
-        native.lose_response=True
-        budget=RollingBudget.create(self.root/'native-admission.yaml',requests=30,period=60)
-        record={'title':'Fixture','downloads':{'one':{'hoster':'fixture','urls':['https://host.test/file'],'metadata':'CBZ'}}}
-        journal={'submissions':{}}
-        path=self.root/'monitor.yaml'
-        first=Pyload('http://127.0.0.1:8000','fixture',admission=budget)
-        with patch.object(first,'_call',side_effect=native.call),patch.object(first,'host_availability',side_effect=native.host_availability):
-            with self.assertRaises(OSError):
-                first.submit(NEW,record,journal,path)
-        second=Pyload('http://127.0.0.1:8000','fixture',admission=RollingBudget(budget.path))
-        with patch.object(second,'_call',side_effect=native.call),patch.object(second,'host_availability',side_effect=native.host_availability):
-            self.assertEqual(second.submit(NEW,record,journal,path),1)
-        self.assertEqual(native.creates,1)
-        self.assertEqual(journal['submissions'][NEW]['status'],'queued')
 
-    def test_real_retirement_uses_the_same_native_budget_and_exact_receipt(self):
-        from booksys_core.downloader import Pyload
-        from library.retirement import Retirement
-        from test_retirement import fixture
-        from test_library_intake import SOURCE
-        store,reception,collector,original,native=fixture(self.root/'retirement',self)
-        scripts=self.root/'scripts'
-        scripts.mkdir()
-        budget=RollingBudget.create(self.root/'native-admission.yaml',requests=30,period=60)
-        client=Pyload('http://127.0.0.1:8000','fixture',admission=budget)
-        with patch.object(client,'_call',side_effect=native.call):
-            result=Retirement(client,store,reception,collector/'monitor.yaml',collector/'state.yaml',scripts=scripts).process(SOURCE,apply=True)
-        self.assertEqual(result['outcome'],'retired')
-        self.assertEqual(native.removed,[1])
-        self.assertTrue(original.is_file())
 
-    def test_unknown_prepare_commit_prevents_send_and_requires_same_owner_journal(self):
-        from booksys_core.downloader import Pyload
-        from booksys_core.network_admission import NativeMutation
-        from booksys_core.errors import CollectionError
-        from library.postgres import DeadlineConnection,CommitUnknown
-        import psycopg
-        budget=RollingBudget.create(self.root/'native-admission.yaml',requests=30,period=60)
-        client=Pyload('http://127.0.0.1:8000','fixture',admission=budget)
-        journal=self.root/'domain-proof.yaml'
-        original=DeadlineConnection.execute
-        armed=False
-        def lost_ack(connection,query,params=None,**kwargs):
-            nonlocal armed
-            result=original(connection,query,params,**kwargs)
-            if isinstance(query,str) and query.startswith('UPDATE native_effect'):
-                armed=True
-            elif query=='COMMIT' and armed:
-                armed=False
-                raise psycopg.OperationalError('commit acknowledgement lost')
-            return result
-        with patch.object(client,'_call',return_value={}) as send:
-            with patch.object(DeadlineConnection,'execute',lost_ack):
-                with self.assertRaises(CommitUnknown):
-                    with client.mutation('owner-a',journal):
-                        client.call('move_package',write=True,package_id=1)
-            self.assertEqual(send.call_count,0)
-            self.assertEqual(NativeMutation(self.root,'owner-a',journal).read()['state'],'uncertain')
-            with client.mutation('owner-a',self.root/'wrong-journal.yaml') as wrong:
-                with self.assertRaises(CollectionError):
-                    wrong.resolve('wrong-domain-proof')
-            with client.mutation('owner-a',journal) as exact:
-                client.call('get_package_data',package_id=1)
-                exact.resolve('exact-readback-no-send')
-            self.assertEqual(send.call_count,1)

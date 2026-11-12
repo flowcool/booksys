@@ -3,7 +3,6 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
-import logging
 import os
 from datetime import datetime, timezone
 from collections.abc import Callable
@@ -12,8 +11,7 @@ import re
 import shutil
 import time
 from typing import Any
-from urllib.parse import urlsplit
-import yaml
+from urllib.parse import urlsplit, parse_qsl, urlencode
 from booksys_core.browser import Byparr
 from booksys_core.downloader import Pyload
 from booksys_core.errors import BrowserError, CollectionError
@@ -25,27 +23,12 @@ from library.operational_state import CollectorState,OperationalCompletion
 from library.codec import encode
 
 
-def resolve_source(source: str, fetch: Callable[[str], str], directory: Path,
-                   hosters: set[str] | None = None) -> dict[str, Any]:
-    if not isinstance(fetch, ScheduledCalls):
-        return resolve(fetch(source), source, hosters, fetch)
-    monitor = CollectorState(directory).monitor()
-    checkpoint = monitor.get('source_checkpoint')
-    selected = sorted(hosters) if hosters is not None else None
-    if checkpoint is not None and (checkpoint.get('source') != source or checkpoint.get('hosters') != selected):
-        raise CollectionError('Saved source checkpoint differs from requested work')
-    if checkpoint is None:
-        checkpoint = {'source': source, 'hosters': selected, 'plan': source_plan(fetch(source), source, hosters), 'downloads': {}}
-        CollectorState(directory).patch_monitor( source_checkpoint=checkpoint)
-    for target, row in checkpoint['plan']['targets'].items():
-        if target not in checkpoint['downloads']:
-            checkpoint['downloads'][target] = resolve_link(fetch(target), target, row)
-            CollectorState(directory).patch_monitor( source_checkpoint=checkpoint)
-    return {**{k: v for k, v in checkpoint['plan'].items() if k != 'targets'}, 'downloads': checkpoint['downloads']}
+CRAWL_PAGES = int(os.environ.get('BOOKSYS_CRAWL_PAGES', '5'))
+
 
 def collect(categories: list[str], fetch: Callable[[str], str], directory: Path,
             hosters: set[str] | None = None, pages: int = 1, max_items: int = 0,
-            refresh: bool = False, after_id: int | None = None, max_pages_per_call: int | None = None) -> dict[str, int]:
+            refresh: bool = False) -> dict[str, int]:
     if pages < 0 or max_items < 0 or hosters == set():
         raise CollectionError('Invalid collection limits or hosters')
     for category in categories:
@@ -55,109 +38,39 @@ def collect(categories: list[str], fetch: Callable[[str], str], directory: Path,
             raise CollectionError('Invalid Bookys category')
         site_url(category, category)
     directory.mkdir(parents=True, exist_ok=True)
-    durable = isinstance(fetch, ScheduledCalls)
     with (directory / 'collector.lock').open('a') as handle:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        path = directory / 'state.yaml'
-        state = CollectorState(directory).captured()
-        if not isinstance(state, dict) or state.get('version') != 1 or not isinstance(state.get('items'), dict):
-            raise CollectionError('Unsupported or invalid state file')
-        records = state['items']
-        monitor_path = directory / 'monitor.yaml'
-        monitor = CollectorState(directory).monitor() if durable else {}
-        scope = {'categories': categories, 'hosters': sorted(hosters) if hosters is not None else None,
-                 'pages': pages, 'refresh': refresh, 'after_id': after_id}
-        cp = monitor.get('collection_checkpoint')
-        if cp is not None and cp.get('scope') != scope:
-            raise CollectionError('Collection checkpoint scope differs')
-        if cp is None:
-            cp = {'schema': 1, 'scope': scope, 'category_index': 0, 'url': None, 'visited': [],
-                  'page_count': 0, 'seen_ids': [], 'last_id': None, 'items': None, 'item_index': 0,
-                  'next_url': None, 'complete': False, 'counts': {'pages': 0, 'collected': 0, 'skipped': 0}}
-            if after_id is not None:
-                cp['counts']['newest_id'] = after_id
-        counts = cp['counts']
-        collected_start = counts['collected']
-        pages_start = counts['pages']
-        def checkpoint() -> None:
-            if durable:
-                CollectorState(directory).patch_monitor( collection_checkpoint=cp)
-        checkpoint()
+        records = CollectorState(directory).captured()['items']
+        counts = {'pages': 0, 'collected': 0, 'skipped': 0}
         try:
-            while cp['category_index'] < len(categories) and not cp['complete']:
-                if cp['url'] is None:
-                    cp['url'] = categories[cp['category_index']]
-                finished = False
-                while cp['url'] and (pages == 0 or cp['page_count'] < pages):
-                    url = cp['url']
-                    if cp['items'] is None:
-                        if max_pages_per_call is not None and counts['pages'] - pages_start >= max_pages_per_call:
-                            return dict(counts)
-                        if url in cp['visited']:
-                            raise CollectionError('Repeated catalogue page')
-                        items, next_url = catalogue(fetch(url), url)
-                        cp.update(items=list(items), next_url=next_url, item_index=0,
-                                  page_count=cp['page_count'] + 1)
-                        cp['visited'].append(url)
-                        counts['pages'] += 1
-                        checkpoint()
-                    while cp['item_index'] < len(cp['items']):
-                        item_url = cp['items'][cp['item_index']]
-                        identifier = None
-                        if after_id is not None:
-                            match = re.search(r'/(\d+)-', urlsplit(item_url).path)
-                            if match is None:
-                                raise CollectionError('Invalid item identifier')
-                            identifier = int(match.group(1))
-                            if identifier in cp['seen_ids']:
-                                cp['item_index'] += 1
-                                checkpoint()
-                                continue
-                            if cp['last_id'] is not None and identifier >= cp['last_id']:
-                                raise CollectionError('Catalogue order changed; watermark was not advanced')
-                            if identifier <= after_id:
-                                finished = True
-                                break
-                        captured = False
-                        previous = records.get(item_url, {})
+            for category in categories:
+                url: str | None = category
+                visited: set[str] = set()
+                while url and (pages == 0 or len(visited) < pages):
+                    if url in visited:
+                        raise CollectionError('Repeated catalogue page')
+                    visited.add(url)
+                    items, next_url = catalogue(fetch(url), url)
+                    counts['pages'] += 1
+                    for source in items:
+                        previous = records.get(source, {})
                         wanted = hosters if hosters is not None else {'*'}
                         complete = set(previous.get('complete_hosters', []))
                         if not refresh and ('*' in complete or wanted <= complete):
                             counts['skipped'] += 1
-                        else:
-                            if max_items and counts['collected'] - collected_start >= max_items:
-                                return dict(counts)
-                            record = resolve_source(item_url, fetch, directory, hosters)
-                            record['downloads'] = {**previous.get('downloads', {}), **record['downloads']}
-                            record['complete_hosters'] = sorted(wanted | complete)
-                            records[item_url] = record
-                            captured = True
-                            counts['collected'] += 1
-                        if identifier is not None:
-                            cp['seen_ids'].append(identifier)
-                            cp['last_id'] = identifier
-                            counts['newest_id'] = max(counts['newest_id'], identifier)
-                        cp['item_index'] += 1
-                        if captured:
-                            CollectorState(directory).capture(item_url,records[item_url],
-                                **({'collection_checkpoint':cp,'source_checkpoint':None} if durable else {}))
-                        else:
-                            checkpoint()
-                    if finished:
-                        break
-                    if after_id is not None and cp['next_url'] is None:
-                        raise CollectionError('Pagination ended before reaching the previous watermark')
-                    cp.update(url=cp['next_url'], items=None, item_index=0)
-                    checkpoint()
-                cp.update(category_index=cp['category_index'] + 1, url=None, page_count=0,
-                          seen_ids=[], last_id=None, items=None, item_index=0)
-                checkpoint()
-            cp['complete'] = True
-            checkpoint()
-            return dict(counts)
+                            continue
+                        if max_items and counts['collected'] >= max_items:
+                            return counts
+                        record = resolve(fetch(source), source, hosters, fetch)
+                        record['downloads'] = {**previous.get('downloads', {}), **record['downloads']}
+                        record['complete_hosters'] = sorted(wanted | complete)
+                        CollectorState(directory).capture(source, record)
+                        records[source] = record
+                        counts['collected'] += 1
+                    url = next_url
+            return counts
         finally:
             export_links(records, directory, hosters)
-
 
 
 def export_catalogue(directory: Path, records: dict[str, Any], journal: dict[str, Any],
@@ -269,7 +182,11 @@ def run_fiche_once(directory: Path, browser: Byparr, downloader: Pyload, root: P
 
 def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
              category: str = DEFAULT_CATEGORY, minimum_free: int = 0, *,
-             clock: Callable[[], float] = time.time, step_limit: int | None = None, completions: list[OperationalCompletion] | None = None) -> dict[str, Any]:
+             clock: Callable[[], float] = time.time,
+             completions: list[OperationalCompletion] | None = None) -> dict[str, Any]:
+    """Crawl fresh pages, then up to ten deep pages; commit the cursor on success."""
+    if CRAWL_PAGES < 1:
+        raise CollectionError('BOOKSYS_CRAWL_PAGES must be a positive integer')
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "pipeline.lock").open("w") as lock:
         try:
@@ -279,144 +196,51 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
         fetch = ScheduledCalls(directory, fetch, clock=clock)
         if isinstance(fetch.fetch, Byparr):
             downloader.fetch_image = fetch.cover
-        path = directory / "monitor.yaml"
-        journal = CollectorState(directory).monitor()
-        if journal.get("version") != 1:
-            raise CollectionError("Unsupported monitor state")
-        if category not in journal["categories"]:
-            items, _ = catalogue(fetch(category), category)
-            identifiers = [int(re.search(r"/(\d+)-", urlsplit(url).path).group(1)) for url in items]  # type: ignore[union-attr]
-            if identifiers != sorted(set(identifiers), reverse=True):
-                raise CollectionError("Initial catalogue is not ordered by descending ID")
-            journal["categories"][category] = {"after_id": max(identifiers),
-                "initialized_at": datetime.now(timezone.utc).isoformat()}
-            CollectorState(directory).category(category,journal['categories'][category])
-            return {"initialized": True, "after_id": max(identifiers), "queued": 0}
+        store = CollectorState(directory)
+        journal = store.monitor()
+        records = store.captured()['items']
+        prior = journal['categories'].get(category)
+        deep_page = max(6, (prior or {}).get('deep_page', 6))
+        pages = [*range(1, min(5, CRAWL_PAGES) + 1),
+                 *range(deep_page, min(deep_page + 10, CRAWL_PAGES + 1))]
         if shutil.disk_usage(directory).free < minimum_free:
-            raise CollectionError("Less than the configured free disk reserve; submissions stopped")
-        status = downloader.call("status_server")
-        if status["pause"] or not status["download"]:
-            raise CollectionError("pyLoad downloads are paused or disabled")
-        checkpoint = journal["categories"][category]
-        original_category=encode(checkpoint)
-        counts = collect([category], fetch, directory, pages=0, after_id=checkpoint["after_id"],
-                         max_items=step_limit or 0, max_pages_per_call=1 if step_limit else None)
-        state_path = directory / "state.yaml"
-        records = CollectorState(directory).captured()["items"]
-        queued = 0
-        bounded_complete = True
-        for source, record in records.items():
-            match = re.search(r"/(\d+)-", urlsplit(source).path)
-            if match is None or int(match.group(1)) <= checkpoint["after_id"]:
-                continue
-            from activity import report
-            report('collection', 'working', 'New source', item=source, title=record.get('title', ''))
-            prior = journal["submissions"].get(source, {}).get("status")
-            if step_limit is not None:
-                if prior == "queued":
-                    continue
-                if queued >= step_limit:
-                    bounded_complete = False
-                    break
-            if downloader.downloads is not None and "page" not in record:
-                record["page"] = extract_page(fetch(source), source)
-                CollectorState(directory).capture(source,records[source])
-            downloader.submit(source, record, journal, path)
-            queued += prior != "queued"
-        if step_limit is not None:
-            retained = CollectorState(directory).monitor()
-            if not retained.get('collection_checkpoint', {}).get('complete') or not bounded_complete:
-                CollectorState(directory).category(category,journal['categories'][category])
-                return {**counts, 'queued': queued, 'continued': True}
-        checkpoint["after_id"] = counts["newest_id"]
-        checkpoint["last_success"] = datetime.now(timezone.utc).isoformat()
-        if completions is not None:
-            completions.append(CollectorState(directory).prepare_completion('category',category,journal['categories'][category],expected=(original_category,)))
-        else:
-            CollectorState(directory).category(category,journal['categories'][category])
-            CollectorState(directory).patch_monitor(collection_checkpoint=None)
-        return {**counts, "queued": queued}
-
-def run_backfill(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
-                 minimum_free: int = 0, *, max_items: int | None = None, max_pages_per_call: int | None = None,
-                 completions: list[OperationalCompletion] | None = None) -> dict[str, int] | None:
-    """Run a durable backfill batch. Release the collector lock between batches."""
-    path = directory / "backfill.yaml"
-    if CollectorState(directory).backfill() is None:
-        return None
-    with (directory / "pipeline.lock").open("w") as lock:
+            raise CollectionError('Free disk reserve reached; submissions stopped')
+        status = downloader.call('status_server')
+        if status['pause'] or not status['download']:
+            raise CollectionError('pyLoad downloads are paused or disabled')
+        counts = {'pages': 0, 'queued': 0, 'skipped': 0}
+        parts = urlsplit(category)
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise CollectionError("Another pipeline is running") from exc
-        fetch = ScheduledCalls(directory, fetch)
-        if isinstance(fetch.fetch, Byparr):
-            downloader.fetch_image = fetch.cover
-        job = CollectorState(directory).backfill()
-        if job is None:
-            return None
-        if (job.get("version") != 1 or type(job.get("pages_requested")) is not int
-                or not 1 <= job["pages_requested"] <= 50):
-            raise CollectionError("Invalid bounded backfill request")
-        if job["status"] == "complete":
-            return None
-        monitor_path = directory / "monitor.yaml"
-        journal = CollectorState(directory).monitor()
-        state_path = directory / "state.yaml"
-        state = CollectorState(directory).captured()
-        if state.get("version") != 1 or journal.get("version") != 1:
-            raise CollectionError("Unsupported collection or monitor state")
-        records = state["items"]
-        pages_start = len(job["pages"])
-        while len(job["pages"]) < job["pages_requested"]:
-            if max_pages_per_call is not None and len(job["pages"]) - pages_start >= max_pages_per_call:
-                return {"pages": len(job["pages"]), "items": len(job["items"]), "queued": job["submitted"], "pending": 1}
-            url = job["next_page"]
-            if not url or url in job["pages"]:
-                raise CollectionError("Backfill pagination ended or repeated before requested page count")
-            items, next_url = catalogue(fetch(url), url)
-            job["pages"][url] = list(items)
-            job["items"].update(items)
-            job["next_page"] = next_url
-            job["status"] = "collecting"
-            CollectorState(directory).backfill_page(job,url,items)
-            logging.info("Backfill catalogue: %d/%d pages, %d unique items",
-                         len(job["pages"]), job["pages_requested"], len(job["items"]))
-        processed = 0
-        for source in job["items"]:
-            if journal["submissions"].get(source, {}).get("status") == "queued":
-                continue
-            if max_items is not None and processed >= max(1, max_items):
-                return {"pages": len(job["pages"]), "items": len(job["items"]),
-                        "queued": job["submitted"], "pending": 1}
-            if shutil.disk_usage(directory).free < minimum_free:
-                raise CollectionError("Free disk reserve reached during backfill")
-            status = downloader.call("status_server")
-            if status["pause"] or not status["download"]:
-                raise CollectionError("pyLoad downloads are paused or disabled")
-            from activity import report
-            report('collection', 'working', 'Backfill source', item=source, title=job['items'].get(source, ''))
-            if "*" not in records.get(source, {}).get("complete_hosters", []):
-                records[source] = resolve_source(source, fetch, directory)
-                CollectorState(directory).capture(source,records[source],source_checkpoint=None)
-                export_links(records, directory)
-            if downloader.downloads is not None and "page" not in records[source]:
-                records[source]["page"] = extract_page(fetch(source), source)
-                CollectorState(directory).capture(source,records[source])
-            from activity import report
-            report('collection', 'working', 'Backfill submission', item=source, title=records[source].get('title', ''))
-            package_id = downloader.submit(source, records[source], journal, monitor_path)
-            report('collection', 'working', 'Backfill submitted', item=source, title=records[source].get('title', ''), progressed=True)
-            job["submitted"] = sum(journal["submissions"].get(u, {}).get("status") == "queued" for u in job["items"])
-            CollectorState(directory).save_backfill(job)
-            logging.info("Backfill queued: %d/%d items; package %d", job["submitted"], len(job["items"]), package_id)
-            processed += 1
-        # A prior process may have confirmed the submission but not saved batch progress.
-        job["submitted"] = sum(journal["submissions"].get(u, {}).get("status") == "queued" for u in job["items"])
-        job["status"] = "complete"
-        job["completed_at"] = datetime.now(timezone.utc).isoformat()
-        if completions is not None:
-            completions.append(CollectorState(directory).prepare_completion('backfill','current',{k:v for k,v in job.items() if k not in ('pages','items')}))
-        else:
-            CollectorState(directory).save_backfill(job)
-        return {"pages": len(job["pages"]), "items": len(job["items"]), "queued": job["submitted"]}
+            for page in pages:
+                url = parts._replace(query=urlencode({**dict(parse_qsl(parts.query)), 'page': page})).geturl()
+                try:
+                    items, _ = catalogue(fetch(url), url)
+                except CollectionError:
+                    if page <= 5:
+                        raise
+                    deep_page = CRAWL_PAGES + 1      # no catalogue on a deep page: the end of the site, the pass is complete
+                    break
+                counts['pages'] += 1
+                for source in items:
+                    if journal['submissions'].get(source, {}).get('status') == 'queued':
+                        counts['skipped'] += 1
+                        continue
+                    record = records.get(source)
+                    if record is None:
+                        record = resolve(fetch(source), source, None, fetch)
+                        record['complete_hosters'] = ['*']
+                        store.capture(source, record)
+                        records[source] = record
+                    downloader.submit(source, record, journal, directory / 'monitor.yaml')
+                    counts['queued'] += 1
+                if page > 5:
+                    deep_page = page + 1
+            value = {'deep_page': deep_page, 'last_cycle': datetime.fromtimestamp(clock(), timezone.utc).isoformat()}
+            if completions is not None:
+                completions.append(store.prepare_completion('category', category, value,
+                                   expected=(encode(prior) if prior is not None else None,)))
+            else:
+                store.category(category, value)
+            return counts
+        finally:
+            export_links(records, directory)

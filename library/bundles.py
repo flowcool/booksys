@@ -1,12 +1,10 @@
 """Retained one-level inputs with verified manifests and ordinary child intake."""
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import time
 from typing import Any, Callable
 import uuid
@@ -159,70 +157,11 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
             stage = root / ('.' + parent_hash + '-' + uuid.uuid4().hex)
             stage.mkdir(mode=0o700)
             fault('intent')
-            from library.sandbox import native_prefix, PYTHON
-            command = native_prefix(source, output=stage)
-            if parts:
-                for part in inputs:
-                    command += ['--ro-bind', str(part), '/tmp/parts/' + part.name]
-            worker_source = '/tmp/parts/' + source.name if parts else '/tmp/input'
-            command += [PYTHON, '-m', 'library.bundle_worker', worker_source, '/tmp/output']
-            if parts:
-                command += ['/tmp/parts/' + part.name for part in inputs]
-            image = os.environ.get('BOOKSYS_READER_IMAGE')
-            container_name = 'booksys-bundle-' + uuid.uuid4().hex if image else None
-            if image:
-                if not re.fullmatch(r'[a-z0-9./:_@-]+', image) or any(c in str(source) + str(stage.absolute()) for c in ',\n'):
-                    raise LibraryError('Unsafe bundle reader image or mount')
-                command = ['docker', 'create', '--rm', '--name', str(container_name), '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-                    '--security-opt', 'no-new-privileges', '--user', f'{os.getuid()}:{os.getgid()}',
-                    '--memory', '768m', '--cpus', '1', '--pids-limit', '32',
-                    '--mount', f'type=bind,src={source},dst=/input,readonly',
-                    '--mount', f'type=bind,src={stage.absolute()},dst=/output',
-                    '--entrypoint', '/app/.venv/bin/python']
-                if parts:
-                    for part in inputs:
-                        if any(c in str(part) for c in ',\n'):
-                            raise LibraryError('Unsafe multipart mount')
-                        command += ['--mount', f'type=bind,src={part},dst=/parts/{part.name},readonly']
-                command += [image, '-m', 'library.bundle_worker', '/parts/' + source.name if parts else '/input', '/output']
-                if parts:
-                    command += ['/parts/' + part.name for part in inputs]
-                from library.process import bounded_run
-                created = bounded_run(command, timeout=20, stdout_limit=8192)
-                if created.returncode:
-                    raise LibraryError('Cannot create isolated bundle engine')
-                command = ['docker', 'start', '--attach', str(container_name)]
-            from library.reader_client import endpoint, execute
-            if endpoint():
-                from library.reader_client import bundle_payload
-                manifest = execute('bundle', source, bundle_payload(inputs) if parts else {}, destination=stage)
-            else:
-                try:
-                    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                except OSError:
-                    if container_name:
-                        stop_bundle_container(container_name)
-                    raise
-                started = time.monotonic()
-                try:
-                    while True:
-                        try:
-                            stdout, _ = process.communicate(timeout=.2)
-                            break
-                        except subprocess.TimeoutExpired:
-                            if shutil.disk_usage(root).free == 0:
-                                raise LibraryError('Bundle extraction has no free disk space')
-                            if time.monotonic() - started > wall_limit:
-                                raise LibraryError('Bundle extraction exceeded wall limit')
-                finally:
-                    if process.poll() is None:
-                        process.kill()
-                        process.communicate()
-                        if container_name:
-                            stop_bundle_container(container_name)
-                if process.returncode:
-                    raise LibraryError('Isolated bundle worker failed')
-                manifest = json.loads(stdout)
+            from library.decode import run
+            manifest = run('bundle', source, {'parts': [str(p.absolute()) for p in inputs]} if parts else {}, stage)
+            if manifest.get('status') == 'pending':
+                shutil.rmtree(stage)
+                return stage, manifest
             if manifest.get('status') != 'extracted' or manifest.get('parent_sha256') != parent_hash:
                 raise LibraryError(manifest.get('reason', 'Bundle source hash mismatch'))
             if parts:
@@ -252,6 +191,10 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
     if previous.get('bundle') and (not matches_retained(source, previous.get('fingerprint', []), previous['sha256']) or sha256(source) != previous['sha256']):
         raise LibraryError('Bundle parent changed after retention')
     directory, manifest = retain(source, state_dir, stable_seconds=stable_seconds, parts=parts, detached=detached)
+    if manifest.get('status') == 'pending':
+        origin.update(availability='pending', reason=manifest['reason'])
+        state['origins'][oid] = origin
+        return 0
     parent_hash = manifest['parent_sha256']
     if parts:
         expected_parts = [{'name': Path(part['path']).name, 'sha256': part['sha256'],
@@ -324,21 +267,3 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
                         'title': Path(member['member']).stem, 'parent_source': origin['source'], 'parent_title': hint.get('title')}
         state['origins'][cid] = child
     return inspected
-
-
-def stop_bundle_container(name: str) -> None:
-    """Stop and read back only this extraction's owned engine."""
-    from library.process import bounded_run
-    if not re.fullmatch(r'booksys-bundle-[0-9a-f]{32}', name):
-        raise LibraryError('Invalid owned bundle container')
-    result = bounded_run(['docker', 'stop', '--time', '1', name], timeout=15, stdout_limit=8192)
-    if result.returncode and b'no such' not in result.stderr.lower():
-        raise LibraryError('Owned bundle engine stop failed; preserve evidence')
-    for attempt in range(20):
-        result = bounded_run(['docker', 'inspect', '--format', '{{.State.Running}}', name], timeout=10, stdout_limit=8192)
-        if (result.returncode == 0 and result.stdout.strip() == b'false') or (result.returncode and b'no such' in result.stderr.lower()):
-            return
-        if result.returncode or result.stdout.strip() != b'true':
-            break
-        time.sleep(.1)
-    raise LibraryError('Owned bundle engine termination is not proved')

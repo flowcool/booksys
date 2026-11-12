@@ -1,4 +1,4 @@
-"""Read one validated source page inside the existing networkless sandbox."""
+"""Read one validated source page."""
 from __future__ import annotations
 import base64
 import hashlib
@@ -13,9 +13,7 @@ from library.readers import sha256
 
 
 def main() -> None:
-    resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024**2, 1536 * 1024**2))
     resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     path, suffix, index = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
     images: dict[str, bytes] = {}
     if suffix == '.pdf':

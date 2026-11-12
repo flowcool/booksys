@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from library.catalog import Catalog
 from library.primitives import LibraryError, atomic_yaml, digest
 from library.reader_inputs import fingerprint, sha256
-from library.stage_execution import QueueOwner, effect_scopes, record_scopes
+from library.stage_execution import effect_scopes, record_scopes
 
 REASONS = {'Unsupported Docker bind source syntax', 'RarCannotExec: Cannot find working tool'}
 COMMENT_REASON = "FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/app']"
@@ -35,7 +35,6 @@ def main() -> None:
     catalog = Catalog(args.state)
     allowed = REASONS | ({COMMENT_REASON} if args.include_rar_comment else set())
     with ExitStack() as stack:
-        stack.enter_context(QueueOwner(args.state, 'intake'))
         for name in ('library-cycle.lock', 'stage-checkpoint.lock'):
             handle = stack.enter_context((args.state/name).open('a'))
             fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)

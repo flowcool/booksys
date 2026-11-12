@@ -21,45 +21,13 @@ from library.xmlmetadata import work_comicinfo
 
 def work_fields(state: dict[str, Any], key: str) -> dict[str, Any] | None:
     from library.work_identity import accepted_work
-    asset = state['assets'][key]
-    identity = asset.get('identity', {})
-    return accepted_work(asset, state['works'].get(identity.get('work'), {}),
-                         state['editions'].get(identity.get('edition'), {}))
+    return accepted_work(state['assets'][key])
 
 
 def eligible(state: dict[str, Any], key: str) -> bool:
     asset = state['assets'][key]
-    # Prepared legacy decisions retain exclusive control of their application.
     return bool(asset.get('status') == 'validated'
-                and asset.get('resolution', {}).get('status') not in ('pending', 'blocked')
                 and not asset.get('contested') and asset.get('disposition') not in ('exclude', 'defer'))
-
-
-def retire_legacy(state: dict[str, Any], key: str, root: Path) -> bool:
-    """Retain exact-edition exposure in recovery after verified CBZ admission.
-
-    Caller holds the copy lock. The deterministic recovery name also makes a
-    crash after rename and before catalogue save safe to reconcile.
-    """
-    changed = False
-    for edition in state['editions'].values():
-        record = edition.get('publication', {})
-        if record.get('asset') != key:
-            continue
-        if Path(record['target']).name != record['target']:
-            raise LibraryError('Unsafe legacy publication target')
-        source = root/'bd'/record['target']
-        recovery = root/'.recovery'/('edition-'+record['operation'])
-        if source.exists() and not recovery.exists():
-            verify(source, record['manifest'])
-            rename_atomic(source, recovery, private_root=root)
-        elif source.exists() or not recovery.exists():
-            raise LibraryError('Legacy admission retirement divergence')
-        verify(recovery, record['manifest'])
-        state['assets'][key].setdefault('edition_recovery', []).append({**record, 'recovery': recovery.name})
-        edition.pop('publication')
-        changed = True
-    return changed
 
 
 def slug(value: Any) -> str:
@@ -81,15 +49,6 @@ def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 class AdmissionPublisher(Publisher):
-    def __init__(self, *args: Any, **kwargs: Any):
-        super().__init__(*args, **kwargs)
-        from library.operational_state import CopyOperations
-        self.operations=CopyOperations(self.store.backend()._database,'admission')
-        self.journals = self.store.directory / 'library-admission-operations'
-        if self.journals.is_symlink():
-            raise LibraryError('Symlink in admission layout')
-        self.journals.mkdir(mode=0o700, exist_ok=True)
-
     def target_path(self, relative: str) -> Path:
         path = Path(relative)
         if (path.is_absolute() or '..' in path.parts or not path.parts
@@ -147,12 +106,9 @@ class AdmissionPublisher(Publisher):
         state['assets'][operation['asset']]['admission'] = {
             key: operation[key] for key in ('target', 'manifest', 'signature', 'status', 'transformation')}
         state['assets'][operation['asset']]['admission']['operation'] = operation['id']
-        retire_legacy(state, operation['asset'], self.root)
-        from library.provisional import retire_provisional
-        retire_provisional(self.store,self.root,operation['asset'],state=state)
         self._terminal(operation,self.store.prepare(state))
 
-    def reconcile(self, *, locked: bool = False, provisional: bool = True, asset: str | None = None) -> list[dict[str, Any]]:
+    def reconcile(self, *, locked: bool = False, asset: str | None = None) -> list[dict[str, Any]]:
         if not locked:
             with publication_lock(self.store.directory, self.root):
                 return self.reconcile(locked=True, asset=asset)
@@ -194,20 +150,10 @@ class AdmissionPublisher(Publisher):
                 raise LibraryError('Admission journal missing')
             if current and eligible(self.store.working_set('admit', {'assets': [key]}), key):
                 verify(self.target_path(current['target']), current['manifest'])
-                state = self.store.result_set('admit', {'assets': [key]})
-                if retire_legacy(state, key, self.root):
-                    self.store.save(state, expected=state['revision'])
-                from library.provisional import retire_provisional
-                if self.prepared is None:
-                    retire_provisional(self.store,self.root,key)
         return operations
 
     def publish_asset(self, key: str) -> dict[str, Any]:
-        from activity import report
-        report('identity', 'working', 'Conversion and classification', item=key)
         with publication_lock(self.store.directory, self.root):
-            Publisher(self.store, self.reception, self.root, exclusive=True,
-                      capacity=self.capacity,prepared=self.prepared).reconcile(locked=True, provisional=False, asset=key if self.local_recovery else None)
             self.reconcile(locked=True, asset=key if self.local_recovery else None)
             if self.prepared:
                 return dict(self.prepared[-1].completions[-1].value)
@@ -223,12 +169,12 @@ class AdmissionPublisher(Publisher):
             target = self.target_path(desired['target'])
             if target.exists():
                 raise LibraryError('Unmanaged admission target')
-            evidence = {'asset': key, 'edition_status': 'confirmed' if asset.get('identity') else 'unknown',
+            evidence = {'asset': key, 'status': desired['status'],
                         'work': asset.get('work_result'), 'origins': [state['origins'][oid] for oid in asset['origins']]}
             fiche = ('# ' + ('À identifier' if desired['status'] == 'holding' else html.escape(str(desired['fields'].get('title')))) +
                      '\n\n<pre>' + html.escape(json.dumps(evidence, ensure_ascii=False, indent=2)) + '</pre>\n').encode()
             fields = desired['fields']
-            notes = 'Booksys; source_asset_sha256=' + key + '; edition=' + evidence['edition_status']
+            notes = 'Booksys; source_asset_sha256=' + key + '; admission=' + desired['status']
             old_notes = asset.get('embedded', {}).get('Notes', '')
             xml = work_comicinfo(asset, {**fields, 'notes': str(old_notes) + '\n' + notes})
             required = (2*1024**3 if asset['format'] == 'pdf' else sum(p['size'] for p in asset.get('page_manifest', []))) + len(fiche) + 8*1024**2

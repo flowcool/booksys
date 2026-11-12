@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -19,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from library.catalog import atomic_yaml, now
 from library.scheduling import next_delay
 from booksys_core.process import run_child
-from booksys_core.diagnostics import emit, parse_event
+from booksys_core.diagnostics import emit
 from library.web import build_projection
 
 
@@ -32,17 +30,13 @@ def main() -> None:
     parser.add_argument('--port', type=int, default=8768)
     parser.add_argument('--credentials', type=Path, required=True)
     parser.add_argument('--retire-packages', action='store_true', help='Retire one proven acquisition per successful cycle')
-    parser.add_argument('--activity', action='store_true', help='Shared read-only activity observer')
     parser.add_argument('--independent-queues', action='store_true', help='Serve HTTP and observation; separate supervised actors own dispatch')
-    parser.add_argument('--ipc-socket', type=Path)
     parser.add_argument('--public-host')
     parser.add_argument('--public-origin')
     parser.add_argument('--reception', type=Path, default=Path('/data/booksys/downloads'))
     parser.add_argument('--collector', type=Path, default=Path('/data/booksys/state'))
     parser.add_argument('--pyload', default='http://127.0.0.1:8000')
     args = parser.parse_args()
-    if args.public_origin and not args.ipc_socket:
-        parser.error('--public-origin requires --ipc-socket')
     from library.http import public_origins
     try:
         public_origins(args.public_host or '', args.public_origin)
@@ -57,20 +51,9 @@ def main() -> None:
     stop = threading.Event()
     failed = threading.Event()
     from library.catalog import Catalog
-    from library.resolution import Resolution
     from library.api import PublicAPI
     from library.http_runtime import HTTPRuntime
-    from library.diagnostic_reader import DiagnosticReader
-    from library.log_sources import LiveSource
-    sources: Any
-    if args.ipc_socket:
-        from library.compose_diagnostics import RemoteSource
-        from library.log_sources import COMPOSE_ROLES
-        sources = [RemoteSource(name, args.root/'state') for name in COMPOSE_ROLES]
-    else:
-        sources = [LiveSource(name) for name in ('worker', 'byparr', 'library')]
-    reader = DiagnosticReader(sources, args.root / 'evidence/diagnostic-reader.lock')
-    api = PublicAPI(args.root, host='', reception=args.reception, diagnostic_reader=reader,
+    api = PublicAPI(args.root, host=args.public_host or '', reception=args.reception,
                     public_origin=args.public_origin)
     from library.relationships import Relationships
     from library.store import Store
@@ -82,25 +65,21 @@ def main() -> None:
     statuses=StatusObservations(backend._database)
     collector_state=CollectorState(args.collector,database=backend._database)
     native_history=NativeHistory(args.collector,database=backend._database)
-    server: Any
-    if args.ipc_socket:
-        if not args.public_host:
-            parser.error('--public-host is required with --ipc-socket')
-        from library.compose_transport import UnixController
-        api.host = args.public_host
-        server = UnixController(args.ipc_socket, api.invoke, validate=api.validate)
-    else:
-        server = HTTPRuntime((args.listen, args.port), api)
+    server = HTTPRuntime((args.listen, args.port), api)
     server.start()
     evidence = args.root / 'evidence'
     evidence.mkdir(parents=True, exist_ok=True)
 
-    if args.activity:
-        from activity import bind
-        bind(evidence / 'activity', 'local', 'identity', 'retirement')
+    last = {'at': 0.0, 'revision': -1}
 
     def snapshot() -> None:
+        # The projection reads the whole catalogue (65 MB): rebuild it when the catalogue moved, else at most every 5 minutes.
+        from library.catalog import Catalog
+        revision = Catalog(args.root / 'state').revision
+        if revision == last['revision'] and time.monotonic() - last['at'] < 300:
+            return
         atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
+        last['at'], last['revision'] = time.monotonic(), revision
 
     def cycles() -> None:
         while not stop.is_set():
@@ -134,15 +113,6 @@ def main() -> None:
                      'duration_seconds': round(time.monotonic() - started, 3),
                      'next_cycle_at': datetime.fromtimestamp(finished + delay, timezone.utc).isoformat()}
             statuses.save_cycle(value)
-            if args.activity:
-                from activity import report
-                for stage in ('local', 'identity', 'retirement'):
-                    report(stage, 'blocked' if outcome.get('status') == 'blocked' else
-                           'waiting' if outcome.get('status') == 'skipped' else 'sleeping',
-                           'Cycle error' if outcome.get('status') == 'blocked' else 'Between cycles',
-                           reason='Cycle failed; inspect service evidence' if outcome.get('status') == 'blocked' else
-                           'Processing lock occupied' if outcome.get('status') == 'skipped' else '',
-                           next_attempt=finished + delay)
             snapshot()
             stop.wait(delay)  # No overlap. Idle waits; eligible work continues immediately.
 
@@ -169,17 +139,8 @@ def main() -> None:
     worker = None if args.independent_queues else threading.Thread(target=supervised_cycles, name='library-cycle')
     if worker is not None:
         worker.start()
-    from library.activity import Observer
-    from booksys_core.downloader import Pyload
     def observations() -> None:
-        observer = Observer(args.root, args.collector) if args.activity else None
         while not stop.is_set():
-            if args.ipc_socket:
-                from library.compose_diagnostics import refresh_sources
-                refresh_sources(sources)
-            else:
-                for source in sources:
-                    source.refresh()
             from library.retirement_observation import observe as retirement_observation
             retirement = retirement_observation(args.collector / 'package-retirement.yaml')
             try:
@@ -192,36 +153,8 @@ def main() -> None:
                         retirement=retirement)
             except Exception:
                 emit(service='library', stage='diagnostics', code='degraded', reason='diagnostic_unavailable')
-            if observer is None:
-                stop.wait(30)
-                continue
-            queues = {}
-            if args.independent_queues:
-                try:
-                    from library.stage_observation import observe
-                    from library.stage_tasks import StageTasks
-                    from library.stage_resources import Resources
-                    queues = observe(StageTasks(backend), Resources(args.root/'state/stage-resources.yaml'),
-                        args.root/'evidence/stage-actors', now=datetime.now(timezone.utc))
-                    statuses.save_cycle({'status': 'independent', 'stage': 'parallel-queues',
-                        'started_at': None, 'finished_at': None, 'next_cycle_at': None,
-                        'reason': 'Observation summary; stages have independent task boundaries'})
-                except Exception:
-                    emit(service='library', stage='diagnostics', code='degraded', reason='diagnostic_unavailable')
-            try:
-                # Two shared GETs per 30 s, regardless of viewer count.
-                client = Pyload(args.pyload, json.loads(args.credentials.read_text())['api_key'])
-                observer.sample_downloads(client)
-            except Exception:
-                observer.downloads_unavailable()
-            try:
-                observer.sample_resources()
-                observer.save(retirement=retirement)
-                api.activity.update({**observer.saved, 'queues': queues})
-            except Exception:
-                pass  # Last observation ages explicitly. Processing continues.
             stop.wait(30)
-    observer_thread = threading.Thread(target=observations, name='activity-observer')
+    observer_thread = threading.Thread(target=observations, name='catalogue-observer')
     observer_thread.start()
     try:
         while not stop.wait(.5):

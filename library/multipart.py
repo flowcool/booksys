@@ -1,11 +1,9 @@
 """Select exact tracked RAR volume sets without scanning reception."""
 from __future__ import annotations
-import re
 from typing import Any
-from urllib.parse import urlsplit
 from library.primitives import LibraryError
 
-from library.multipart_model import PART, is_multipart as is_multipart, select_parts as select_parts
+from library.multipart_model import is_multipart as is_multipart, select_parts as select_parts
 
 
 def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
@@ -52,7 +50,7 @@ def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
                           source_set_size=sum(stamp[2] for stamp in stamps),
                           source_set_sha256=digest([{'name': p.name, 'sha256': r['sha256'],
                               'size': r['fingerprint'][2]} for p,r in zip(paths,records)]))
-            policy = digest({'policy': POLICY, 'image': os.environ.get('BOOKSYS_READER_IMAGE', 'native')})
+            policy = digest({'policy': POLICY})
             unchanged = previous.get('source_parts') == records and previous.get('multipart_policy') == policy
             if unchanged and previous.get('availability') == 'rejected':
                 state['origins'][oid] = {**previous, 'observed_at': now()}

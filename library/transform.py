@@ -1,19 +1,15 @@
-"""Sandboxed PDF/CBR/CBZ to CBZ transformation using UnRAR and Python ZipFile."""
+"""PDF/CBR/CBZ to CBZ transformation using UnRAR and Python ZipFile."""
 from __future__ import annotations
 
 import base64
-import json
 import hashlib
 import os
-import re
-import subprocess
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from library.primitives import LibraryError, sync_dir
-from library.readers import fingerprint, inspect_file, sha256, worker_failure
+from library.readers import fingerprint, inspect_file, sha256
 from library.xmlmetadata import validate_xml
 
 VERSION = 'booksys-cbz-2'
@@ -30,58 +26,10 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
         raise LibraryError('Symlink in transformation paths')
     if list(destination.iterdir()):
         raise LibraryError('Transformation destination must be empty')
-    image = os.environ.get('BOOKSYS_READER_IMAGE')
-    if image:
-        if not re.fullmatch(r'[a-z0-9./:_@-]+', image) or ',' in str(source) + str(destination):
-            raise LibraryError('Unsafe Docker reader argument')
-        command = ['docker', 'run', '--rm', '-i', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges', '--user', f'{os.getuid()}:{os.getgid()}',
-            '--memory', '1536m', '--cpus', '1', '--pids-limit', '32',
-            '--mount', f'type=bind,src={source},dst=/input,readonly',
-            '--mount', f'type=bind,src={destination},dst=/output',
-            '--entrypoint', '/app/.venv/bin/python', image, '-m', 'library.reader_worker',
-            '/input', source.suffix.lower(), '--transform', '/output/book.cbz']
-    else:
-        from library.sandbox import native_prefix, PYTHON
-        command = native_prefix(source, output=destination) + [PYTHON, '-m', 'library.reader_worker',
-            '/tmp/input', source.suffix.lower(), '--transform', '/tmp/output/book.cbz']
-    request = json.dumps({'comicinfo': base64.b64encode(xml).decode()}).encode()
-    import time
-    # PDF rendering is page-wise (60 s/page), with a bounded total lab window.
-    wall_limit = 1800 if source.suffix.lower() == '.pdf' else 60
-    started = time.monotonic()
-    from library.decoder_ownership import prepare
-    command = prepare(command)
-    from library.reader_client import endpoint, execute
-    if endpoint():
-        rendered = execute('transform', source, json.loads(request), destination=destination)
-        stdout, stderr, returncode = json.dumps(rendered).encode(), b'', 0
-    else:
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            check_capacity()
-            payload: bytes | None = request
-            while True:
-                try:
-                    stdout, stderr = process.communicate(payload, timeout=.1)
-                    break
-                except subprocess.TimeoutExpired:
-                    payload = None
-                    check_capacity()
-                    if time.monotonic() - started > wall_limit:
-                        raise LibraryError('Comic transformation exceeded time limit')
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.communicate()
-        returncode = process.returncode
-
-    if returncode in (125, 126, 127):
-        from library.readers import ReaderUnavailable
-        raise ReaderUnavailable('Comic transformation execution dependency unavailable')
-    if returncode:
-        raise LibraryError(worker_failure('Isolated comic transformation failed', returncode, stderr))
-    outcome: dict[str, Any] = json.loads(stdout)
+    from library.decode import run
+    check_capacity()
+    outcome = run('transform', source, {'comicinfo': base64.b64encode(xml).decode()}, destination)
+    check_capacity()
     if outcome['status'] != 'validated' or outcome.get('input_sha256') != asset_hash:
         raise LibraryError('Comic transformation blocked: ' + outcome.get('reason', 'input hash mismatch'))
     output = destination / 'book.cbz'

@@ -21,11 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends libpq5=17.11-0+
     && rm -rf /var/lib/apt/lists/*
 RUN /opt/python/bin/python3.14 -m pip uninstall --break-system-packages -y pip && python -m pip uninstall -y pip
 RUN /app/.venv/bin/python -c 'import psycopg,sys; from psycopg import pq; assert pq.__impl__ == "c" and sys.version_info[:2] == (3,14) and psycopg.__version__ == "3.3.8"'
-COPY booksys.py pipeline.py fiches.py mirrors.py mirror_routing.py retirement_history.py activity.py ./
+COPY booksys.py pipeline.py fiches.py mirrors.py mirror_routing.py retirement_history.py ./
 COPY booksys_core ./booksys_core
 COPY library ./library
 COPY ops/library_service.py ops/library_cycle.py ops/retire_packages.py ops/route_mirrors.py ./ops/
-COPY ops/stack_config.py ops/processing.conf ./ops/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/booksys/
 COPY third_party/ /usr/share/doc/booksys/third_party/
 ENV PSYCOPG_IMPL=c PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH=/app/.venv/bin:$PATH

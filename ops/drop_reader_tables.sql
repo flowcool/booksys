@@ -1,0 +1,14 @@
+BEGIN;
+DROP FUNCTION IF EXISTS booksys.reader_accept(text);
+DROP FUNCTION IF EXISTS booksys.reader_state(text, text);
+DROP FUNCTION IF EXISTS booksys.reader_retain(text, text, text);
+DROP FUNCTION IF EXISTS booksys.diagnostic_request(text);
+DROP FUNCTION IF EXISTS booksys.diagnostic_publish(text);
+DROP TABLE IF EXISTS booksys.reader_job_state, booksys.reader_requests;
+DROP TABLE IF EXISTS booksys.decoder_children, booksys.decoder_owners;
+DROP TABLE IF EXISTS booksys.diagnostic_requests, booksys.compose_sources;
+DROP TABLE IF EXISTS booksys.manual_proofs;
+DROP OWNED BY booksys_launcher;
+DROP OWNED BY booksys_launcher_functions;
+DROP ROLE IF EXISTS booksys_launcher, booksys_launcher_functions;
+COMMIT;

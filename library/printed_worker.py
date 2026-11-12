@@ -1,4 +1,4 @@
-"""Internal OCR worker. Run only through read_printed's read-only sandbox."""
+"""Internal OCR worker."""
 from __future__ import annotations
 
 import hashlib
@@ -13,13 +13,10 @@ from typing import Any
 from library.primitives import LibraryError
 from library.reader_worker import inspect_archive
 from library.readers import sha256
-from library.process import bounded_run
 
 
 def main() -> None:
-    resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024**2, 1536 * 1024**2))
     resource.setrlimit(resource.RLIMIT_CPU, (150, 150))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     path, suffix = Path(sys.argv[1]), sys.argv[2]
     output: dict[str, Any]
@@ -32,13 +29,13 @@ def main() -> None:
         if suffix == '.pdf':
             from library.pdf_pages import convert_pdf_pages
             indices = [p['page'] for p in selected]
-            from library.pdf_inspection import inspect_pdf
+            from library.pdf_pages import inspect_pdf
             count = inspect_pdf(path)['pages']
             actual_indices = sorted(set([*range(1, min(4, count) + 1), *range(max(1, count - 3), count + 1)]))
             if indices != actual_indices:
                 raise LibraryError('OCR PDF window differs from validated page count')
             inspection = convert_pdf_pages(path, lambda name, data: images.update({name: data}), indices=indices)
-            selected = [{**entry, **method} for entry, method in zip(inspection['page_manifest'], inspection['page_methods'])]
+            selected = [{**entry, 'page': index} for entry, index in zip(inspection['page_manifest'], indices)]
         else:
             wanted = {page['name']: page for page in selected}
             def collect(name: str, data: bytes) -> None:
@@ -54,20 +51,13 @@ def main() -> None:
             if actual != selected or set(images) != set(wanted):
                 raise LibraryError('OCR window differs from validated manifest')
         tool = os.environ.get('BOOKSYS_TESSERACT', '/usr/bin/tesseract')
-        version = bounded_run([tool, '--version'], timeout=5, stdout_limit=8192)
+        version = subprocess.run([tool, '--version'], timeout=5, capture_output=True, check=False)
         if version.returncode:
             raise LibraryError('OCR version probe failed')
         pages: list[dict[str, Any]] = []
-        cover = None
         for page in selected:
-            if not pages:
-                from io import BytesIO
-                from PIL import Image
-                from library.cover_candidates import cover_hash
-                with Image.open(BytesIO(images[page['name']])) as image:
-                    cover = cover_hash(image)
-            result = bounded_run([tool, 'stdin', 'stdout', '-l', 'eng+fra', '--psm', '3'],
-                input=images[page['name']], timeout=30, stdout_limit=65536,
+            result = subprocess.run([tool, 'stdin', 'stdout', '-l', 'eng+fra', '--psm', '3'],
+                input=images[page['name']], timeout=30, capture_output=True, check=False,
                 env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
             if result.returncode:
                 raise LibraryError('OCR engine failed')
@@ -75,10 +65,9 @@ def main() -> None:
                 raise LibraryError('OCR text output limit')
             pages.append({**page, 'text': result.stdout.decode('utf-8')})
         output = {'status': 'ok', 'pages': pages, 'tool': version.stdout.decode().splitlines()[0],
-                  'window': 'first4_last4', 'languages': ['eng', 'fra'], 'psm': 3,
-                  'cover_hash': cover}
+                  'window': 'first4_last4', 'languages': ['eng', 'fra'], 'psm': 3}
     except Exception as exc:
-        output = {'status': 'unavailable', 'reason': f'{type(exc).__name__}: {exc}'}
+        output = {'status': 'pending', 'reason': f'{type(exc).__name__}: {exc}'}
     output['input_sha256'] = sha256(path)
     print(json.dumps(output))
 

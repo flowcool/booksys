@@ -5,7 +5,6 @@ import json
 from contextvars import ContextVar
 import re
 import time
-import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,12 +12,8 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit, urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-import yaml
-from bs4 import BeautifulSoup
-
 from library.catalog import Catalog
-from library.primitives import LibraryError, atomic_yaml, digest, now, lock
-from library.effects import apply_effect
+from library.primitives import LibraryError, now, lock
 
 from booksys_core.network_admission import RollingBudget
 
@@ -40,90 +35,6 @@ def discovery_hint(title: str, embedded: dict[str, Any]) -> dict[str, str]:
     volume = re.search(r'\b(?:tome|vol(?:ume)?|t)\.?\s*(\d+)\b', title, re.I)
     return {'title': ' '.join(title.split())[:200], 'author': str(embedded.get('Writer', ''))[:120],
             'number': str(embedded.get('Number', '')) or (volume.group(1) if volume else '')}
-
-
-def identify(embedded: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    upstreams = {c.get('upstream', c['source']) for c in candidates}
-    outcome: dict[str, Any] = {'status': 'pending', 'independent_sources': len(upstreams),
-                              'reason': 'No consistent exact edition identifier', 'candidates': candidates}
-    code = isbn13(str(embedded.get('ISBN', embedded.get('GTIN', ''))))
-    matches = [c for c in candidates if c.get('isbn') == code] if code else candidates
-    # Multiple providers describing one edition must agree on all discriminators.
-    identities = {(normalized(c.get('title', '')), normalized(c.get('author', '')),
-                   normalized(c.get('number', '')), normalized(c.get('language', '')),
-                   normalized(c.get('publisher', '')), normalized(c.get('date', '')),
-                   normalized(c.get('revision', ''))) for c in matches}
-    if not matches:
-        return {**outcome, 'reason': 'No exact edition candidate found', 'reason_code': 'no_candidate'}
-    if len(identities) != 1:
-        conflict = any(len({row[index] for row in identities if row[index]}) > 1 for index in range(7))
-        return {**outcome, 'reason': 'Conflicting edition candidates' if conflict else 'Edition evidence is incomplete',
-                'reason_code': 'conflict' if conflict else 'missing_evidence'}
-    if not code and len({c.get('upstream', c['source']) for c in matches}) < 2:
-        return {**outcome, 'reason': 'Non-ISBN identity requires two independent upstream sources'}
-    candidate = matches[0]
-    required: tuple[str, ...] = ('title', 'author', 'publisher', 'language', 'date', 'revision',
-                'work_ref', 'edition_ref', 'url', 'source', 'upstream')
-    if not candidate.get('unnumbered'):
-        required += ('number',)
-    if any(not candidate.get(field) for field in required):
-        return {**outcome, 'reason': 'Edition evidence is incomplete', 'reason_code': 'missing_evidence'}
-    for source_field, field in [('Title', 'title'), ('Writer', 'author'), ('Number', 'number'),
-                                ('Publisher', 'publisher'), ('LanguageISO', 'language')]:
-        if field == 'number' and candidate.get('unnumbered') and not embedded.get(source_field):
-            continue
-        if not embedded.get(source_field) or normalized(embedded[source_field]) != normalized(candidate[field]):
-            return {**outcome, 'reason': f'Missing or conflicting {field}'}
-    if not code:
-        for source_field, field in [('EditionDate', 'date'), ('EditionRevision', 'revision')]:
-            if not embedded.get(source_field) or normalized(embedded[source_field]) != normalized(candidate[field]):
-                return {**outcome, 'reason': f'Missing or conflicting non-ISBN {field}'}
-    # ISBN says which edition. Matching independent content fields guard against
-    # copied/wrong ComicInfo assertions. Bookys titles and filenames never suffice.
-    return {**outcome, 'status': 'identified', 'reason': ('Exact ISBN and five consistent content fields'
-            if code else 'Two independent upstream sources and seven consistent bibliographic fields'),
-            'candidate': candidate, 'evidence': {'isbn': code, 'url': candidate['url'],
-            'fields': ['title', 'author', 'number', 'publisher', 'language', 'date', 'revision'],
-            'sources': [{'url': c['url'], 'upstream': c['upstream']} for c in matches], 'retrieved_at': now()}}
-
-
-def parse_bdtheque(body: str) -> dict[str, Any]:
-    soup = BeautifulSoup(body, 'html.parser')
-    title = soup.find('h1')
-    if not title or any(word in normalized(title.get_text()) for word in ('maintenance', 'forbidden', 'captcha')):
-        raise LibraryError('BDTheque response is not a series page')
-    result: dict[str, Any] = {'title': title.get_text(' ', strip=True), 'genres': [], 'public': None}
-    for row in soup.select('table.table-sm tr'):
-        cells = row.find_all('td')
-        if len(cells) < 2:
-            continue
-        label = normalized(cells[0].get_text(' ', strip=True))
-        if 'genre' in label:
-            for link in cells[1].select('a[href]'):
-                href, value = str(link['href']), link.get_text(' ', strip=True)
-                if 'public=' in href:
-                    result['public'] = value
-                elif 'genre=' in href:
-                    result['genres'].append(value)
-        elif 'scénario' in label or 'scenario' in label:
-            result['author'] = cells[1].get_text(' ', strip=True)
-    return result
-
-
-def parse_mangadex(data: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(data.get('attributes'), dict) or not data['attributes'].get('title'):
-        raise LibraryError('MangaDex response is not a manga')
-    attrs = data['attributes']
-    genres = []
-    for tag in attrs.get('tags', []):
-        item = tag.get('attributes', {})
-        if item.get('group') == 'genre':
-            names = item.get('name', {})
-            value = names.get('fr') or names.get('en')
-            if value:
-                genres.append(value)
-    return {'title': next(iter(attrs['title'].values())), 'genres': genres,
-            'public': attrs.get('contentRating')}
 
 
 class QualifiedRedirect(HTTPRedirectHandler):
@@ -181,7 +92,7 @@ class Providers:
     def _get(self, url: str) -> dict[str, Any]:
         parts = urlsplit(url)
         if (parts.scheme != 'https' or parts.hostname not in
-                ('openlibrary.org', 'www.bdtheque.com', 'api.mangadex.org', 'catalogue.bnf.fr', 'www.bedetheque.com')
+                ('openlibrary.org', 'catalogue.bnf.fr', 'www.bedetheque.com')
                 or parts.username or parts.password or parts.port):
             raise LibraryError('Unqualified provider URL')
         cached=self._cache.get(url)
@@ -227,8 +138,9 @@ class Providers:
             from booksys_core.network_admission import RollingBudget, BudgetWait
             from booksys_core.errors import CollectionError
             try:
-                admission = self.admission
-                if admission is None:
+                if self.admission is not None:
+                    admission: RollingBudget = self.admission
+                else:
                     assert self.shared is not None
                     admission = RollingBudget(self.shared / 'provider-admission.yaml')
                 admission.debit()
@@ -240,7 +152,6 @@ class Providers:
                     raise LibraryError('Request budget exhausted') from exc
                 time.sleep(delay)
                 try:
-                    assert admission is not None
                     admission.debit()
                 except BudgetWait as retry:
                     raise LibraryError('Request budget exhausted') from retry
@@ -371,44 +282,12 @@ class Providers:
                         'reason': str(exc), 'url': url}
         if provider == 'openlibrary':
             return self.edition(reference)
-        # Parse the separator once; adjacent unbounded repetitions can backtrack.
-        series_number, separator, series_slug = reference.partition('/')
-        if (provider == 'bdtheque' and separator and series_number.isdecimal()
-                and re.fullmatch(r'[a-z0-9-]+', series_slug)):
-            url = f'https://www.bdtheque.com/series/{reference}'
-            parser = parse_bdtheque
-        elif provider == 'mangadex' and re.fullmatch(r'[0-9a-f-]{36}', reference):
-            url = f'https://api.mangadex.org/manga/{reference}'
-            parser = lambda body: parse_mangadex(json.loads(body)['data'])
-        else:
-            raise LibraryError('Invalid provider or reference')
-        response = self.get(url)
-        if response['status'] != 'ok':
-            return response
-        try:
-            result = parser(response['body'])
-            return {'status': 'ok', 'source': provider, 'upstream': provider, 'url': url,
-                    'retrieved_at': response['retrieved_at'], 'fields': result}
-        except (ValueError, KeyError, LibraryError) as exc:
-            return {'status': 'unavailable', 'reason': str(exc), 'url': url}
+        raise LibraryError('Invalid provider or reference')
 
 
 def add_assertions(asset: dict[str, Any], response: dict[str, Any]) -> None:
     asset.setdefault('source_attempts', []).append({k: v for k, v in response.items() if k not in ('body', 'fields')})
     asset['source_attempts'] = asset['source_attempts'][-50:]
-    if response['status'] != 'ok' or 'fields' not in response:
-        return
-    for field, raw in response['fields'].items():
-        if raw is None or raw == [] or raw == '':
-            continue
-        value = {'field': field, 'raw': raw, 'normalized': raw,
-                 'source': response['source'], 'upstream': response['upstream'],
-                 'url': response['url'], 'retrieved_at': response['retrieved_at'], 'validation': 'asserted'}
-        if field == 'public':
-            value['normalized'] = {'Adultes': 'adult', 'safe': 'all_ages', 'erotica': 'erotica',
-                                   'pornographic': 'pornographic', 'suggestive': 'suggestive'}.get(str(raw))
-        if value not in asset.setdefault('assertions', []):
-            asset['assertions'].append(value)
 
 
 def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
@@ -417,12 +296,10 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
     asset = state['assets'][asset_id]
     from library.work_enrichment import enrich_work
     enrich_work(state, asset_id, providers)
-    if asset['work_result']['status'] == 'identified' and not references and not asset.get('identity'):
+    if asset['work_result']['status'] == 'identified' and not references:
         return state
     # All external work happens on the snapshot, outside catalogue locks.
     candidates = []
-    attempt_start = len(asset.get('source_attempts', []))
-    discovery_unavailable = False
     for provider, ref in references:
         response = providers.source(provider, ref)
         add_assertions(asset, response)
@@ -448,7 +325,6 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
         hint = discovery_hint(title, embedded)
         asset['discovery_hint'] = {**hint, 'raw_title': title, 'source': hint_source, 'validation': 'discovery_only'}
         asset['discovery'] = providers.discover(hint['title'], author=hint['author'], number=hint['number'])
-        discovery_unavailable = asset['discovery'].get('status') == 'unavailable'
         attempts = providers.resolve_discovery(asset['discovery'])
         asset['discovery']['edition_attempts'] = attempts
         candidates.extend(attempt['candidate'] for attempt in attempts
@@ -468,7 +344,7 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                        for candidate in candidates}.values())
     printed = asset.get('printed')
     if printed:
-        from library.printed_model import printed_isbns, identify_printed
+        from library.printed_model import printed_isbns
         if printed.get('asset') != asset_id:
             raise LibraryError('Printed assertions are not bound to this asset')
         codes, invalid = printed_isbns(printed)
@@ -480,64 +356,7 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                     candidates.append(response['candidate'])
         candidates = list({(candidate['source'], candidate['edition_ref']): candidate
                            for candidate in candidates}.values())
-        printed_result = identify_printed(printed, embedded, candidates)
-        # Absence of OCR facts must not disable the existing ComicInfo route.
-        # A visible ISBN or malformed ISBN can block it.
-        if codes or invalid:
-            result = printed_result
-        else:
-            result = identify(embedded, candidates)
-    else:
-        result = identify(embedded, candidates)
-    if not candidates and (discovery_unavailable or any(attempt.get('status') == 'unavailable'
-            for attempt in asset.get('source_attempts', [])[attempt_start:])):
-        result.update(reason='Metadata provider unavailable; no edition candidate', reason_code='provider_unavailable')
-    if result['status'] != 'identified':
-        result.setdefault('reason_code', 'conflict' if any(word in result['reason'].lower()
-            for word in ('conflict', 'contradict')) else 'missing_evidence')
-    # A new exact edition must agree with an earlier manual work choice.
-    # Retain the proposed candidate and evidence when the work disagrees.
-    confirmed = asset.get('work_decision', {}).get('work', {})
-    if result['status'] == 'identified' and confirmed:
-        from library.work_identity import IDENTITY_FIELDS, normalized as work_normalized, present
-        proposed = result['candidate']
-        if any(present(confirmed.get(field)) and present(proposed.get(field))
-                and work_normalized(confirmed[field], field) != work_normalized(proposed[field], field)
-                for field in IDENTITY_FIELDS):
-            result.update(status='pending', reason_code='conflict',
-                          reason='Exact edition conflicts with confirmed work')
-    asset['identity_result'] = result
-    if result['status'] == 'identified':
-        candidate = result['candidate']
-        wid = digest({'source': candidate['source'], 'work': candidate['work_ref']})
-        eid = digest({'source': candidate['source'], 'edition': candidate['edition_ref']})
-        existing = asset.get('identity')
-        if existing and existing['edition'] != eid:
-            asset['contested'] = True
-        elif not existing:
-            apply_effect(state, {'action': 'identify', 'target': asset_id, 'values': {
-                'work_id': wid, 'edition_id': eid, 'work': {
-                    **{key: candidate[key] for key in ('title', 'author', 'number', 'contributors', 'responsibility')
-                       if candidate.get(key)},
-                    'identity_scope': 'edition' if candidate['work_ref'].startswith('edition-scoped:') else 'work',
-                    **{key: value for key, value in confirmed.items() if value not in (None, '', [], {})}},
-                'edition': {'language': candidate['language'], 'publisher': candidate['publisher'],
-                            'date': candidate['date'], 'revision': candidate['revision'], 'evidence': result['evidence']}}})
-            state['editions'][eid].setdefault('selected', asset['identity']['variant'])
-    elif asset.get('identity') and candidates:
-        # Search alternatives or insufficient evidence do not contradict an
-        # operator decision. Only a refreshed record for its cited edition does.
-        identity = asset['identity']
-        edition = state['editions'][identity['edition']]
-        work = state['works'][identity['work']]
-        evidence = edition.get('evidence', {})
-        cited = {value for key, value in evidence.items() if key in ('url', 'source') and isinstance(value, str)}
-        for candidate in candidates:
-            if candidate['url'] in cited and any(candidate.get(field) and known.get(field) and
-                    normalized(candidate[field]) != normalized(known[field])
-                    for known, fields in ((work, ('title', 'author', 'number')),
-                                          (edition, ('language', 'publisher', 'date', 'revision'))) for field in fields):
-                asset['contested'] = True
+    enrich_work(state, asset_id, providers, candidates)
     return state
 
 

@@ -15,10 +15,6 @@ def bounded_run(command: list[str], *, input: bytes = b'', timeout: float,
                 stdout_limit: int = 1024**2, stderr_limit: int = 65536,
                 env: dict[str, str] | None = None,
                 check: Callable[[], None] | None = None) -> subprocess.CompletedProcess[bytes]:
-    from library.decoder_ownership import current_decoder
-    owner = current_decoder.get()
-    if owner is not None:
-        command = owner.prepare(command)
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, env=env, start_new_session=True)
     output: dict[str, bytearray] = {'stdout': bytearray(), 'stderr': bytearray()}

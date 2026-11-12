@@ -17,7 +17,7 @@ from library.intake import reception_path
 from library.origins import resolve_asset, verify_source_parts
 from library.readers import fingerprint, sha256
 from mirrors import host_sets, link_identity
-from retirement_history import evidence_digest, history_path, package_identity, read_history
+from retirement_history import evidence_digest, history_path, package_identity, read_history, same_package
 
 
 class Retirement:
@@ -193,7 +193,7 @@ class Retirement:
         if prior and prior['phase'] == 'retired':
             if receipt_only is not None:
                 live = self.client.call('get_queue_data') + self.client.call('get_collector_data')
-                if any(str(p['pid']) in prior['packages'] for p in live):
+                if any(str(p['pid']) in prior['packages'] and same_package(prior['packages'][str(p['pid'])], p) for p in live):
                     raise LibraryError('Retired package reappeared during readback')
                 self._verify_files(prior)
             return {'outcome': 'retired', 'source': source, 'already_retired': True}
@@ -202,7 +202,7 @@ class Retirement:
             raise LibraryError('Another removal is uncertain; reconcile its intent first')
         if prior and prior['phase'] == 'deleting':
             live = self.client.call('get_queue_data') + self.client.call('get_collector_data')
-            if any(str(p['pid']) in prior['packages'] for p in live):
+            if any(str(p['pid']) in prior['packages'] and same_package(prior['packages'][str(p['pid'])], p) for p in live):
                 raise LibraryError('Removal is uncertain; inspect target without automatic resend')
             if not apply:
                 return {'outcome': 'reconcile', 'source': source}
@@ -228,6 +228,8 @@ class Retirement:
             return {'outcome': 'blocked', 'reason': 'Tracked URL set changed'}
         routing = NativeHistory(self.routing.parent).routing()
         route = routing['packages'].get(str(package['pid']), {})
+        if route.get('source') not in (None, source):
+            route = {}  # an entry of an earlier package that had this id
         if route and route.get('phase') not in ('stopped', 'active', 'restored'):
             return {'outcome': 'blocked', 'reason': 'Mirror routing is not settled'}
         from mirror_routing import package_signature

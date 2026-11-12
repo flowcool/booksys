@@ -83,19 +83,27 @@ class RollingBudget:
         with self._transaction() as value:
             return value
 
-    def next_due(self, *, timestamp: float | None = None) -> float:
-        """Read current readiness without resetting or spending the allowance."""
+    def next_due(self, *, timestamp: float | None = None, reserve: int = 1) -> float:
+        """Read when `reserve` requests fit the window, without spending the allowance.
+
+        An operation that needs several calls passes its count so it does not start
+        with one free slot and fail midway.
+        """
         stamp = time.time() if timestamp is None else timestamp
         if not math.isfinite(stamp) or stamp < 0:
             raise CollectionError('Invalid request time')
+        if type(reserve) is not int or reserve < 1:
+            raise CollectionError('Invalid request reserve')
         with self._transaction(write=True) as value:
             if value.get('review_block', False):
                 return math.inf
-            starts = [start for start in value['starts'] if start > stamp - value['period']]
+            starts = sorted(start for start in value['starts'] if start > stamp - value['period'])
             due = max(value['last'], value['not_before'],
                       value['last'] + value['spacing'] if value['starts'] else 0)
-            if len(starts) >= value['requests']:
-                due = max(due, min(starts) + value['period'])
+            wanted = min(reserve, value['requests'])
+            overflow = len(starts) + wanted - value['requests']
+            if overflow > 0:
+                due = max(due, starts[overflow - 1] + value['period'])
             return float(due)
 
     def debit(self, *, timestamp: float | None = None) -> None:
