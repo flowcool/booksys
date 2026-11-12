@@ -245,7 +245,7 @@ class ResolutionTests(unittest.TestCase):
         from library.resolution_ui import PANEL
         if not shutil.which('node'):
             self.skipTest('Node is needed for actual form event execution')
-        script = re.search(r'<script>(.*?)</script>', PANEL, re.S).group(1)
+        script = re.search(r'<script>(.*?)</script>', PANEL, re.S | re.I).group(1)
         driver = r'''
 const vm=require('vm'),assert=require('assert');let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',async()=>{
 class E{constructor(tag=''){this.tag=tag;this.value='';this.children=[];this.textContent='';this.dataset={};this.style={}}append(...es){for(const e of es){this.children.push(e);if(this.tag==='select'&&this.children.length===1)this.value=e.value}}replaceChildren(...es){this.children=[];this.append(...es)}addEventListener(k,f){this['on'+k]=f}querySelector(s){return this.children.find(e=>e.className===s.slice(1))}}

@@ -8,7 +8,7 @@ from library.activity_ui import ACTIVITY_PANE
 class ActivityUITests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node required for actual page script')
     def test_tab_details_refresh_and_untrusted_titles(self):
-        script = re.search(r'<script>(.*?)</script>', ACTIVITY_PANE, re.S).group(1)
+        script = re.search(r'<script>(.*?)</script>', ACTIVITY_PANE, re.S | re.I).group(1)
         driver = r'''const vm=require('vm'),assert=require('assert');let input='';
 process.stdin.on('data',d=>input+=d);process.stdin.on('end',async()=>{
 const script=JSON.parse(input);class E{constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.hidden=false;this.open=false}append(...v){this.children.push(...v)}replaceChildren(...v){this.children=[...v]}setAttribute(k,v){this[k]=v}}
