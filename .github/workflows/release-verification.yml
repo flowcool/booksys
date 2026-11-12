@@ -15,6 +15,10 @@ on:
         description: Qualified corresponding-source.tar.gz digest including sha256 prefix
         required: true
         type: string
+      signer_workflow_sha:
+        description: Exact reviewed recovery workflow control commit
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -36,6 +40,7 @@ jobs:
           REVISION: ${{ inputs.revision }}
           MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
           SOURCE_SHA256: ${{ inputs.source_sha256 }}
+          SIGNER_WORKFLOW_SHA: ${{ inputs.signer_workflow_sha }}
         run: |
           python3 ops/verify_public_release.py --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256" --source-sha256 "$SOURCE_SHA256" --output "$RUNNER_TEMP/proof"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -79,11 +84,13 @@ jobs:
           REVISION: ${{ inputs.revision }}
           MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
           SOURCE_SHA256: ${{ inputs.source_sha256 }}
+          SIGNER_WORKFLOW_SHA: ${{ inputs.signer_workflow_sha }}
         run: |
           python3 ops/verify_public_release.py --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256" --source-sha256 "$SOURCE_SHA256" --manifest-only --output "$RUNNER_TEMP/proof"
           digest=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/proof/manifest.json"))["images"][os.environ["IMAGE"]]["index_digest"])')
           target="ghcr.io/flowcool/booksys-$IMAGE@$digest"
-          cosign verify --certificate-identity 'https://github.com/flowcool/booksys/.github/workflows/release.yml@refs/tags/v0.1.0' --certificate-oidc-issuer https://token.actions.githubusercontent.com "$target" > "$RUNNER_TEMP/proof/signatures.json"
+          [[ "$SIGNER_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          cosign verify --certificate-identity 'https://github.com/flowcool/booksys/.github/workflows/release-recovery.yml@refs/heads/main' --certificate-github-workflow-sha "$SIGNER_WORKFLOW_SHA" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$target" > "$RUNNER_TEMP/proof/signatures.json"
           skopeo copy --all --preserve-digests "docker://$target" "oci-archive:$RUNNER_TEMP/image.oci.tar"
           bash ops/validate_image.sh "$IMAGE" "$RUNNER_TEMP/image.oci.tar" "$REVISION" "$RUNNER_TEMP/proof"
           python3 - <<'PY'

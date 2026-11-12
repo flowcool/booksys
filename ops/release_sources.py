@@ -222,6 +222,8 @@ def verify_plan(plan: dict[str, Any]) -> None:
     for path, expected in plan["asset_digests"].items():
         if file_digest(Path(path)) != expected:
             raise ValueError("Prepared corresponding source changed")
+    if plan.get("release_notes") and file_digest(Path(plan["release_notes"])) != plan["release_notes_sha256"]:
+        raise ValueError("Prepared release notes changed")
 
 
 def main() -> None:

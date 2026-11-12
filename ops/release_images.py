@@ -89,6 +89,11 @@ def publish(plan: dict[str, Any], journal: Path, resume: bool = False) -> None:
                     if not (resume and digest(raw) == plan["images"][image]["index_digest"]):
                         raise ValueError("Stable alias cannot move backwards or replace the same version")
     remote_release = json.loads(run("gh", "api", f"repos/{REPOSITORY}/releases/tags/{plan['tag']}"))
+    notes_digest = digest(remote_release.get("body", "").encode())
+    if plan.get("release_notes") and notes_digest not in (
+        plan["release_notes_before_sha256"], plan["release_notes_sha256"] if resume else ""
+    ):
+        raise ValueError("Release notes changed before recovery publication")
     assets = {asset["name"]: asset for asset in remote_release["assets"]}
     existing_assets = set()
     for asset in plan["source_assets"]:
@@ -115,6 +120,12 @@ def publish(plan: dict[str, Any], journal: Path, resume: bool = False) -> None:
         state["pending"] = None
         save(journal, state)
 
+    if plan.get("release_notes") and notes_digest != plan["release_notes_sha256"]:
+        mutate("release-notes", "gh", "release", "edit", plan["tag"], "--repo", REPOSITORY,
+               "--notes-file", plan["release_notes"])
+        changed = json.loads(run("gh", "api", f"repos/{REPOSITORY}/releases/tags/{plan['tag']}"))
+        if digest(changed["body"].encode()) != plan["release_notes_sha256"]:
+            raise ValueError("Release notes write is uncertain; stop before assets/images")
     for asset in plan["source_assets"]:
         if Path(asset).name in existing_assets:
             continue
@@ -131,8 +142,11 @@ def publish(plan: dict[str, Any], journal: Path, resume: bool = False) -> None:
         verify_graph(entry)
         target = entry["reference"].rsplit(":", 1)[0] + "@" + entry["index_digest"]
         mutate("sign:" + image, "cosign", "sign", "--yes", target)
+        certificate = []
+        if plan.get("certificate_github_workflow_sha"):
+            certificate = ["--certificate-github-workflow-sha", plan["certificate_github_workflow_sha"]]
         verification = run("cosign", "verify", "--certificate-identity", plan["identity"],
-                           "--certificate-oidc-issuer", ISSUER, target)
+                           "--certificate-oidc-issuer", ISSUER, *certificate, target)
         signatures = json.loads(verification)
         if not isinstance(signatures, list) or not signatures:
             raise ValueError("Signature verification returned no verified signature")
