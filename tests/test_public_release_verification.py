@@ -37,6 +37,23 @@ class PublicSourceProofTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "differs"):
                 split_source(archive, bad, "sha256:" + "0" * 64, part_size=12)
 
+    def test_signed_graph_binding_accepts_empty_subjects_and_rejects_conflicts(self):
+        from test_release_images import artifact
+        from release_sources import oci_graph
+        from verify_public_release import verify_image
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "image.tar"
+            artifact(archive)
+            graph = oci_graph(archive)
+            self.assertEqual(verify_image(archive, "a" * 40, graph["index_digest"])["platform"], "linux/amd64")
+            graph["statements"][0]["runtime_digest"] = "sha256:" + "0" * 64
+            with patch("verify_public_release.oci_graph", return_value=graph), self.assertRaisesRegex(ValueError, "bind"):
+                verify_image(archive, "a" * 40, graph["index_digest"])
+            graph = oci_graph(archive)
+            graph["statements"][0]["statement"]["subject"] = [{"digest": {"sha256": "0" * 64}}]
+            with patch("verify_public_release.oci_graph", return_value=graph), self.assertRaisesRegex(ValueError, "bind"):
+                verify_image(archive, "a" * 40, graph["index_digest"])
+
     def test_anonymous_download_checks_exact_bytes_and_https(self):
         content = b"synthetic corresponding source"
         expected = "sha256:" + hashlib.sha256(content).hexdigest()

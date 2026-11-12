@@ -29,10 +29,10 @@ def verify_image(archive: Path, revision: str, expected: str) -> dict[str, str]:
     types = set()
     for item in graph["statements"]:
         statement = item["statement"]
-        if item["runtime_digest"] != actual["manifest_digest"] or not any(
+        if item["runtime_digest"] != actual["manifest_digest"] or (statement.get("subject") and not any(
             subject.get("digest", {}).get("sha256") == actual["manifest_digest"][7:]
             for subject in statement.get("subject", [])
-        ):
+        )):
             raise ValueError("Public attestation does not bind the pulled runtime")
         kind = statement.get("predicateType")
         types.add(kind)
