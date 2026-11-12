@@ -95,6 +95,23 @@ release notes must point directly to these source assets. Actual anonymous sourc
 and image downloads are part of release acceptance, after package visibility is
 explicitly configured. New personal packages may initially be private.
 
+For the initial prerelease, create the three immutable packages, verify their
+digests and signatures, then set each package to Public in its GitHub Package
+settings. GitHub's supported visibility control uses that web interface. This
+expected private intermediate state is separate from a failed registry write.
+Do not substitute authentication success for a public pull.
+
+After that change, dispatch `release-verification.yml` from protected main with
+the exact source revision and the `sha256:` digests of `manifest.json` and
+`corresponding-source.tar.gz` from the completed publication plan. The read-only
+workflow streams and hashes the public sources without credentials. Its three
+ephemeral jobs use an empty registry auth file, verify the original release's
+keyless identity, pull each exact graph, check SBOM/provenance and run the existing
+synthetic image probes. The existing validation helper also scans each downloaded
+artifact. This check binds the public retrieval to the qualified image. The jobs
+retain reports only, without downloading image archives to the operator's host.
+This verifier does not change the source revision or publish any artifact.
+
 ## Failed or uncertain publication
 
 Preserve the workflow artifacts and `release-journal.json` before any recovery.
