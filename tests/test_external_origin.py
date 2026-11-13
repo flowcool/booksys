@@ -34,7 +34,9 @@ class ExternalOriginTests(unittest.TestCase):
                 browser=None, client=None, snapshots=root/'snapshots')
             tasks = MagicMock()
             at = datetime.now(timezone.utc)
+            (root/'work').mkdir()
             with patch('library.intake.EXTERNAL_ROOT', originals), \
+                 patch('library.decode.WORK_ROOT', str(root/'work')), \
                  patch('library.native_stages.CollectorState') as collector, \
                  patch('library.native_stages.RuntimeObservation') as observation, \
                  patch('library.native_stages.OperationalState') as cursor:
