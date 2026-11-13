@@ -38,3 +38,37 @@ class IntakeTests(unittest.TestCase):
                              {1: 'rejected', 2: 'rejected', 3: 'pending'})
 
 
+    def test_validated_origin_survives_missing_or_reused_package(self):
+        self.check_missing_package('validated', 'validated')
+
+    def check_missing_package(self, availability, expected):
+        from test_library_publish import setup_library
+        with tempfile.TemporaryDirectory() as folder:
+            store, reception, _, key = setup_library(Path(folder), self)
+            state = store.working_set('admit', {'assets': [key]})
+            oid = state['assets'][key]['origins'][0]
+            state['origins'][oid]['availability'] = availability
+            store.save(state, expected=state['revision'])
+            for queue in ([], [{'pid': 1, 'name': 'reused'}]):
+                result = receive(store, reception, {'items': {SOURCE: {}}}, {'submissions': {
+                    SOURCE: {'status': 'queued', 'package_id': 1, 'name': 'tracked'}}}, queue)
+                self.assertEqual(result['origins'][oid]['availability'], expected)
+
+    def test_unvalidated_origin_becomes_package_missing(self):
+        self.check_missing_package('pending', 'package_missing')
+
+    def test_copies_waits_for_validated_origin_with_matching_hash(self):
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        from library.stage_runtime import StageRuntime
+        from types import SimpleNamespace
+        from library.admission import projection
+        from test_library_publish import setup_library
+        with tempfile.TemporaryDirectory() as folder, patch('library.stage_runtime.require_nas'):
+            root = Path(folder); store, reception, _, key = setup_library(root, self)
+            runtime = object.__new__(StageRuntime); runtime.catalog = store; runtime.client = None
+            for availability, checksum, expected in [('package_missing', key, 'intake_pending'), ('validated', '0'*64, 'intake_pending'), ('validated', key, '')]:
+                state = store.working_set('admit', {'assets': [key]})
+                state['origins'][state['assets'][key]['origins'][0]].update(availability=availability, sha256=checksum)
+                store.save(state, expected=state['revision'])
+                self.assertEqual(runtime.ready(SimpleNamespace(stage='copies', entity=key, input_revision=projection(state, key)['signature']), datetime.now(timezone.utc)), expected)

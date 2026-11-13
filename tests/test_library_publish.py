@@ -12,6 +12,10 @@ from test_library_readers import image_bytes
 
 
 def setup_library(root,test):
+    from unittest.mock import patch
+    (root / 'work').mkdir(exist_ok=True)
+    decoder = patch('library.decode.WORK_ROOT', str(root / 'work'))  # the runner has no /data/booksys/work
+    decoder.start(); test.addCleanup(decoder.stop)
     reception = root / 'reception'
     (reception / 'package').mkdir(parents=True)
     path = reception / 'package/album.cbz'
