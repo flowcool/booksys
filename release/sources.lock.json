@@ -5426,8 +5426,8 @@
         {
           "id": "dpkg:gtk-update-icon-cache",
           "source": "gtk4",
-          "source_version": "4.22.4+ds-0ubuntu0.1",
-          "version": "4.22.4+ds-0ubuntu0.1"
+          "source_version": "4.22.4+ds-0ubuntu0.2",
+          "version": "4.22.4+ds-0ubuntu0.2"
         },
         {
           "id": "dpkg:gzip",
@@ -7729,7 +7729,7 @@
           "id": "dpkg:gtk-update-icon-cache",
           "license": "Apache-2.0 AND Apache-2.0 with LLVM exception AND BSD-3-clause-Google AND CC0-1.0 AND Expat AND GPL-3+ AND LGPL-2+ AND LGPL-2+ and LGPL-2.1+ and sun-permissive and lcs-telegraphics-permissive and X11R5-permissive and Expat and BSD-3-clause-Google and Apache-2.0 and CC0-1.0 and ZPL-2.1 AND LGPL-2.1+ AND Unicode-DFS-2016 AND X11R5-permissive AND ZPL-2.1 AND lcs-telegraphics-permissive AND sun-permissive",
           "sources": [
-            "ubuntu_gtk4_4.22.4_ds-0ubuntu0.1"
+            "ubuntu_gtk4_4.22.4_ds-0ubuntu0.2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -10667,11 +10667,11 @@
       "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/grep/grep_3.12-1.dsc",
       "sha256": "ce35486482abc0591a00be0848c90a3f40ce14b62e501da637296d23bc4c29f4"
     },
-    "ubuntu_gtk4_4.22.4_ds-0ubuntu0.1": {
+    "ubuntu_gtk4_4.22.4_ds-0ubuntu0.2": {
       "package": "gtk4",
-      "version": "4.22.4+ds-0ubuntu0.1",
-      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gtk4/gtk4_4.22.4+ds-0ubuntu0.1.dsc",
-      "sha256": "3b1ebc831e5890a398086968e9be2256b4cae51a02dbadb985fd927e5a6b50af"
+      "version": "4.22.4+ds-0ubuntu0.2",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gtk4/gtk4_4.22.4+ds-0ubuntu0.2.dsc",
+      "sha256": "9ae5960dc91d51c6b9d3e2ffe497d92dad839c7535b0fbf8c6d8d22b66830f52"
     },
     "ubuntu_gzip_1.14-1_exp2ubuntu1.1": {
       "package": "gzip",
