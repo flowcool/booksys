@@ -1,7 +1,6 @@
 """Restricted HTTP child. It receives sockets, trusted code and no state mount."""
 from __future__ import annotations
 
-import argparse
 from http.server import ThreadingHTTPServer
 import socket
 import threading
@@ -9,7 +8,6 @@ from typing import Any
 from pathlib import Path
 
 from library.http import handler
-from library.ipc import Channel, Remote
 
 
 class BoundedServer(ThreadingHTTPServer):
@@ -48,21 +46,3 @@ class BoundedServer(ThreadingHTTPServer):
             super().process_request_thread(request, client_address)
         finally:
             self.slots.release()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--listen-fd', type=int, required=True)
-    parser.add_argument('--ipc-fd', type=int, required=True)
-    args = parser.parse_args()
-    remote = Remote(Channel(socket.socket(fileno=args.ipc_fd)), raw_compatibility=True)
-    listener = socket.socket(fileno=args.listen_fd)
-    try:
-        with BoundedServer(listener, remote) as server:
-            server.serve_forever(poll_interval=.1)
-    finally:
-        remote.close()
-
-
-if __name__ == '__main__':
-    main()

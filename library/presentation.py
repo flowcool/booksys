@@ -56,20 +56,15 @@ def description_text(value: Any) -> str:
 def operator_reason(value: Any) -> str:
     reason = bounded(value)
     messages = {
-        'Intake budget deferred': 'En attente du prochain cycle : les fichiers terminés sont vérifiés avant les travaux lourds.',
         'Transfer is not confirmed finished': 'Téléchargement non terminé : le fichier sera examiné après sa fin.',
         'Skipped mirror link': 'Miroir ignoré par pyLoad. Ce lien ne fournit aucun fichier validé.',
         'Offline mirror link': 'Miroir hors ligne. Ce lien ne fournit aucun fichier validé.',
         'Failed mirror link': 'Miroir en échec. Consulter pyLoad.',
         'Downloader reports an error; inspect pyLoad': 'Le téléchargement signale une erreur. Consulter pyLoad.',
         'Printed ISBN is missing, invalid or contradictory in the bounded window': 'ISBN absent, invalide ou contradictoire dans les pages examinées.',
-        'Printed ISBN requires one exact BnF edition': 'Aucune notice BnF unique ne confirme cet ISBN.',
-        'Conflicting or missing edition evidence': 'Les preuves de cette édition sont absentes ou contradictoires.',
         'Non-ISBN identity requires two independent upstream sources': 'Sans ISBN, deux sources indépendantes doivent confirmer cette édition.',
-        'Printed edition evidence is incomplete': 'Les mentions imprimées ne suffisent pas à confirmer cette édition.',
         'Multipart representation': 'Fichier en plusieurs parties : assemblage non pris en charge.',
         'Multiple image groups: possible multi-work archive': 'Plusieurs groupes d’images : cette archive peut contenir plusieurs ouvrages.',
-        'Validated edition published': 'Édition confirmée et publiée.',
         'Unsupported or ambiguous suffix': 'Extension de fichier non prise en charge ou ambiguë.',
         'LibraryError: Nested container or unauthorized archive content': 'Archive imbriquée ou contenu non autorisé.',
         'LibraryError: Active PDF content or attachment': 'PDF avec contenu actif ou pièce jointe : traitement refusé.',

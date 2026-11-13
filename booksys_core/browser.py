@@ -1,5 +1,6 @@
 """Local Byparr transport and trusted same-origin cover transport."""
 from __future__ import annotations
+from http.cookies import CookieError, SimpleCookie
 import json
 from pathlib import Path
 import re
@@ -43,7 +44,7 @@ class Byparr:
             except (OSError, ValueError, TypeError, AttributeError):
                 raise BrowserOutcome(Outcome('cleanup_failed', 'local')) from None
         before = health()
-        html = self.fetch_html('cleanup-recovery', DEFAULT_CATEGORY, str(uuid.uuid4()))
+        html = self._fetch_byparr('cleanup-recovery', DEFAULT_CATEGORY, str(uuid.uuid4()))
         try:
             items, _ = catalogue(html, DEFAULT_CATEGORY)
             if not items:
@@ -54,9 +55,39 @@ class Byparr:
         return 'byparr-session:' + digest({'before': before, 'after': after, 'items': len(items)})
 
     def fetch_html(self, source_ref: str, url: str, request_id: str) -> str:
+        if self.session.get('cookies') and self.session.get('userAgent'):
+            time.sleep(max(0, self.delay - (time.monotonic() - self.last_request)))
+            try:
+                headers = {'User-Agent': self.session['userAgent'],
+                           'Cookie': '; '.join(c['name'] + '=' + c['value'] for c in self.session['cookies'])}
+                with urlopen(Request(url, headers=headers), timeout=30) as response:
+                    raw = response.read(16 * 1024**2 + 1)
+                    final_url = site_url(response.geturl(), url)
+                    if response.status != 200 or len(raw) > 16 * 1024**2:
+                        raise CollectionError('Invalid HTTP response')
+                    html: str = raw.decode(response.headers.get_content_charset() or 'utf-8')
+                    document(html)
+                    if any(marker in html.lower() for marker in ('just a moment', 'cf-challenge', 'challenge-platform')):
+                        raise CollectionError('Cloudflare challenge')
+                    cookies = {c['name']: c for c in self.session['cookies']}
+                    for header in response.headers.get_all('Set-Cookie', []):
+                        parsed = SimpleCookie()
+                        parsed.load(header)
+                        for name, morsel in parsed.items():
+                            cookies[name] = {**cookies.get(name, {'name': name,
+                                             'domain': urlsplit(final_url).hostname, 'path': '/'}),
+                                             'value': morsel.value}
+                    self.session['cookies'] = list(cookies.values())
+                return html
+            except (OSError, ValueError, LookupError, CollectionError, CookieError) as exc:
+                if isinstance(exc, HTTPError):
+                    exc.close()
+            finally:
+                self.last_request = time.monotonic()
+        return self._fetch_byparr(source_ref, url, request_id)
+
+    def _fetch_byparr(self, source_ref: str, url: str, request_id: str) -> str:
         time.sleep(max(0, self.delay - (time.monotonic() - self.last_request)))
-        from activity import report
-        report('byparr', 'working', 'Bookys request; Cloudflare solving unknown', item=url)
         payload = {"cmd": "request.get", "url": url,
                    "maxTimeout": self.timeout * 1000, "blockMedia": False}
         request = Request(self.endpoint, json.dumps(payload).encode(),
@@ -103,12 +134,10 @@ class Byparr:
             except CollectionError:
                 raise BrowserOutcome(Outcome('invalid_content', 'remote')) from None
             self.session = {k: solution.get(k) for k in ["url", "cookies", "userAgent"]}
-            report('byparr', 'sleeping', 'Request complete', item=url, progressed=True)
             return html
         except BrowserOutcome:
             raise
         except (OSError, ValueError, CollectionError) as exc:
-            report('byparr', 'blocked', 'Browser failure', reason='Browser request or Cloudflare validation failed')
             raise BrowserOutcome(Outcome('browser_timeout' if isinstance(exc, TimeoutError)
                                          else 'unknown_browser_failure', 'unknown')) from None
         finally:

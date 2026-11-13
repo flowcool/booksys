@@ -123,7 +123,7 @@ class SessionApiTests(unittest.TestCase):
             finally:
                 # A slow but successful teardown must not poison the service.
                 try:
-                    if not closed:
+                    if len(closed) == 1:
                         await asyncio.sleep(5.1)
                 finally:
                     await generator.aclose()
@@ -131,7 +131,7 @@ class SessionApiTests(unittest.TestCase):
 
         async def navigate(browser, request, timer):
             if request.url.endswith('/slow'):
-                await asyncio.sleep(3)
+                await asyncio.sleep(11)
             await browser.page.route(request.url, lambda route: route.fulfill(
                 status=200, content_type='text/html', body='<h1>Local fixture</h1>'))
             return await browser.page.goto(request.url)
@@ -143,16 +143,22 @@ class SessionApiTests(unittest.TestCase):
                   return_value=invisible_core.SessionGeo('UTC', None)),
               patch('ops.byparr.session_api._navigate_and_solve', side_effect=navigate)):
             with TestClient(create_app(browser, memory_pressure=lambda: False)) as client:
-                response = client.post('/v1', json={'url': ORIGIN + '/ok'})
-                self.assertEqual(response.status_code, 200, response.json())
-                failed = client.post('/v1', json={'url': ORIGIN + '/slow', 'maxTimeout': 1000})
-                self.assertEqual((failed.status_code, client.get('/health').status_code), (408, 200))
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok'}).status_code, 200)
                 self.assertEqual(len(closed), 1)
                 self.assertTrue(browser_pids[0])
                 self.assertFalse(browser_pids[0] & firefox_pids())
+                failed = client.post('/v1', json={'url': ORIGIN + '/slow', 'maxTimeout': 10000})
+                self.assertEqual((failed.status_code, client.get('/health').status_code), (408, 200))
+                self.assertEqual(len(closed), 2)
+                self.assertEqual(len(browser_pids), 2)
+                self.assertTrue(browser_pids[1])
+                self.assertFalse(browser_pids[1] & firefox_pids())
                 self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok'}).status_code, 200)
-            self.assertEqual(len(closed), 2)
-            self.assertFalse(browser_pids[1] & firefox_pids())
+                self.assertEqual(len(closed), 3)
+            self.assertEqual(len(browser_pids), 3)
+            for pids in browser_pids:
+                self.assertTrue(pids)
+                self.assertFalse(pids & firefox_pids())
 
     def test_final_navigation_status_wins_over_initial_status_and_html_heading(self):
         class RatePage(Page):
@@ -176,16 +182,29 @@ class SessionApiTests(unittest.TestCase):
                 self.assertEqual(response.headers['X-Booksys-Request-ID'], 'fixture-1')
 
     def test_successive_requests_reuse_the_browser_page(self):
+        pages, closed = [], []
+
         async def browser():
-            yield SimpleNamespace(page=Page(), context=Context())
+            page = Page()
+            pages.append(page)
+            try:
+                yield SimpleNamespace(page=page, context=Context())
+            finally:
+                closed.append(page)
 
         with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
             with TestClient(create_app(browser)) as client:
                 first = client.post("/v1", json={"url": ORIGIN + "/first"})
+                self.assertEqual(closed, pages)
                 second = client.post("/v1", json={"url": ORIGIN + "/second"})
+                self.assertEqual(closed, pages)
         self.assertEqual(first.status_code, 200)
         self.assertTrue(first.headers['X-Booksys-Request-ID'])
-        self.assertEqual(second.json()["solution"]["response"], "<h1>Visit 2</h1>")
+        self.assertEqual(first.json()["solution"]["response"], "<h1>Visit 1</h1>")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["solution"]["response"], "<h1>Visit 1</h1>")
+        self.assertEqual(len(pages), 2)
+        self.assertIsNot(pages[0], pages[1])
 
     def test_timeout_is_not_retried_and_next_request_gets_a_clean_session(self):
         async def browser():
@@ -222,10 +241,12 @@ class SessionApiTests(unittest.TestCase):
                 def visit():
                     return client.post("/v1", json={"url": ORIGIN + "/ok"}).json()["solution"]["response"]
                 self.assertEqual(visit(), "<h1>Visit 1</h1>")
-                self.assertEqual(visit(), "<h1>Visit 2</h1>")
                 self.assertEqual(visit(), "<h1>Visit 1</h1>")
+                self.assertEqual(visit(), "<h1>Visit 1</h1>")
+                self.assertEqual(client.get("/health").json()["generation"], 3)
                 now[0] = 1801.0
                 self.assertEqual(visit(), "<h1>Visit 1</h1>")
+                self.assertEqual(client.get("/health").json()["generation"], 4)
 
     def test_busy_page_rejects_a_second_caller_without_navigating(self):
         entered = threading.Event()
@@ -293,22 +314,35 @@ class SessionApiTests(unittest.TestCase):
 
     def test_expired_age_and_repeated_media_routes_do_not_accumulate(self):
         now = [0.0]
+        pages, closed = [], []
 
         class RoutedPage(Page):
             async def content(self):
                 return f"<h1>Visit {self.visits}; routes {len(self.routes)}</h1>"
 
         async def browser():
-            yield SimpleNamespace(page=RoutedPage(), context=Context())
+            page = RoutedPage()
+            pages.append(page)
+            try:
+                yield SimpleNamespace(page=page, context=Context())
+            finally:
+                closed.append(page)
 
         with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
             with TestClient(create_app(browser, clock=lambda: now[0])) as client:
                 for index in range(1, 5):
                     response = client.post("/v1", json={"url": ORIGIN + "/ok", "blockMedia": True})
-                    self.assertEqual(response.json()["solution"]["response"], f"<h1>Visit {index}; routes 1</h1>")
+                    self.assertEqual(response.json()["solution"]["response"], "<h1>Visit 1; routes 1</h1>")
+                    self.assertEqual(len(pages), index)
+                    self.assertEqual(closed, pages)
+                    self.assertTrue(all(not callbacks for callbacks in pages[-1].listeners.values()))
                     now[0] += 1000
                 response = client.post("/v1", json={"url": ORIGIN + "/ok"})
                 self.assertEqual(response.json()["solution"]["response"], "<h1>Visit 1; routes 1</h1>")
+                self.assertEqual(len(pages), 5)
+                self.assertEqual(closed, pages)
+                self.assertEqual(len({id(page) for page in pages}), 5)
+                self.assertTrue(all(not callbacks for page in pages for callbacks in page.listeners.values()))
 
     def test_memory_pressure_releases_browser_before_the_next_request(self):
         async def browser():

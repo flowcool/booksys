@@ -24,9 +24,7 @@ def main() -> int:
     value: dict[str, Any] = {'schema': 1, 'created_at': now(), 'platform': platform.platform(), 'results': {
         'french_bd_discovery': providers.discover('Asterix le Gaulois'),
         'manga_discovery': providers.discover('One Piece'),
-        'manga_edition': providers.edition('9781569319017'),
-        'french_bd_genres_public': providers.source('bdtheque', '27089/le-gang-de-la-clef-a-molette'),
-        'manga_genres_public': providers.source('mangadex', 'a1c7c817-4e59-43b7-9365-09675a149a6f')}}
+        'manga_edition': providers.edition('9781569319017')}}
     attempts = providers.resolve_discovery(value['results']['manga_discovery'])
     candidates = [item['candidate'] for item in attempts if item['status'] == 'ok']
     value['results']['manga_discovery_editions'] = {'status': 'ok' if candidates else 'unavailable',

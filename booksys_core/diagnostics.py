@@ -30,7 +30,7 @@ REASONS = frozenset(('none', 'unknown', 'browser_busy', 'remote_rate_limited', '
     'blocked_capacity', 'external_capacity_unknown', 'output_capacity', 'older_waiter',
     'queue_snapshot_unavailable', 'native_package_unavailable', 'routing_prerequisites',
     'retirement_prerequisites', 'native_prerequisites_unavailable', 'reconciliation_required'))
-REF_KINDS = ('source', 'package', 'file', 'origin', 'asset', 'work', 'edition', 'decision', 'operation', 'task')
+REF_KINDS = ('source', 'package', 'file', 'origin', 'asset', 'decision', 'operation', 'task')
 ERRORS = frozenset(('TimeoutError', 'OSError', 'ValueError', 'TypeError', 'KeyError', 'LibraryError',
                    'CollectionError', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
 FIELDS = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'cycle_id',
@@ -90,7 +90,7 @@ def validate(value: Any) -> dict[str, Any]:
         if type(value[key]) is not str or value[key] not in options:
             raise ValueError('Invalid controlled event field')
     for key, task_options in (('queue', ('collection', 'intake', 'ocr', 'metadata', 'copies', 'routing', 'retirement', 'discovery', 'serial')),
-                         ('outcome', ('done', 'retry', 'defer', 'uncertain', 'blocked_local', 'cleanup_required', 'stopped', 'absent'))):
+                         ('outcome', ('done', 'retry', 'defer', 'uncertain', 'stopped', 'absent'))):
         if key in value and value[key] not in task_options:
             raise ValueError('Invalid controlled task field')
     refs = value['refs']

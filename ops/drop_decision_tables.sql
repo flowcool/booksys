@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS decision_claims;
+DROP TABLE IF EXISTS decision_editions;
+DROP TABLE IF EXISTS decision_pieces;
+DROP TABLE IF EXISTS decision_reservations;
+DROP TABLE IF EXISTS preview_bindings;
+DROP TABLE IF EXISTS resolution_previews;
+DROP TABLE IF EXISTS manual_proofs;
+DROP TABLE IF EXISTS case_bindings;
+DROP TABLE IF EXISTS cases;
+DROP TABLE IF EXISTS edition_claims;
+DROP TABLE IF EXISTS ledger_records;

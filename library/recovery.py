@@ -1,25 +1,21 @@
 """Frozen common recovery points. Canonical journals remain independent evidence."""
 from __future__ import annotations
 
-from contextlib import ExitStack, contextmanager
 import hashlib
 import os
 from pathlib import Path
-import shutil
-from typing import Any, Iterator
+from typing import Any
 
 from library.catalog import Catalog
-from library.primitives import LibraryError, atomic_yaml, lock, sync_dir
+from library.primitives import LibraryError
 from library.codec import decode
 from library.store import Store
 
-COMPONENTS = ('library-decisions', 'library-ledger-head.yaml', 'library-operations',
-              'library-admission-operations', 'library-provisional-operations', 'library-resolution',
+COMPONENTS = ('library-admission-operations',
               'library-retirement.yaml', 'library-activation.yaml', 'task-policy.yaml',
-              'stage-resources.yaml', 'stage-children', 'stage-activation.yaml',
-              'reader-dependency-children.yaml', 'provider-admission.yaml', 'native-admission.yaml', 'native-effects.yaml', 'dependency-readiness.yaml')
-COLLECTOR_FILES = ('state.yaml', 'monitor.yaml', 'mirror-routing.yaml', 'package-retirement.yaml', 'backfill.yaml', 'fiches.yaml')
-LOCKS = ('library-cycle.lock', 'decisions.lock', 'library-copy.lock', 'library-evidence.lock', 'library.lock')
+              'stage-resources.yaml', 'stage-activation.yaml',
+              'provider-admission.yaml', 'native-admission.yaml', 'native-effects.yaml', 'dependency-readiness.yaml')
+LOCKS = ('library-cycle.lock', 'library-copy.lock', 'library-evidence.lock', 'library.lock')
 
 
 def external_media(store: Store) -> dict[str, Any]:
@@ -34,12 +30,6 @@ def external_media(store: Store) -> dict[str, Any]:
             names = [row[0] for row in db.execute('SELECT digest FROM attachments ORDER BY digest')]
         result['attachments'] = {'root': str(store.payloads), 'files': {
             name: hashlib.sha256((store.payloads/name).read_bytes()).hexdigest() for name in names}}
-    if os.environ.get('BOOKSYS_PIECES_ROOT'):
-        from library.media_paths import pieces_root
-        root = pieces_root(store.directory)
-        result['pieces'] = {'root': str(root), 'files': {
-            name+'.yaml': hashlib.sha256((root/(name+'.yaml')).read_bytes()).hexdigest()
-            for name in sorted(store.retained_pieces())}}
     return result
 
 
@@ -78,24 +68,6 @@ def inventory(root: Path, *, components: tuple[str, ...] = COMPONENTS) -> dict[s
     return result
 
 
-def audit_ledger(store: Store, files: Path) -> tuple[int, list[str]]:
-    """The database index is derived. Retained immutable files prove its prefix."""
-    if (files / 'library-decisions').exists():
-        records = Catalog(files,store=store).ledger()
-    elif (files / 'library-ledger-head.yaml').exists():
-        raise LibraryError('Decision head has no immutable evidence')
-    else:
-        records = []
-    with store._database.connection() as db:
-        revision, applied = store.check(db)
-        indexed = db.execute('SELECT sequence,payload FROM ledger_records ORDER BY sequence').fetchall()
-    if (len(applied) > len(records) or applied != [record['id'] for record in records[:len(applied)]]
-            or len(indexed) < len(applied) or len(indexed) > len(records)):
-        raise LibraryError('Recovery ledger is not a retained immutable prefix')
-    for (sequence, payload), record in zip(indexed, records):
-        if sequence != record['sequence'] or decode(payload) != record:
-            raise LibraryError('Recovery decision index differs from immutable evidence')
-    return revision, applied
 
 
 
@@ -103,8 +75,6 @@ def _retired(*args: Any, **kwargs: Any) -> Any:
     raise LibraryError('SQLite recovery points are historical evidence; recover current PostgreSQL state forward')
 
 
-backup_activity = _retired
-activity_binding = _retired
 freeze = _retired
 checkpoint = _retired
 verify_checkpoint = _retired

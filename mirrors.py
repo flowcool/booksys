@@ -72,6 +72,8 @@ def logical_snapshot(client: Any, routing: Path | None = None) -> list[dict[str,
     value = NativeHistory(routing.parent).routing() if routing else {'packages':{}}
     for package in result:
         operation = value.get('packages', {}).get(str(package['pid']), {})
+        if operation.get('name') not in (None, package.get('name')):
+            operation = {}  # an entry of an earlier package that had this reused pyLoad id
         folders = operation.get('input_folders', {})
         for link in package['links']:
             if str(link.get('fid')) in folders:

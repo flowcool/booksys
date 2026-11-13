@@ -9,7 +9,6 @@ import unittest
 from booksys_core.parsing import catalogue, source_plan
 import psycopg
 from psycopg import pq
-import supervisor
 
 assert sys.version_info[:2] == (3, 14)
 assert psycopg.__version__ == "3.3.8"
@@ -18,8 +17,7 @@ assert os.getuid() == 1000
 assert Path("/usr/local/bin/docker").is_file()
 for forbidden in ("/var/run/docker.sock", "/secrets", "/data/booksys", "/root/.ssh"):
     assert not Path(forbidden).exists(), forbidden
-roles = ("library.cli", "library.stage_worker", "library.compose_web",
-         "library.reader_service", "ops.library_service")
+roles = ("library.cli", "library.stage_worker", "ops.library_service")
 for role in roles:
     result = subprocess.run([sys.executable, "-m", role, "--help"],
         capture_output=True, text=True, timeout=20, check=True)

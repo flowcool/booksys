@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from booksys_core.collection import CRAWL_PAGES
 from booksys_core.values import seconds
 from booksys_core.errors import CollectionError
 from library.primitives import LibraryError, digest
@@ -14,11 +15,6 @@ def project(queue: str, value: dict[str, Any], *, auxiliary: dict[str, Any] | No
     items: dict[str, Any] = {}
     bindings: dict[str,Any]={}
     auxiliary = auxiliary or {}
-    if queue == 'collection' and value.get('version') == 1 and 'pages_requested' in value:
-        items = {} if value.get('status') == 'complete' else {'backfill': {'input_revision': digest(value), 'method': METHODS['backfill']}}
-        bindings={'backfill':{'kind':'backfill','identity':'current','original':digest({k:v for k,v in value.items() if k not in ('pages','items','next_page','submitted','status','completed_at')})}}
-        return {'items': items, '_native': {'bindings':bindings,'queue': queue, 'inputs': {key: row['input_revision'] for key, row in items.items()},
-        'guards': {key: digest({'due': row.get('due_at'), 'blocked': row.get('blocked', '')}) for key, row in items.items()}}}
     if value.get('version') != 1 or not isinstance(value.get('submissions'), dict) or not isinstance(value.get('categories'), dict):
         raise LibraryError('Invalid native monitor')
     deadline = value.get('schedule', {}).get('not_before')
@@ -31,10 +27,11 @@ def project(queue: str, value: dict[str, Any], *, auxiliary: dict[str, Any] | No
     if queue == 'collection':
         for source, checkpoint in value['categories'].items():
             key = 'category-' + digest(source)
+            # A pass is 5 fresh pages plus 10 deep pages: 5 minutes apart while the deep crawl has pages left, once a day after.
+            wait = 86400 if checkpoint.get('deep_page', 0) > CRAWL_PAGES else 300
             category_due = max(deadline_at,
-                               datetime.fromisoformat(checkpoint['last_success']).timestamp() + 300 if checkpoint.get('last_success') else 0)
-            revision = digest({'category': checkpoint, 'collection': value.get('collection_checkpoint'),
-                               'source': value.get('source_checkpoint')})
+                               datetime.fromisoformat(checkpoint['last_cycle']).timestamp() + wait if checkpoint.get('last_cycle') else 0)
+            revision = digest(checkpoint)
             bindings[key]={'kind':'category','identity':source,'original':digest(checkpoint)}
             items[key] = {'input_revision': revision, 'method': METHODS['collection'], 'due_at': instant(datetime.fromtimestamp(category_due, timezone.utc)), 'blocked': blocked}
     for source, entry in value['submissions'].items():

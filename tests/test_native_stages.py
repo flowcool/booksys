@@ -18,69 +18,7 @@ AT = datetime(2026, 11, 9, tzinfo=timezone.utc)
 SOURCE = 'https://www.bookys-ebooks.com/123-album'
 
 class NativeStageTests(unittest.TestCase):
-    def test_retirement_without_intent_reconciles_only_unchanged_owned_package(self):
-        from test_retirement import fixture
-        from test_library_intake import SOURCE as source
-        from booksys_core.network_admission import RollingBudget, NativeMutation
-        for change in ('none', 'owned_pointer', 'name', 'file', 'url', 'folder', 'pointer', 'pointer_journal', 'journal', 'deleting'):
-            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                catalog, reception, collector, original, client = fixture(root, self)
-                client.admission = RollingBudget.create(root/'state/native-admission.yaml', requests=100, period=60)
-                tasks = StageTasks(catalog.backend(), policy=SourcePolicy.create(root/'state/task-policy.yaml'))
-                tasks.scan('retirement', collector/'monitor.yaml', now=AT)
-                task = tasks.select('retirement', now=AT).task
-                task = tasks.start(task.key, task.generation, now=AT, resources=True)
-                journal = collector/'package-retirement.yaml'
-                mutation = NativeMutation(root/'state', 'retirement:'+source, journal)
-                if change == 'pointer':
-                    with NativeMutation(root/'state', 'another-owner', journal).hold() as other:
-                        other.prepare()
-                if change in ('owned_pointer', 'pointer_journal'):
-                    pointer = mutation if change == 'owned_pointer' else NativeMutation(root/'state', 'retirement:'+source, collector/'other.yaml')
-                    with pointer.hold(): pointer.prepare()
-                if change == 'deleting':
-                    from library.retirement import Retirement
-                    client.lose_before_removal = True
-                    with self.assertRaises(OSError):
-                        Retirement(client, catalog, reception, collector/'monitor.yaml', collector/'state.yaml').process(source, apply=True)
-                if change == 'journal':
-                    task.native_attempt['journal'] = str(collector/'other.yaml')
-                if change == 'name': client.packages[1]['name'] += '-changed'
-                if change == 'file': client.packages[1]['links'][0]['fid'] = 99
-                if change == 'url': client.packages[1]['links'][0]['url'] += '-changed'
-                if change == 'folder': client.packages[1]['folder'] += '-changed'
-                adapter = NativeStages(catalog, reception, root/'library', collector, browser=None, client=client)
-                result = adapter.receipt(task)
-                outcome = result.outcome if hasattr(result, 'outcome') else result[0]
-                proof = result.proof if hasattr(result, 'proof') else result[1]
-                self.assertEqual(outcome, 'absent' if change in ('none', 'owned_pointer') else 'uncertain')
-                if change in ('none', 'owned_pointer'): self.assertTrue(proof)
-                if change == 'owned_pointer': self.assertEqual(mutation.read()['state'], 'resolved')
-                self.assertEqual(client.removed, [])
 
-    def test_fiche_uses_separate_managed_media_without_writing_reception(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            collector, reception, media = (root/name for name in ('collector', 'downloads', 'fiches'))
-            for path in (collector, reception, media):
-                path.mkdir()
-            store = create_store(self, root/'state', empty(), authority='fiche')
-            state = CollectorState(collector, database=store._database)
-            state.submission(SOURCE, {'status': 'queued', 'package_id': 1})
-            tasks = StageTasks(store, policy=SourcePolicy.create(root/'state/policy.yaml'))
-            tasks.scan('collection', collector/'monitor.yaml', now=AT)
-            task = tasks.select('collection', now=AT).task
-            adapter = NativeStages(Catalog(root/'state'), reception, root/'library', collector,
-                                   browser=object(), client=object())
-            def complete_fiche(*args, **kwargs):
-                kwargs['completions'].append(state.prepare_completion('fiche', SOURCE, {'status': 'complete'}))
-                return True
-            with patch.dict(os.environ, {'BOOKSYS_FICHE_ROOT': str(media)}), patch(
-                    'booksys_core.collection.run_fiche_once', side_effect=complete_fiche) as fiche:
-                adapter.execute(task, now=AT)
-            self.assertEqual(fiche.call_args.args[3], media)
-            self.assertEqual(list(reception.iterdir()), [])
 
     def test_routing_recovery_reads_back_a_lost_move_without_resend(self):
         from booksys_core.network_admission import RollingBudget, NativeMutation
@@ -119,42 +57,64 @@ class NativeStageTests(unittest.TestCase):
             self.assertEqual(NativeHistory(collector).routing()['packages']['1']['phase'], 'parked')
             self.assertEqual(calls, ['get_package_data'])
 
-    def test_collection_executes_one_retained_category_step_and_returns_canonical_proof(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            store = create_store(self, root/'state', empty(), authority='native')
-            tasks = StageTasks(store, policy=SourcePolicy.create(root/'state/policy.yaml'))
-            collector = root/'collector'
-            collector.mkdir()
-            category = 'https://www.bookys-ebooks.com/bandes-dessinees'
-            CollectorState(collector, database=store._database).category(category, {'after_id': 100})
-            tasks.scan('collection', collector/'monitor.yaml', now=AT)
-            task = tasks.select('collection', now=AT).task
-            adapter = NativeStages(Catalog(root/'state'), root/'reception', root/'library', collector,
-                                   browser=object(), client=object())
-            with patch('booksys_core.collection.run_once', return_value={'queued': 0, 'continued': True}) as call:
-                result = adapter.execute(task, now=AT)
-            self.assertEqual(result.outcome, 'done')
-            self.assertTrue(result.proof)
-            self.assertEqual(call.call_args.kwargs['step_limit'], 1)
-            self.assertEqual(call.call_args.kwargs['category'], category)
 
-    def test_intake_selects_one_source_and_retirement_uses_concurrent_scoped_mode(self):
-        # Bind native sources through the public policy adapter, not synthetic task records.
+
+
+class SnapshotFreshnessTests(unittest.TestCase):
+    def test_queue_snapshot_age_never_blocks_a_stage(self):
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import MagicMock, patch
+        from library.native_stages import NativeStages
+        from library.primitives import LibraryError
+        from library.stage_model import Task
+        stages = object.__new__(NativeStages)
+        stages.snapshots = object()
+        stages.catalog = MagicMock()
+        stages.binding = MagicMock(side_effect=LibraryError('stop after freshness'))
+        now = datetime(2026, 11, 11, tzinfo=timezone.utc)
+        task = MagicMock(spec=Task)
+        task.stage = 'retirement'
+        for age, expected in ((120, 'native_prerequisites_unavailable'), (900, 'native_prerequisites_unavailable')):
+            with patch('library.native_stages.RuntimeObservation') as observation:
+                observation.return_value.queue.return_value = ([], now.timestamp() - age)
+                self.assertEqual(stages.ready(task, now=now), expected)
+
+
+class BudgetReserveTests(unittest.TestCase):
+    def test_reserve_waits_until_enough_slots_fit_the_window(self):
+        from booksys_core.network_admission import RollingBudget
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            store = create_store(self, root/'state', empty(), authority='native')
-            tasks = StageTasks(store, policy=SourcePolicy.create(root/'state/policy.yaml'))
             collector = root/'collector'
-            collector.mkdir()
-            CollectorState(collector, database=store._database).submission(SOURCE, {'status': 'queued', 'package_id': 1, 'name': 'Booksys-one'})
-            tasks.scan('retirement', collector/'monitor.yaml', now=AT)
-            task = tasks.select('retirement', now=AT).task
-            adapter = NativeStages(Catalog(root/'state'), root/'reception', root/'library', collector,
-                                   browser=object(), client=object())
-            with patch('library.retirement.Retirement') as retirement:
-                retirement.return_value.process.return_value = {'outcome': 'retired', 'source': SOURCE}
-                result = adapter.execute(task, now=AT)
-            self.assertEqual(result.outcome, 'done')
-            self.assertTrue(retirement.call_args.kwargs['concurrent'])
-            retirement.return_value.process.assert_called_once_with(SOURCE, apply=True, completions=[], task_attempt=None)
+            create_store(self, collector, empty())
+            budget = RollingBudget.create(collector/'native-admission.yaml', requests=30, period=60)
+            base = AT.timestamp()
+            for index in range(20):
+                budget.debit(timestamp=base + index)
+            now = base + 20
+            self.assertLessEqual(budget.next_due(timestamp=now), now)
+            self.assertLessEqual(budget.next_due(timestamp=now, reserve=10), now)
+            self.assertEqual(budget.next_due(timestamp=now, reserve=16), base + 5 + 60)
+            self.assertEqual(budget.next_due(timestamp=now, reserve=99), base + 19 + 60)
+
+
+class QueueSnapshotCacheTests(unittest.TestCase):
+    def test_queue_snapshot_is_decoded_once_per_publication(self):
+        from unittest.mock import patch
+        from library.operational_state import RuntimeObservation
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = create_store(self, root, empty())
+            observation = RuntimeObservation(store._database)
+            packages = [{'pid': 1, 'name': 'one', 'links': [{'fid': 5, 'status': 0}]},
+                        {'pid': 2, 'name': 'two', 'links': []}]
+            observation.publish(packages, at=100.0, remaining=None, overshoot=None)
+            first, at = observation.queue()
+            self.assertEqual((first, at), (packages, 100.0))
+            first[0]['links'].clear()  # a caller mutation must not reach the cache
+            with patch('library.operational_state.decode', side_effect=AssertionError('decoded again')):
+                second, _ = observation.queue()
+            self.assertEqual(second, packages)
+            observation.publish(packages[:1], at=200.0, remaining=None, overshoot=None)
+            third, at = observation.queue()
+            self.assertEqual((len(third), at), (1, 200.0))

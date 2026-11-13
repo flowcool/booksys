@@ -15,11 +15,11 @@ Local Dockerfile builds remain available.
 After publication, inspect the release's digest list, SBOM, provenance and signature
 verification instructions. Pull each exact digest anonymously before adoption.
 Retain the old digest and state recovery files before a runtime change.
-The worker image provides the PostgreSQL controller, independent queues, web,
-tools and restricted launcher. The library image provides the per-file readers.
+The worker image runs the collector pipeline. The library image provides the
+library CLI and application modules. Dockerfile.stack builds the stack runtime.
 Read [the current runtime interfaces](runtime.md) before configuring
 `compose.stack.yaml`. PostgreSQL and the single retained pyLoad remain separate
-dependencies. Publishing these images does not establish reader retention or
+dependencies. Publishing these images does not establish
 runtime readiness for an installation.
 
 Image licenses differ from the Booksys MIT source license. Read the

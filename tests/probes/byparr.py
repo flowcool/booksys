@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -42,6 +43,12 @@ if sys.argv[1] == "readiness":
     print(json.dumps({"actual_entrypoint": "tini/session_api.py", "health": health,
                       "invalid_origin": 422, "browser_processes": 0, "processes": processes}))
 elif sys.argv[1] == "sessions":
+    # The harness overrides the image entrypoint with Python. Restore its tini
+    # subreaper before starting Firefox, so orphaned children are reaped as in
+    # the service instead of remaining zombies under the test interpreter.
+    if os.getpid() == 1:
+        os.execvp("tini", ["tini", "-s", "--", sys.executable, *sys.orig_argv[1:]])
+    assert Path("/proc/1/comm").read_text().strip() == "tini"
     # Firefox159 checks this legacy application directory before -profile.
     Path("/home/byparr/.mozilla/firefox").mkdir(parents=True, exist_ok=True)
     Path("/cache/mozilla/firefox").mkdir(parents=True, exist_ok=True)

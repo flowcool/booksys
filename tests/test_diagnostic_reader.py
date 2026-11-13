@@ -88,29 +88,7 @@ class RemoteBudgetTests(unittest.TestCase):
                 if page['state']=='complete':break
             self.assertEqual(page['state'],'complete')
 
-    def test_remote_unavailable_is_reported_as_a_source_gap(self):
-        from unittest.mock import patch
-        from library.compose_diagnostics import RemoteSource
-        from library.reader_inputs import ReaderUnavailable
-        with tempfile.TemporaryDirectory() as folder:
-            source=RemoteSource('pyload',Path(folder))
-            with patch('library.postgres.Database.configured'), patch('library.operational_state.ComposeDiagnostics.retain'), patch(
-                    'library.compose_diagnostics.request',side_effect=ReaderUnavailable('bounded refusal')):
-                page=DiagnosticReader([source],Path(folder)/'lock',clock=lambda:200).query(Filter(100,200))
-            self.assertEqual(page['state'],'partial')
-            self.assertEqual(page['gaps'],[{'source':'pyload','reason':'unavailable'}])
 
-    def test_expired_remote_budget_never_retains_or_sends_a_request(self):
-        import time
-        from unittest.mock import patch
-        from library.compose_diagnostics import RemoteSource
-        with patch('library.operational_state.ComposeDiagnostics.retain') as retain, patch(
-                'library.compose_diagnostics.request') as request:
-            with self.assertRaises(TimeoutError):
-                RemoteSource('pyload',Path('/unused')).scan(100,200,None,lines=1,byte_limit=100,
-                    deadline=time.monotonic()-1)
-        retain.assert_not_called()
-        request.assert_not_called()
 
     def test_repeated_timeout_does_not_starve_a_healthy_fixed_source(self):
         class Unavailable(MemorySource):
@@ -128,18 +106,3 @@ class RemoteBudgetTests(unittest.TestCase):
             # Global ordering keeps healthy-source events buffered until the
             # preceding source progresses. No retained position is discarded.
             self.assertEqual([v['event_id'] for v in state['pending']],[row['event_id']])
-
-    def test_ipc_deadline_preserves_source_position_for_continuation(self):
-        from unittest.mock import patch
-        from library.compose_diagnostics import RemoteSource
-        from library.reader_inputs import ReaderUnavailable
-        failure=ReaderUnavailable('Socket deadline')
-        failure.__cause__=TimeoutError('deadline')
-        with tempfile.TemporaryDirectory() as folder:
-            source=RemoteSource('pyload',Path(folder))
-            with patch('library.postgres.Database.configured'), patch('library.operational_state.ComposeDiagnostics.retain'), patch(
-                    'library.compose_diagnostics.request',side_effect=failure):
-                page=DiagnosticReader([source],Path(folder)/'lock',clock=lambda:200).query(Filter(100,200))
-            self.assertEqual(page['state'],'continued')
-            self.assertEqual(page['gaps'],[])
-            self.assertIsNotNone(page['cursor'])

@@ -12,7 +12,7 @@ from booksys_core.parsing import DEFAULT_CATEGORY
 from booksys_core.files import save as save
 from booksys_core.downloader import Pyload as Pyload
 from booksys_core.collection import (export_catalogue as export_catalogue, run_once as run_once,
-    run_backfill as run_backfill, run_fiche_once as run_fiche_once)
+    run_fiche_once as run_fiche_once)
 from booksys_core.scheduler import Deferred, seconds
 from booksys_core.diagnostics import emit, install_logging
 
@@ -37,42 +37,23 @@ def main() -> int:
     os.umask(0o077)
     credentials = json.loads(args.credentials.read_text())
     downloader = Pyload(args.pyload, credentials["api_key"])
-    from activity import bind, report
-    bind(args.directory / 'activity', 'collection', 'byparr')
     browser = Byparr(args.byparr)
     downloader.downloads, downloader.fetch_image = args.downloads, browser.cover
     while True:
-        report('collection', 'working', 'Collection cycle')
         cycle_ok = False
         retry_wait = args.interval
         try:
-            backfill = run_backfill(args.directory, browser, downloader,
-                                    max_items=None if args.once else 8)
-            if backfill is not None and backfill.get("pending"):
-                emit(service="collector", stage="collection", code="progress")
-                report('collection', 'sleeping', 'Between backfill batches', next_attempt=time.time() + 60)
-                time.sleep(60)
-                continue
-            if backfill is not None:
-                emit(service="collector", stage="collection", code="completed")
             result = run_once(args.directory, browser, downloader, args.category)
             emit(service="collector", stage="collection", code="completed")
-            report('collection', 'sleeping', 'Novelty interval', next_attempt=time.time() + args.interval, progressed=bool(result.get('queued')))
             cycle_ok = True
         except Deferred as exc:
             retry_wait = max(1, seconds(exc.record['not_before']) - time.time())
             if exc.record['review_block']:
                 retry_wait = args.interval
-            report('collection', 'blocked' if exc.record['review_block'] else 'waiting',
-                   'Collection deferred', reason=exc.record['wait_reason'],
-                   next_attempt=None if exc.record['review_block'] else time.time() + retry_wait)
             emit(service='collector', stage='collection', code='waiting', reason=exc.record['wait_reason'])
             if args.once:
                 return 1
         except Exception as exc:
-            report('collection', 'waiting' if 'Another pipeline' in str(exc) else 'blocked', 'Collection stopped',
-                   reason='Processing lock occupied' if 'Another pipeline' in str(exc) else 'Collection error; inspect worker evidence',
-                   next_attempt=time.time() + args.interval)
             emit(service='collector', stage='collection', code='failed', reason='unknown_effect')
             if args.once:
                 return 1

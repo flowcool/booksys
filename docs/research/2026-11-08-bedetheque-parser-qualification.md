@@ -16,10 +16,6 @@ installed. The port preserves all writers and other supported contributor roles.
 It fixes the observed article-order difference between `Les geeks` in h1 and
 `Geeks (Les)` in microdata, with an isolated regression fixture.
 
-Do not reuse the upstream first-series/first-album policy or forced `fr` language.
-Do not reuse parallel cover lookups, archive conversion, deletion or application
-storage. Source assertion URLs remain data. They do not create operator decisions.
-
 ## Discovery and access proof
 
 Current robots contains repeated wildcard groups. Combine their rules: `/ajax/`
@@ -70,9 +66,19 @@ Secondary values can differ across edition cards. The adapter retains them.
 The work evaluation layer must compute common supported values and field-level
 conflicts. It must not select the canonical page's publisher/ISBN for the file.
 
-## Limits
+## Measured scope and limits
 
-Bibliographic candidates and cover similarity are not exact-edition proof.
+The versioned case manifest has eleven cases. Retained public references cover
+BD, manga, a standalone, an integral, multiple editions, bundle member labels and
+an explicitly erotic source genre. Seven positive reference concordances match
+explicit supplied labels. Four cases abstain: wrong issue/title combination,
+several works without a disambiguating title/issue, an absent label, and the stale
+upstream URL. No wrong labelled match occurs in this small sample. Exact edition
+confirmation is zero.
+
+The codec/cover component proof is a separate T1 artifact. T1 is not globally
+complete until those proofs and independent review are integrated. Unknown family,
+missing fields and unsupported layouts must remain visible. No Komga is installed.
 
 ## Reproduce
 

@@ -1,12 +1,10 @@
 """Retained one-level inputs with verified manifests and ordinary child intake."""
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import time
 from typing import Any, Callable
 import uuid
@@ -31,6 +29,7 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
     manifest = directory / 'manifest.yaml'
     if manifest.is_symlink():
         raise LibraryError('Symlink bundle manifest')
+    manifest_time = manifest.stat().st_mtime_ns          # a child written before the manifest and unchanged is not hashed again
     value = yaml.safe_load(manifest.read_text())
     if (not isinstance(value, dict) or value.get('schema') != 1 or (value.get('policy') != POLICY and not (value.get('policy') == 'comic-bundle-1' and not value.get('source_parts')))
             or value.get('parent_sha256') != parent_hash or not isinstance(value.get('members'), list)
@@ -70,7 +69,8 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
         comics += 1
         expected.add(name)
         path = directory / name
-        if fingerprint(path)[2] != size or sha256(path) != item['sha256']:
+        info = fingerprint(path)
+        if info[2] != size or (info[3] > manifest_time and sha256(path) != item['sha256']):
             raise LibraryError('Retained bundle child changed')
     if not 1 <= comics <= 64 or total > MAX_TOTAL or value.get('expanded_size') != total:
         raise LibraryError('Retained bundle expansion or count limit')
@@ -79,11 +79,12 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
     return value
 
 
+_RETAINED: dict[tuple[Any, ...], tuple[Path, dict[str, Any]]] = {}
+
+
 def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
-           fault: Callable[[str], None] = lambda phase: None, wall_limit: float = 180,
+           fault: Callable[[str], None] = lambda phase: None,
            parts: list[Path] | None = None, detached: bool = False) -> tuple[Path, dict[str, Any]]:
-    if not 0 < wall_limit <= 180:
-        raise LibraryError('Invalid bundle wall limit')
     source = source.absolute()
     parts = [part.absolute() for part in parts] if parts else None
     if any(p.is_symlink() for p in (source, *source.parents)):
@@ -101,6 +102,13 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
         if any(p.is_symlink() for p in (part, *part.parents)):
             raise LibraryError('Symlink multipart source')
     stamps = [fingerprint(part) for part in inputs]
+    # Intake calls retain for every bundle at every sweep. A bundle whose source files (device, inode, size, mtime, ctime)
+    # did not change since the last full verification in this process is not hashed again: the repeated hashing of 18 GB
+    # kept the intake worker busy for minutes per sweep (py-spy: sha256 under retain and verify_directory).
+    memo = (str(source), tuple(stamps), str(state_dir), bool(parts), detached)
+    known = _RETAINED.get(memo)
+    if known is not None and known[0].is_dir():
+        return known
     before = stamps[0]
     if not 0 < sum(stamp[2] for stamp in stamps) <= MAX_SOURCE:
         raise LibraryError('Bundle source limit: 4 GiB source set maximum')
@@ -109,7 +117,19 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
     time.sleep(stable_seconds)
     if [fingerprint(part) for part in inputs] != stamps:
         raise LibraryError('Bundle source is unstable')
-    hashes = [sha256(part) for part in inputs]
+    hashes = None
+    if not parts:
+        # The source binding written at the first extraction holds its hash and its physical identity (device, inode,
+        # size, mtime, ctime): an unchanged identity is the same bytes, no need to read the whole file again.
+        from library.media_paths import bundle_inputs as _inputs
+        _root = state_dir/'bundle-inputs' if detached else _inputs(state_dir)
+        _binding = _root / ('.source-' + digest(str(source)) + '.yaml')
+        if _binding.is_file() and not _binding.is_symlink():
+            _kept = yaml.safe_load(_binding.read_text()) or {}
+            if _kept.get('fingerprint') == list(stamps[0]) and isinstance(_kept.get('sha256'), str):
+                hashes = [_kept['sha256']]
+    if hashes is None:
+        hashes = [sha256(part) for part in inputs]
     parent_hash = hashes[0]
     source_parts = [{'name': part.name, 'sha256': key, 'size': stamp[2]}
                     for part,key,stamp in zip(inputs,hashes,stamps)]
@@ -159,70 +179,11 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
             stage = root / ('.' + parent_hash + '-' + uuid.uuid4().hex)
             stage.mkdir(mode=0o700)
             fault('intent')
-            from library.sandbox import native_prefix, PYTHON
-            command = native_prefix(source, output=stage)
-            if parts:
-                for part in inputs:
-                    command += ['--ro-bind', str(part), '/tmp/parts/' + part.name]
-            worker_source = '/tmp/parts/' + source.name if parts else '/tmp/input'
-            command += [PYTHON, '-m', 'library.bundle_worker', worker_source, '/tmp/output']
-            if parts:
-                command += ['/tmp/parts/' + part.name for part in inputs]
-            image = os.environ.get('BOOKSYS_READER_IMAGE')
-            container_name = 'booksys-bundle-' + uuid.uuid4().hex if image else None
-            if image:
-                if not re.fullmatch(r'[a-z0-9./:_@-]+', image) or any(c in str(source) + str(stage.absolute()) for c in ',\n'):
-                    raise LibraryError('Unsafe bundle reader image or mount')
-                command = ['docker', 'create', '--rm', '--name', str(container_name), '--network', 'none', '--read-only', '--cap-drop', 'ALL',
-                    '--security-opt', 'no-new-privileges', '--user', f'{os.getuid()}:{os.getgid()}',
-                    '--memory', '768m', '--cpus', '1', '--pids-limit', '32',
-                    '--mount', f'type=bind,src={source},dst=/input,readonly',
-                    '--mount', f'type=bind,src={stage.absolute()},dst=/output',
-                    '--entrypoint', '/app/.venv/bin/python']
-                if parts:
-                    for part in inputs:
-                        if any(c in str(part) for c in ',\n'):
-                            raise LibraryError('Unsafe multipart mount')
-                        command += ['--mount', f'type=bind,src={part},dst=/parts/{part.name},readonly']
-                command += [image, '-m', 'library.bundle_worker', '/parts/' + source.name if parts else '/input', '/output']
-                if parts:
-                    command += ['/parts/' + part.name for part in inputs]
-                from library.process import bounded_run
-                created = bounded_run(command, timeout=20, stdout_limit=8192)
-                if created.returncode:
-                    raise LibraryError('Cannot create isolated bundle engine')
-                command = ['docker', 'start', '--attach', str(container_name)]
-            from library.reader_client import endpoint, execute
-            if endpoint():
-                from library.reader_client import bundle_payload
-                manifest = execute('bundle', source, bundle_payload(inputs) if parts else {}, destination=stage)
-            else:
-                try:
-                    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                except OSError:
-                    if container_name:
-                        stop_bundle_container(container_name)
-                    raise
-                started = time.monotonic()
-                try:
-                    while True:
-                        try:
-                            stdout, _ = process.communicate(timeout=.2)
-                            break
-                        except subprocess.TimeoutExpired:
-                            if shutil.disk_usage(root).free == 0:
-                                raise LibraryError('Bundle extraction has no free disk space')
-                            if time.monotonic() - started > wall_limit:
-                                raise LibraryError('Bundle extraction exceeded wall limit')
-                finally:
-                    if process.poll() is None:
-                        process.kill()
-                        process.communicate()
-                        if container_name:
-                            stop_bundle_container(container_name)
-                if process.returncode:
-                    raise LibraryError('Isolated bundle worker failed')
-                manifest = json.loads(stdout)
+            from library.decode import run
+            manifest = run('bundle', source, {'parts': [str(p.absolute()) for p in inputs]} if parts else {}, stage)
+            if manifest.get('status') == 'pending':
+                shutil.rmtree(stage)
+                return stage, manifest
             if manifest.get('status') != 'extracted' or manifest.get('parent_sha256') != parent_hash:
                 raise LibraryError(manifest.get('reason', 'Bundle source hash mismatch'))
             if parts:
@@ -230,28 +191,31 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
             atomic_yaml(stage / 'manifest.yaml', manifest)
             verify_directory(stage, parent_hash)
             fault('prepared')
-        if ([fingerprint(part) for part in inputs] != stamps or
-                [sha256(part) for part in inputs] != hashes):
+        if [fingerprint(part) for part in inputs] != stamps:
             raise LibraryError('Bundle source changed during extraction')
         os.rename(stage, target)
         sync_dir(root)
         fault('retained')
-    if ([fingerprint(part) for part in inputs] != stamps or
-                [sha256(part) for part in inputs] != hashes):
+    if [fingerprint(part) for part in inputs] != stamps:
         raise LibraryError('Bundle source changed during retention')
     if parts and manifest.get('source_parts') != source_parts:
         raise LibraryError('Multipart source manifest changed')
+    _RETAINED[memo] = (target, manifest)
     return target, manifest
 
 
 def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: str,
-                   origin: dict[str, Any], hint: dict[str, Any], *, budget: int,
-                   stable_seconds: float = 2, parts: list[Path] | None = None, detached: bool = False) -> int:
+                   origin: dict[str, Any], hint: dict[str, Any], *, save: Callable[[], None],
+                   stable_seconds: float = 2, parts: list[Path] | None = None, detached: bool = False) -> None:
     previous = state['origins'].get(oid, {})
     stamp = list(fingerprint(source))
     if previous.get('bundle') and (not matches_retained(source, previous.get('fingerprint', []), previous['sha256']) or sha256(source) != previous['sha256']):
         raise LibraryError('Bundle parent changed after retention')
     directory, manifest = retain(source, state_dir, stable_seconds=stable_seconds, parts=parts, detached=detached)
+    if manifest.get('status') == 'pending':
+        origin.update(availability='pending', reason=manifest['reason'])
+        state['origins'][oid] = origin
+        return
     parent_hash = manifest['parent_sha256']
     if parts:
         expected_parts = [{'name': Path(part['path']).name, 'sha256': part['sha256'],
@@ -277,7 +241,6 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
                   bundle={'policy': POLICY, 'members': manifest['members'], 'expanded_size': manifest['expanded_size']},
                   reason='Bundle parent; each complete member is reviewed separately')
     state['origins'][oid] = origin
-    inspected = 0
     for member in manifest['members']:
         if member['kind'] != 'comic':
             continue
@@ -294,51 +257,31 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
         temporary = any(fragment in old.get('reason', '').lower() for fragment in
                         ('isolated reader failed', 'resource limit exceeded', 'timed out'))
         retry = temporary and int(old.get('intake_attempts', 1)) < 3 and old.get('intake_next_attempt', 0) <= time.time()
-        needs_validation = (not old or old.get('reason') == 'Intake budget deferred' or retry or
+        needs_validation = (not old or old.get('availability') == 'pending' or retry or
                             old.get('validation_policy') != READER_POLICY)
         if needs_validation:
-            if inspected >= budget:
-                child.update(availability='pending', reason='Intake budget deferred')
-            else:
-                inspected += 1
-                result = inspect_file(directory / member['file'], stable_seconds=stable_seconds)
-                if result.get('sha256') and result['sha256'] != member['sha256']:
-                    raise LibraryError('Derived input changed during validation')
-                child.update(availability=result['status'], reason=result.get('reason', ''), reader_policy=result.get('reader_policy'), validation_policy=READER_POLICY,
-                             intake_attempts=int(old.get('intake_attempts', 0)) + 1, intake_next_attempt=time.time() + 300)
-                if result['status'] == 'validated':
-                    asset = state['assets'].setdefault(member['sha256'], {**result, 'origins': [],
-                        'assertions': [], 'overrides': {}, 'disposition': 'pending', 'captured_hints': {}})
-                    if not asset['assertions']:
-                        for field, xml_field in (('genres', 'Genre'), ('public', 'AgeRating')):
-                            raw = result.get('embedded', {}).get(xml_field)
-                            if raw:
-                                asset['assertions'].append({'field': field, 'raw': raw,
-                                    'normalized': [v.strip() for v in raw.split(',')] if field == 'genres' else raw,
-                                    'source': 'embedded', 'upstream': 'embedded-unverified',
-                                    'url': 'sha256:' + member['sha256'], 'retrieved_at': now(), 'validation': 'asserted'})
-                    if cid not in asset['origins']:
-                        asset['origins'].append(cid)
-                    # Filename is a discovery hint, never the parent's bibliography.
-                    asset['captured_hints'][origin['source'] + '#bundle-member=' + cid] = {
-                        'title': Path(member['member']).stem, 'parent_source': origin['source'], 'parent_title': hint.get('title')}
+            result = inspect_file(directory / member['file'], stable_seconds=stable_seconds)
+            if result.get('reason') == 'Stage enclosing deadline exceeded':
+                raise RuntimeError(result['reason'])
+            if result.get('sha256') and result['sha256'] != member['sha256']:
+                raise LibraryError('Derived input changed during validation')
+            child.update(availability=result['status'], reason=result.get('reason', ''), reader_policy=result.get('reader_policy'), validation_policy=READER_POLICY,
+                         intake_attempts=int(old.get('intake_attempts', 0)) + 1, intake_next_attempt=time.time() + 300)
+            if result['status'] == 'validated':
+                asset = state['assets'].setdefault(member['sha256'], {**result, 'origins': [],
+                    'assertions': [], 'overrides': {}, 'disposition': 'pending', 'captured_hints': {}})
+                if not asset['assertions']:
+                    for field, xml_field in (('genres', 'Genre'), ('public', 'AgeRating')):
+                        raw = result.get('embedded', {}).get(xml_field)
+                        if raw:
+                            asset['assertions'].append({'field': field, 'raw': raw,
+                                'normalized': [v.strip() for v in raw.split(',')] if field == 'genres' else raw,
+                                'source': 'embedded', 'upstream': 'embedded-unverified',
+                                'url': 'sha256:' + member['sha256'], 'retrieved_at': now(), 'validation': 'asserted'})
+                if cid not in asset['origins']:
+                    asset['origins'].append(cid)
+                # Filename is a discovery hint, never the parent's bibliography.
+                asset['captured_hints'][origin['source'] + '#bundle-member=' + cid] = {
+                    'title': Path(member['member']).stem, 'parent_source': origin['source'], 'parent_title': hint.get('title')}
         state['origins'][cid] = child
-    return inspected
-
-
-def stop_bundle_container(name: str) -> None:
-    """Stop and read back only this extraction's owned engine."""
-    from library.process import bounded_run
-    if not re.fullmatch(r'booksys-bundle-[0-9a-f]{32}', name):
-        raise LibraryError('Invalid owned bundle container')
-    result = bounded_run(['docker', 'stop', '--time', '1', name], timeout=15, stdout_limit=8192)
-    if result.returncode and b'no such' not in result.stderr.lower():
-        raise LibraryError('Owned bundle engine stop failed; preserve evidence')
-    for attempt in range(20):
-        result = bounded_run(['docker', 'inspect', '--format', '{{.State.Running}}', name], timeout=10, stdout_limit=8192)
-        if (result.returncode == 0 and result.stdout.strip() == b'false') or (result.returncode and b'no such' in result.stderr.lower()):
-            return
-        if result.returncode or result.stdout.strip() != b'true':
-            break
-        time.sleep(.1)
-    raise LibraryError('Owned bundle engine termination is not proved')
+        save()

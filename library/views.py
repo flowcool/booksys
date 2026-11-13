@@ -41,35 +41,26 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
         covers.mkdir(parents=True, exist_ok=True)
     for oid, origin in state['origins'].items():
         asset = state['assets'].get(origin.get('sha256'), {})
-        identity = asset.get('identity', {})
-        edition = state['editions'].get(identity.get('edition'), {})
-        work = state['works'].get(identity.get('work'), {})
         work_result = asset.get('work_result', {})
-        from library.work_identity import accepted_work, proposal_conflicts
-        conflicts = proposal_conflicts(asset, work)
-        work = accepted_work(asset, work, edition) or work
+        from library.work_identity import accepted_work
+        work = accepted_work(asset) or {}
         overrides = asset.get('overrides', {})
-        publication = edition.get('publication', {})
-        published = bool(publication and publication.get('asset') == origin.get('sha256'))
         hints = list(asset.get('captured_hints', {}).values()) or [captured.get(origin['source'], {})]
         title = overrides.get('title') or work.get('title') or next((hint.get('title') for hint in hints
             if isinstance(hint, dict) and hint.get('title')), Path(origin['path']).name)
-        if origin.get('parent_origin') and not identity and not work:
+        if origin.get('parent_origin') and not work:
             title = origin.get('member', title)
         automation = asset.get('automation', {})
         result = asset.get('work_result', asset.get('identity_result', {}))
         reason = origin.get('reason') if origin.get('availability') != 'validated' else (
             automation.get('reason') or result.get('reason', 'Metadata not attempted'))
-        if conflicts:
-            reason = 'Work proposal conflicts with confirmed identity: ' + ', '.join(conflicts)
         if origin.get('transfer_error'):
             reason = 'Downloader reports an error; inspect pyLoad'
         candidates = [candidate for candidate in [result.get('candidate'), *result.get('candidates', [])]
                       if isinstance(candidate, dict)][:10]
         from library.printed_model import printed_isbns
         codes = sorted(printed_isbns(asset.get('printed', {}))[0])
-        isbn = ', '.join(codes) or bounded(edition.get('isbn') or asset.get('embedded', {}).get('ISBN'))
-        provisional = asset.get('provisional', {}).get('status') == 'published'
+        isbn = ', '.join(codes) or bounded(work.get('isbn') or asset.get('embedded', {}).get('ISBN'))
         admission = asset.get('admission', {})
         classified = admission.get('status') == 'classified'
         holding = admission.get('status') == 'holding'
@@ -80,9 +71,8 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
                'retirement': bounded(origin.get('retirement', 'live')),
                'ocr': bounded(asset.get('printed', {}).get('status') or
                               (asset.get('printed_attempts') or [{}])[-1].get('status', 'not attempted')),
-               'identity': 'contested' if asset.get('contested') else 'identified' if identity or work else 'pending' if asset else 'not attempted',
-               'edition': 'confirmed' if identity else 'unknown',
-               'publication': 'classified' if classified else 'À identifier' if holding else 'published' if published else 'available_edition_unknown' if provisional else 'pending', 'reason': operator_reason(reason),
+               'identity': 'contested' if asset.get('contested') else 'identified' if work else 'pending' if asset else 'not attempted',
+               'publication': 'classified' if classified else 'À identifier' if holding else 'pending', 'reason': operator_reason(reason),
                'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
                'fiche': '/fiche/' + oid}
         if origin.get('retirement'):
@@ -93,7 +83,7 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
             row.update(title='Lot : ' + bounded(title), publication='not applicable', identity='not applicable', ocr='not applicable')
         elif origin.get('parent_origin'):
             row['title'] = 'Membre : ' + row['title']
-        row['status'] = 'rejected' if row['intake'] == 'rejected' else 'classified' if classified else 'À identifier' if holding else 'published' if published else 'available_edition_unknown' if provisional else 'pending'
+        row['status'] = 'rejected' if row['intake'] == 'rejected' else 'classified' if classified else 'À identifier' if holding else 'pending'
         rows.append(row)
         assertions = []
         for assertion in asset.get('assertions', [])[:30]:
@@ -125,12 +115,11 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
                     cover_path.write_bytes(data)
                 cover_url = '/cover/' + origin['sha256'] + '.png'
         fiches[oid] = {'title': bounded(title), 'bibliography': {**fields(work, ('title', 'author', 'number', 'series')),
-            **fields(edition, ('publisher', 'language', 'date', 'revision', 'isbn', 'medium')), 'isbn': isbn or 'unknown'},
+            **fields(work, ('publisher', 'language', 'date', 'revision', 'isbn', 'medium')), 'isbn': isbn or 'unknown'},
             'summary': summary, 'summary_provenance': summary_provenance, 'taxonomy': taxonomy,
             'overrides': fields(overrides, ('title', 'author', 'series', 'genres', 'public', 'summary'), 1000),
             'assertions': assertions, 'candidates': candidate_projection, 'cover': cover_url,
-            'work_metadata': ({**work_result, 'work': work, 'status': 'review' if asset.get('contested') else 'identified',
-                'edition_status': 'confirmed', 'proposal_conflicts': conflicts} if identity else work_result),
+            'work_metadata': work_result,
             'admission': admission,
             'cover_provenance': 'First page of the local file; not a publisher cover',
             'pipeline': {key: row[key] for key in ('transfer', 'intake', 'retirement', 'ocr', 'identity', 'publication', 'reason', 'observed_at', 'attempt_at')},
@@ -152,10 +141,8 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
             'cycle': {key: cycle[key] for key in ('status', 'started_at', 'finished_at', 'duration_seconds',
                       'next_cycle_at', 'stage', 'stage_started_at', 'error_source', 'reason', 'backlog', 'intake_backlog', 'assets', 'origins', 'published') if key in cycle},
             'rows': rows, 'counts': {'sources': len({r['source_id'] for r in rows}), 'origins': len(rows),
-                'confirmed_assets': len({e['publication']['asset'] for e in state['editions'].values() if e.get('publication')}),
                 'classified_assets': sum(a.get('admission', {}).get('status') == 'classified' for a in state['assets'].values()),
-                'holding_assets': sum(a.get('admission', {}).get('status') == 'holding' for a in state['assets'].values()),
-                'provisional_assets': sum(a.get('provisional', {}).get('status') == 'published' for a in state['assets'].values())}, 'fiches': fiches}
+                'holding_assets': sum(a.get('admission', {}).get('status') == 'holding' for a in state['assets'].values())}, 'fiches': fiches}
 
 
 def fiche_html(fiche: dict[str, Any]) -> str:
@@ -191,7 +178,7 @@ def fiche_html(fiche: dict[str, Any]) -> str:
     metadata = fiche.get('work_metadata', {})
     if metadata:
         body += '<h2>Album et classement</h2>' + table({
-            'Identification': metadata.get('status'), 'Edition': metadata.get('edition_status', 'unknown'),
+            'Identification': metadata.get('status'),
             **{k: metadata.get('work', {}).get(k) for k in ('family', 'genres', 'adult', 'recommended_age')},
             'Fields for review': metadata.get('field_conflicts', {}),
             'Proposal conflicts': metadata.get('proposal_conflicts', []),
@@ -213,7 +200,7 @@ PAGE = r'''<!doctype html><meta charset="utf-8"><meta name="viewport" content="w
 input,select,button{padding:.5em;margin:.3em;background:#233546;color:inherit;border:1px solid #657888}
 table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:.5em;border-bottom:1px solid #456;text-align:left}
 a{color:#81caff}.muted{color:#a6b6c5}td:last-child{max-width:30em}</style>
-<h1>Booksys library lab</h1><nav aria-label="Views"><button id="library-tab" aria-selected="true">Bibliothèque</button><button id="activity-tab" aria-selected="false">Activité</button></nav><section id="library-pane"><p>Read-only snapshots. Original downloads stay intact. No web actions.</p>
+<h1>Booksys library lab</h1><section id="library-pane"><p>Read-only snapshots. Original downloads stay intact. No web actions.</p>
 <p id="clock" class="muted"></p><p id="cycle"></p><input id="query" placeholder="Search title, author, ISBN, series or reason">
 <label>Status <select id="status"></select></label><label>Transfer <select id="transfer"></select></label>
 <label>Intake <select id="intake"></select></label><label>Identity <select id="identity"></select></label>
@@ -229,15 +216,7 @@ const signature=JSON.stringify(data.groups);if(signature===lastRows)return;lastR
 if(group.children_after){const more=document.createElement('button');more.textContent='More files';let after=group.children_after;more.onclick=async()=>{more.disabled=true;try{const response=await fetch('/api/library?source='+encodeURIComponent(group.id)+'&after='+encodeURIComponent(after),{cache:'no-store'});if(!response.ok)throw Error(response.status);const next=await response.json();for(const row of next.rows)table.append(cells(row));after=next.children_after;if(!after)more.remove()}finally{more.disabled=false}};details.append(more)}tr.children[0].append(details);$('rows').append(tr)}}
 async function refresh(){if(loading)return;loading=true;try{const query=new URLSearchParams({page:String(page),sort:sortKey,descending:String(!ascending),search:$('query').value});for(const key of filters)if($(key).value)query.set(key,$(key).value);const response=await fetch('/api/library?'+query,{cache:'no-store'});if(!response.ok)throw Error(response.status);data=await response.json();page=Math.min(page,data.pages);
 const options=JSON.stringify(data.facets);if(options!==lastOptions){lastOptions=options;for(const key of filters){const select=$(key),prior=select.value;select.replaceChildren();for(const value of ['',...data.facets[key]]){const option=document.createElement('option');option.value=value;option.textContent=value||'All';select.append(option)}select.value=prior}}
-$('clock').textContent='Catalogue revision: '+data.revision;const c=data.cycle||{};$('cycle').textContent='Cycle: '+(c.status||'unknown')+' | Stage: '+(c.stage||'idle')+' | Last finish: '+(c.finished_at||'none')+' | Waiting intake: '+(c.intake_backlog??'?')+(c.reason?' | '+c.reason:'')+' | Diagnostics dropped: '+(c.diagnostics?.dropped_count??0)+' | Activity dropped: '+(c.diagnostics?.activity_dropped_count??0)+(c.recovery?' | Recovery: '+(c.recovery.failed?'failed':c.recovery.overdue?'overdue':c.recovery.requested?'requested':'verified'):'');render()}
+$('clock').textContent='Catalogue revision: '+data.revision;const c=data.cycle||{};$('cycle').textContent='Cycle: '+(c.status||'unknown')+' | Stage: '+(c.stage||'idle')+' | Last finish: '+(c.finished_at||'none')+' | Waiting intake: '+(c.intake_backlog??'?')+(c.reason?' | '+c.reason:'')+' | Diagnostics dropped: '+(c.diagnostics?.dropped_count??0)+(c.recovery?' | Recovery: '+(c.recovery.failed?'failed':c.recovery.overdue?'overdue':c.recovery.requested?'requested':'verified'):'');render()}
 catch(e){$('clock').textContent='Refresh failed; last displayed snapshot may be stale: '+e}finally{loading=false}}
 let pending;function reset(){page=1;clearTimeout(pending);pending=setTimeout(refresh,200)}$('query').oninput=reset;for(const key of filters)$(key).onchange=reset;for(const th of document.querySelectorAll('th[data-key]')){th.onclick=()=>{if(sortKey===th.dataset.key)ascending=!ascending;else{sortKey=th.dataset.key;ascending=true}reset()};th.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();th.onclick()}}}$('previous').onclick=()=>{page--;refresh()};$('next').onclick=()=>{page++;refresh()};$('refresh').onclick=refresh;refresh();setInterval(refresh,30000);
 </script></section>'''
-
-
-from library.activity_ui import ACTIVITY_PANE
-PAGE += ACTIVITY_PANE
-
-
-from library.diagnostic_ui import DIAGNOSTICS_PANE
-PAGE += DIAGNOSTICS_PANE

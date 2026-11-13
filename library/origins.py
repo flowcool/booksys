@@ -66,7 +66,9 @@ def resolve_asset_origin(store: Catalog, reception: Path, state: dict[str, Any],
                 path = directory / str(member['file'])
             else:
                 relative = Path(origin['path'])
-                path = reception_path(reception, str(relative.parent), relative.name)
+                from library.intake import EXTERNAL_ROOT
+                root = EXTERNAL_ROOT if origin['source'].startswith('external:') else reception
+                path = reception_path(root, str(relative.parent), relative.name)
             if sha256(path) != asset_id:
                 raise LibraryError('Origin bytes changed')
             return oid, path

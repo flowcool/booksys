@@ -4,7 +4,7 @@ Status: accepted by the operator after the eleven-question grilling on 8 Novembe
 Owner: `private-work-item`.
 This is the current policy for this change. It supersedes earlier requirements
 that make an exact edition a prerequisite for identification or library admission.
-Earlier integrity, provenance, decision and recovery requirements still apply.
+Earlier integrity, provenance and recovery requirements still apply.
 
 ## Outcome
 
@@ -25,8 +25,7 @@ The running implementation is not evidence that this accepted change is delivere
    Keep ambiguous cases for review. Retain candidates and the reason for doubt.
    A first search result or highest score alone is not a sufficient decision.
 4. Start with existing metadata, filename and captured source information.
-   Use cover comparison and bounded OCR for unresolved cases. Reuse valid prior
-   inspection and OCR evidence. A second upstream source is not mandatory for
+   Reuse valid prior inspection and metadata evidence. A second upstream source is not mandatory for
    work-level identification; an unresolved contradiction still prevents it.
 5. Organize classified copies by BD / Manga / Comics, then series and issue.
    Use the title when a series or issue does not exist. Keep genres as multiple
@@ -47,7 +46,7 @@ The running implementation is not evidence that this accepted change is delivere
     labelled “À identifier”. Keep them available outside the classified collection.
     Keep identification and classification status separate from technical validity.
 11. Retry unresolved identification weekly. Retry sooner after a method improvement
-    or useful new evidence. Reuse inspection, extraction and OCR results when their
+    or useful new evidence. Reuse inspection and extraction results when their
     inputs and method remain valid. A temporary provider error uses bounded retry;
     it is not a contradiction, a missing record, or a permanent negative match.
 
@@ -56,7 +55,7 @@ The running implementation is not evidence that this accepted change is delivere
 Use Bedetheque as the primary discovery reference for French comics. Qualified
 providers may supply additional assertions. Two tools reading one site are one
 upstream source. Store reference IDs, URLs, retrieval dates and field provenance.
-Source prose is untrusted data. It cannot create an operator decision.
+Source prose remains untrusted data.
 
 Keep title, series, issue, integral status, contributors, summary, language,
 publisher, dates, ISBN, genres and adult/age fields when supported. Unknown values
@@ -113,9 +112,9 @@ backup or production preparation is required for this lab.
   readback. Originals stay unchanged. Exact duplicates and different versions are
   handled without a silent collision or replacement.
 - Weekly and evidence-triggered retries reuse unchanged expensive results and do
-  not cause a busy loop. OCR is a fallback rather than a universal first step.
-- Existing review decisions remain traceable. Work-level confirmation needs no
-  invented edition data. The monitoring page exposes actual stage and reason.
+  not cause a busy loop.
+- Work-level identification needs no invented edition data.
+  The monitoring page exposes actual stage and reason.
 - Run relevant seam tests and type checks during work. Run one full integrated
   suite for the final candidate, complete independent review, then commit.
 - Record the exact lab candidate, operation plan, source preservation, readback and

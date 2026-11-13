@@ -1,46 +1,38 @@
 {
   "captured": "2026-11-07",
-  "method": "Handwritten minimal parser markup reconstructed from factual catalogue fields. Original capture hashes remain provenance only. Outgoing targets are synthetic; no source prose, style, scripts or images are included.",
+  "method": "Local Byparr 3.1.1 on a NAS host; navigation/scripts omitted; no hoster requests",
   "pages": {
     "catalogue-1.html": {
       "source_sha256": "0f7ee3743d55f1b63ebb4e5de58d4e310dedb44aee64461d3544363a7b2a25d8",
-      "fixture_sha256": "ff853d379657af7750df540275a656508e829c38668a116b13bd69842b372b4f",
-      "captured_fixture_sha256": "8d533513442d7b1ccfab4283d6a7c567236ab52dd594c32f5967a33fb096762e"
+      "fixture_sha256": "89db763e0e5a4ce1214a3bc882bf676a35e90d0a4bc11db114090565d97a418e"
     },
     "catalogue-2.html": {
       "source_sha256": "d71aebf05ef2174f7a6d54fdb1a54a708bb7a3f723f3816703a8cb429c5c5b9f",
-      "fixture_sha256": "4dcb16cdae4a34c7efc5b8a1feb5b6c9d66fc3611c7cf3b41f6b4a2438712ac5",
-      "captured_fixture_sha256": "0dbc548fd1f7e5ca44f5eac3839f74f7be01ec0e71213f29d75c2faa14f0cc80"
+      "fixture_sha256": "fd1b92da5474f68eb4a54e058e70fddeda6a7d33810a8675933b29e158abd0be"
     },
     "download-2435940.html": {
       "source_sha256": "c3d2d4d8a0fe61668b0187874a82bd3abc944f009ab388453fb6dc0785455565",
-      "fixture_sha256": "0d0b84d62a2c96da41800e200afac58779b54c469324ee327cf51f7c44c2ed4f",
-      "captured_fixture_sha256": "d7cda3cb4369a6025990ebec661330c6f7a8dd42c4a02790ec02bf87874031aa"
+      "fixture_sha256": "27f7581c8ecef3fc72c434f3946c095ad4c45629a9e53d63ff2ccea1c9fd70ba"
     },
     "download-2435942.html": {
       "source_sha256": "5e8d7fd957f34477a99094301957bd545d795427ef1fc07bab75c5da9c7f9a28",
-      "fixture_sha256": "6cf453aa472bda549810936f5802c5217081190d45eedfbded4b8a09baaed9da",
-      "captured_fixture_sha256": "24a0f9af066def457b4a0fc6db947733e515792f2d49694dfe0fd261faa8ea71"
+      "fixture_sha256": "b596d187a8c6ac4e629fdf676dd5725df0b413aba7c3e6226e3e7b472ae0c817"
     },
     "download-2435949.html": {
       "source_sha256": "89bebaf179dd0493666aa63fa74821f5a3ad2982754f50a63ddff53372d6ecec",
-      "fixture_sha256": "2fd47aa8f6339ccde79060aaac08c958d26b466bad7ff08eae6b36695f110910",
-      "captured_fixture_sha256": "13e5ab9825d8caae6be92317f8d5f6aeec3a5008bcfca0d8d029f9ff063ef5fe"
+      "fixture_sha256": "0e96d7b4d130e8c36bbd99680dd9ad72d0a53fd31caeb1289ff8ce84c4c86e7b"
     },
     "download-2435951.html": {
       "source_sha256": "98a07606f3ba6482b2a684ede6f8c7f44cfa7a4ca9f6f0559051787c5ab24a82",
-      "fixture_sha256": "c5962d76b9b665c2cab8612606764e573b17f165c33823a584339531a4c08244",
-      "captured_fixture_sha256": "313e8de236081c2914fcc3a9289bd6b83dae64f7729a37334070de28d342f658"
+      "fixture_sha256": "3763024e7d3eb7352aff28504931c3761701150a3eae21437f40cb91f826eb36"
     },
     "item-358545.html": {
       "source_sha256": "20881ac98e3900064752ec8d6c1d38bf8999e0f97b019e5991196e0ca706d718",
-      "fixture_sha256": "3a3607d6074a28caf20b5e794fa7da132632308b606bb615138043e9561f8594",
-      "captured_fixture_sha256": "97001b0a8c8c99411bcb543adbe341fdd4b11d505d9c2cad37a9df81c2daeabf"
+      "fixture_sha256": "97001b0a8c8c99411bcb543adbe341fdd4b11d505d9c2cad37a9df81c2daeabf"
     },
     "item-358548.html": {
       "source_sha256": "65b52ca5066f5212dba57274c6ef2fec4e8c87290d919039e8df77493f15e4e6",
-      "fixture_sha256": "b37ffc624ec16af1e823e2ea8b5db680ae8ea7b7022e2bc41a0d4b91871a4d4a",
-      "captured_fixture_sha256": "c80b9e93fc601cc80c7fd5db9db19c117dc87acf35aafd2ce93a3bd348b11e49"
+      "fixture_sha256": "c80b9e93fc601cc80c7fd5db9db19c117dc87acf35aafd2ce93a3bd348b11e49"
     }
   }
 }

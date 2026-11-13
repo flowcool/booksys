@@ -1,11 +1,8 @@
 """PostgreSQL source policy and bounded, non-executing source discovery."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import copy
-import hashlib
-import os
 import stat
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -13,26 +10,10 @@ if TYPE_CHECKING:
     from library.postgres import DeadlineConnection
     from library.store import Store, SourceProgress
 
-import yaml
-
 from library.primitives import LibraryError, digest
 from library.stage_model import Task
 
-MAX_BYTES = 4194304
-MAX_POLICY_BYTES = 8388608
 MAX_SOURCES = 16
-PAGE = 256
-
-
-def bounded_read(path: Path, *, max_bytes: int = MAX_BYTES) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(descriptor, 'rb') as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise LibraryError('source_journal_not_regular')
-        raw = stream.read(max_bytes + 1)
-    if len(raw) > max_bytes:
-        raise LibraryError('source_journal_capacity')
-    return raw
 
 
 from library.stage_model import Scan as Scan
@@ -55,7 +36,7 @@ class SourcePolicy:
     def read(self) -> dict[str, Any]:
         from library.codec import decode
         with self.store._database.connection() as db:
-            self.store.check(db)
+            self.store.verify(db)
             sources={key:decode(payload) for key,payload in db.execute('SELECT id,payload FROM source_registry')}
             for value in sources.values():
                 value['inputs']={}
@@ -67,8 +48,14 @@ class SourcePolicy:
                     value['native']['inputs'][local]=revision
                     value['native']['guards'][local]=binding['projection_guard']
                     value['native']['bindings'][local]={k:v for k,v in binding.items() if k not in ('registration_kind','projection_guard')}
-            return {'schema':1,'tasks':{key:decode(payload) for key,payload in db.execute(
-                "SELECT key,payload FROM stage_tasks WHERE payload::jsonb->>'source' <> ''")},'sources':sources}
+            return {'schema':1,'tasks':{},'sources':sources}
+
+    def sources(self) -> dict[str, Any]:
+        """The registered journals only (id, queue, path, cursor, last scan): no inputs, no tasks."""
+        from library.codec import decode
+        with self.store._database.connection() as db:
+            self.store.verify(db)
+            return {key: decode(payload) for key, payload in db.execute('SELECT id,payload FROM source_registry')}
 
     def validation_snapshot(self,tasks: list[Task], *, db: DeadlineConnection | None=None) -> tuple[str,set[str]]:
         """Prepare compact native validation outside a queue mutation transaction."""
@@ -85,28 +72,19 @@ class SourcePolicy:
     def register(self, queue: str, journal: Path, *, kind: str = 'monitor') -> tuple[str, str]:
         from library.codec import encode, decode
         from library.postgres import guards
-        if kind not in ('monitor','backfill') or kind == 'backfill' and queue != 'collection':
+        if kind != 'monitor':
             raise LibraryError('Invalid native source kind')
         ident = digest({'queue': queue, 'path': str(journal.absolute())})
-        from library.stage_tasks import StageTasks
-        with StageTasks(self.store)._write('source-register', {'queue':queue,'path':str(journal.absolute()),'kind':kind}) as tx:
-            if tx.replayed:
-                current = tx.db.execute('SELECT payload FROM source_registry WHERE id=%s',(ident,)).fetchone()
-                if not current:
-                    raise LibraryError('source_policy_missing')
-                return ident, decode(current[0])['cursor']
-            db = tx.db
+        with self.store._database.connection(write=True) as db:
             guards(db, {'source-registration'})
             row = db.execute('SELECT payload FROM source_registry WHERE id=%s', (ident,)).fetchone()
             if row:
-                tx.result = decode(row[0])['cursor']
-                return ident, tx.result
+                return ident, decode(row[0])['cursor']
             count = db.execute('SELECT count(*) FROM source_registry').fetchone()
             if count and count[0] >= MAX_SOURCES:
                 raise LibraryError('source_registration_capacity')
             db.execute('INSERT INTO source_registry VALUES (%s,%s)',
                        (ident, encode({'queue': queue, 'path': str(journal.absolute()), 'kind':kind, 'cursor': ''})))
-            tx.result = ''
             return ident, ''
 
     def retain_scan_failure(self, source: str, expected: dict[str, Any], stamp: str) -> None:
@@ -140,11 +118,6 @@ class SourcePolicy:
             value['native']={'queue':view['_native']['queue']}
         db.execute('UPDATE source_registry SET payload=%s WHERE id=%s', (encode(value),source))
         members=[]
-        selected: str | None=None
-        if value.get('kind')=='backfill' and view['items']:
-            row=db.execute('SELECT batch FROM backfill_selection WHERE singleton=1').fetchone()
-            if row is None:raise LibraryError('Selected backfill unavailable')
-            selected=row[0]
         for entity,record in view['items'].items():
             key=source+':'+entity
             native=view.get('_native',{})
@@ -152,7 +125,6 @@ class SourcePolicy:
             binding=native.get('bindings',{}).get(entity)
             if binding is not None:
                 binding={**binding,'registration_kind':value.get('kind','monitor'),'projection_guard':guard_value}
-                if binding['kind']=='backfill':binding['identity']=selected
             members.append({'entity':key,'input_revision':record['input_revision'],'method':record['method'],
                 'guard':digest(guard_value),'binding':encode(binding) if binding is not None else None})
         db.execute('INSERT INTO source_inputs(source,entity,input_revision,method,guard,progress,binding) '
@@ -160,19 +132,12 @@ class SourcePolicy:
                    'AS i(entity text,input_revision text,method text,guard text,binding text) ORDER BY entity COLLATE "C" '
                    'ON CONFLICT(source,entity) DO UPDATE SET progress=CASE WHEN source_inputs.input_revision=excluded.input_revision '
                    'AND source_inputs.method=excluded.method AND source_inputs.guard=excluded.guard THEN source_inputs.progress ELSE NULL END, '
-                   'input_revision=excluded.input_revision,method=excluded.method,guard=excluded.guard,binding=excluded.binding',
+                   'input_revision=excluded.input_revision,method=excluded.method,guard=excluded.guard,binding=excluded.binding '
+                   'WHERE (source_inputs.input_revision,source_inputs.method,source_inputs.guard,source_inputs.binding) '
+                   'IS DISTINCT FROM (excluded.input_revision,excluded.method,excluded.guard,excluded.binding)',
                    (source,json.dumps(members,ensure_ascii=False)))
         db.execute('DELETE FROM source_inputs WHERE source=%s AND NOT entity=ANY(%s::text[])',
                    (source,[row['entity'] for row in members]))
-
-    def accept_snapshot(self, source: str, view: dict[str, Any], stamp: str) -> None:
-        """Persist a detached source projection; no file or external work occurs in SQL."""
-        from library.stage_tasks import StageTasks
-        with StageTasks(self.store)._write('source-snapshot', {'source':source,'view':view,'stamp':stamp}) as tx:
-            if tx.replayed:
-                return
-            db = tx.db
-            self._snapshot(db, source, view, stamp, '')
 
     def prepare_progress(self, task: Task, result: dict[str, Any], *, completions: list[Any] | None = None,
                          reconciled: bool = False) -> SourceProgress:
@@ -237,50 +202,21 @@ class SourcePolicy:
         # checkpoints are continuation, not a new business generation.
         from library.stage_tasks import StageTasks
         with self.store._database.connection() as db:
-            active=db.execute("SELECT payload FROM stage_tasks WHERE stage=%s AND status='active' AND payload::jsonb->>'source'=%s",(queue,ident)).fetchone()
+            active=db.execute("SELECT item,input_rev,method,source,attempts,claimed_by,ready_at FROM work_items "
+                              "WHERE stage=%s AND state='claimed' AND source=%s LIMIT 1",(queue,ident)).fetchone()
             if active:
-                task=Task(**decode(active[0]));local=task.entity.split(':',1)[1]
+                from library.work_actor import task_view
+                from library.work_items import Item
+                guard_row=db.execute('SELECT guard FROM source_inputs WHERE source=%s AND entity=%s',(ident,active[0])).fetchone()
+                task=task_view(Item(queue,*active),source_guard=guard_row[0] if guard_row else '');local=task.entity.split(':',1)[1]
                 binding=StageTasks._source_binding(db,task)
                 try:StageTasks._verify_source(db,task)
                 except LibraryError:pass  # A real changed input keeps its new projection and fences the owner.
                 else:
-                    if binding is not None and binding['kind'] in ('category','backfill') and local in value['items']:
+                    if binding is not None and binding['kind']=='category' and local in value['items']:
                         value['items'][local]['input_revision']=task.input_revision
                         value['_native']['inputs'][local]=task.input_revision
                         value['_native']['bindings'][local]={k:v for k,v in binding.items() if k not in ('registration_kind','projection_guard')}
         value['_source_sha256']=digest(value)
         value['_source_registration']=row[0]
         return value
-
-
-
-def parse_journal(path: Path, queue: str | None = None) -> None:
-    import resource
-    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
-    raw = bounded_read(path)
-    value = yaml.safe_load(raw)
-    if isinstance(value, dict) and ('submissions' in value or 'pages_requested' in value) and queue is not None:
-        from library.native_projection import project
-        auxiliary_path = path.parent/'fiches.yaml'
-        auxiliary = yaml.safe_load(bounded_read(auxiliary_path)) if queue == 'collection' and auxiliary_path.exists() else None
-        value = project(queue, value, auxiliary=auxiliary)
-    if not isinstance(value, dict) or not isinstance(value.get('items'), dict):
-        raise LibraryError('Invalid discovery journal view')
-    from library.stage_model import Obligation, instant
-    from datetime import datetime
-    import re
-    for entity, record in value['items'].items():
-        if not isinstance(record, dict) or set(record) - {'input_revision', 'method', 'due_at', 'blocked'}:
-            raise LibraryError('Invalid source task view')
-        Obligation('collection', entity, record['input_revision'], record['method']).key
-        if record.get('due_at'):
-            instant(datetime.fromisoformat(record['due_at']))
-        if record.get('blocked') and not re.fullmatch('[a-z_]{1,80}', record['blocked']):
-            raise LibraryError('Invalid source block reason')
-    value['_source_sha256'] = hashlib.sha256(raw).hexdigest()
-    print(json.dumps(value, ensure_ascii=False, allow_nan=False))
-
-
-if __name__ == '__main__':
-    import sys
-    parse_journal(Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)

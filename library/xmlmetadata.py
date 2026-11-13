@@ -26,34 +26,6 @@ def validate_xml(data: bytes) -> None:
         raise LibraryError('ComicInfo does not conform to the pinned 2.0 schema') from exc
 
 
-def comicinfo(state: dict[str, Any], asset_id: str) -> bytes:
-    asset = state['assets'][asset_id]
-    identity = asset.get('identity')
-    if not identity:
-        raise LibraryError('Cannot export unknown work/edition')
-    work, edition = state['works'][identity['work']], state['editions'][identity['edition']]
-    fields = {**work, **asset.get('overrides', {})}
-    values: dict[str, Any] = {'Title': fields['title'], 'Series': fields.get('series'),
-        'Number': fields.get('number'), 'Summary': fields.get('summary'),
-        'Notes': 'Booksys catalogue authority; work=' + identity['work'] + '; edition=' + identity['edition'],
-        'Writer': fields.get('author'), 'Publisher': edition['publisher'],
-        'Genre': ', '.join(fields.get('genres', [])) if isinstance(fields.get('genres'), list) else None,
-        'PageCount': asset.get('pages'), 'LanguageISO': edition['language']}
-    rating = fields.get('public')
-    mapping = {'all_ages': 'Everyone', 'safe': 'Everyone'}
-    if rating in mapping:
-        values['AgeRating'] = mapping[rating]
-    root = ElementTree.Element('ComicInfo')
-    for name in ('Title', 'Series', 'Number', 'Summary', 'Notes', 'Writer', 'Publisher', 'Genre',
-                 'PageCount', 'LanguageISO', 'AgeRating'):
-        value = values.get(name)
-        if value is not None and value != '':
-            ElementTree.SubElement(root, name).text = str(value)
-    data = ElementTree.tostring(root, encoding='utf-8', xml_declaration=True)
-    validate_xml(data)
-    return bytes(data)
-
-
 WORK_XML_FIELDS = {'title': 'Title', 'series': 'Series', 'number': 'Number',
     'summary': 'Summary', 'notes': 'Notes', 'author': 'Writer', 'publisher': 'Publisher',
     'genres': 'Genre', 'url': 'Web', 'language': 'LanguageISO', 'age_rating': 'AgeRating'}

@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from booksys_core.errors import BrowserError, CollectionError
 from library.operational_state import CollectorState
-from booksys_core.network_admission import RollingBudget, configured_budget, before_native_write, NativeMutation, current_native, native_receipt
+from booksys_core.network_admission import RollingBudget, configured_budget, native_receipt
 from fiches import CoverError, ImageFetcher, write_fiche
 
 REFERENCES: ContextVar[list[dict[str, str]]] = ContextVar('downloader_references', default=[])
@@ -54,33 +54,23 @@ class Pyload:
         try:
             if self.admission is not None:
                 self.admission.debit()
-            guard = before_native_write.get()
-            if write and guard is not None:
-                guard()
-            mutation = current_native.get()
-            if write and self.admission is not None:
-                if mutation is None or mutation.directory != self.admission.path.parent:
-                    raise CollectionError('Native mutation requires journal ownership')
-                mutation.prepare()
             result = self._call(method, write=write, **parameters)
         except Exception as exc:
             if isinstance(exc, HTTPError) and self.admission is not None and (exc.code == 429 or exc.headers.get('Retry-After') is not None):
                 self.admission.remote_deadline(exc.headers.get('Retry-After'))
+            from booksys_core.diagnostics import exception_details
             emit(service='collector', stage='downloads', code='failed', request_id=request_id, refs=refs,
-                 reason='unknown_effect' if write else 'provider_unavailable',
-                 duration_ms=int((time.monotonic() - started) * 1000))
+                 duration_ms=int((time.monotonic() - started) * 1000),
+                 **{**exception_details(exc), 'reason': 'unknown_effect' if write else 'provider_unavailable'})
             raise
         emit(service='collector', stage='downloads', code='completed', request_id=request_id, refs=refs,
              duration_ms=int((time.monotonic() - started) * 1000))
         return result
 
     @contextmanager
-    def mutation(self, owner: str, journal: Path) -> Iterator[NativeMutation | None]:
-        if self.admission is None:
-            yield None
-        else:
-            with NativeMutation(self.admission.path.parent, owner, journal).hold() as mutation:
-                yield mutation
+    def mutation(self, owner: str, journal: Path) -> Iterator[None]:
+        # No uncertain-effect freeze: a write is reconciled by reading pyLoad again, never by a stored lock.
+        yield None
 
     def _call(self, method: str, *, write: bool, **parameters: Any) -> Any:
         url = f"{self.endpoint}/api/{method}"

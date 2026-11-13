@@ -1,4 +1,4 @@
-"""Internal sandbox entry point. Never extract or execute archive contents."""
+"""Internal decode entry point. Never extract or execute archive contents."""
 from __future__ import annotations
 
 import io
@@ -20,7 +20,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree
 
-import pikepdf
 from PIL import Image
 
 from library.primitives import LibraryError
@@ -31,7 +30,8 @@ MAX_EXPANDED = 2 * 1024 ** 3
 MAX_PAGES = 2000
 # rarfile 4.5 decodes comments (at most 256 KiB) through a temporary RAR.
 RAR_COMMENT_SCRATCH = 1024 ** 2
-Image.MAX_IMAGE_PIXELS = 50_000_000
+# Reject images above 100 million decoded pixels (about 400 MB as RGBA) before retaining their pixels; the decoder address space is 1.5 GiB.
+Image.MAX_IMAGE_PIXELS = 100_000_000
 
 
 class PendingFile(LibraryError):
@@ -59,8 +59,12 @@ def member(name: str, data: bytes, output: dict[str, Any]) -> None:
             raise LibraryError('Oversized Picasa ancillary file')
         output.setdefault('ignored_ancillary', []).append(name)
         return
-    if path.name == 'Thumbs.db' and len(data) <= 4 * 1024**2:
-        if any(PurePosixPath(n).name == 'Thumbs.db' for n in output.get('ignored_ancillary', [])):
+    # Ignore text notes and one thumbnail database of any name (20 archives of one series carry '<series> - NN - NNN.db').
+    if path.suffix.lower() in ('.txt', '.nfo') and len(data) <= 64 * 1024:
+        output.setdefault('ignored_ancillary', []).append(name)
+        return
+    if path.suffix.lower() == '.db' and len(data) <= 4 * 1024**2:
+        if any(PurePosixPath(n).suffix.lower() == '.db' for n in output.get('ignored_ancillary', [])):
             raise LibraryError('Several ancillary database files')
         output.setdefault('ignored_ancillary', []).append(name)
         return
@@ -221,18 +225,22 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
     return {'status': 'validated', 'format': suffix[1:], **output}
 
 
-from library.pdf_inspection import inspect_pdf
+from library.pdf_pages import inspect_pdf
 
 
 def main() -> None:
     path, suffix = Path(sys.argv[1]), sys.argv[2]
-    pdf_transform = '--transform' in sys.argv and len(sys.argv) > 2 and sys.argv[2] == '.pdf'
-    cpu_limit = 1800 if pdf_transform else 30
+    operation = sys.argv[3]
+    work = Path(sys.argv[4])
+    if operation == 'bundle':
+        request = json.loads(sys.stdin.buffer.read(2 * 1024**2))
+        from library.bundle_worker import main as worker
+        sys.argv = [sys.argv[0], str(path), str(work), *request.get('parts', [])]
+        worker()
+        return
+    transform = operation == 'transform'
+    cpu_limit = 1800 if transform and suffix == '.pdf' else 30
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
-    resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024 ** 2, 1536 * 1024 ** 2))
-    transform = len(sys.argv) > 3 and sys.argv[3] == '--transform'
-    file_limit = MAX_EXPANDED if transform else RAR_COMMENT_SCRATCH if suffix == '.cbr' else 0
-    resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     output: dict[str, Any]
     try:
@@ -252,7 +260,7 @@ def main() -> None:
                 request = json.loads(sys.stdin.buffer.read(2 * 1024**2))
                 xml = base64.b64decode(request['comicinfo'], validate=True)
                 validate_xml(xml)
-                destination = Path(sys.argv[4])
+                destination = work / 'book.cbz'
                 with zipfile.ZipFile(destination, 'x', compression=zipfile.ZIP_STORED) as archive:
                     def write_member(name: str, data: bytes) -> None:
                         info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
@@ -281,7 +289,10 @@ def main() -> None:
     except PendingFile as exc:
         output = {'status': 'pending', 'reason': str(exc)}
     except Exception as exc:
-        unavailable = 'support unavailable' in str(exc) or isinstance(exc, ImportError)
+        # A render that timed out or ran out of memory says the host was slow or small, not that the file is bad: the
+        # file stays pending and is tried again; only a real format failure rejects it.
+        unavailable = ('support unavailable' in str(exc)
+                       or isinstance(exc, (ImportError, subprocess.TimeoutExpired, TimeoutError, MemoryError)))
         output = {'status': 'pending' if unavailable else 'rejected',
                   'reason': f'{type(exc).__name__}: {exc}'}
     output['input_sha256'] = file_hash.hexdigest()

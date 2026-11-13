@@ -1,18 +1,22 @@
 [Unit]
-Description=Booksys Compose lab
+Description=Booksys lab stack (Docker Compose)
 Requires=docker.service
+PartOf=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
-RequiresMountsFor=/data/booksys/stack /mnt/booksys-host/booksys-files /mnt/booksys-host/booksys-library
+RequiresMountsFor=/data/booksys/postgresql-prfpw-20261111 /mnt/booksys-host/booksys-files /mnt/booksys-host/booksys-library /mnt/booksys-host/comics-originals
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/data/booksys/stack
-ExecStart=/usr/bin/docker compose up -d --no-build --pull never
-ExecStop=/usr/bin/docker compose stop
-TimeoutStartSec=180
-TimeoutStopSec=180
+User=flow
+WorkingDirectory=/data/booksys/postgresql-prfpw-20261111/audit1
+ExecStartPre=/bin/sh -c 'docker start booksys-pg-prfpw-postgres booksys-pyload booksys-byparr >/dev/null; until [ "$$(docker inspect -f {{.State.Health.Status}} booksys-pg-prfpw-postgres)" = healthy ]; do sleep 2; done'
+ExecStart=/usr/bin/docker compose --project-name booksys-pg-prfpw-audit1 --env-file candidate.env --file compose.yaml up -d --wait --no-build --pull never --wait-timeout 900 controller discovery collection intake metadata copies routing
+ExecStop=/usr/bin/docker compose --project-name booksys-pg-prfpw-audit1 --env-file candidate.env --file compose.yaml stop --timeout 60
+ExecStop=/usr/bin/docker stop --time 60 booksys-byparr booksys-pyload booksys-pg-prfpw-postgres
+TimeoutStartSec=1000
+TimeoutStopSec=900
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target docker.service

@@ -39,55 +39,13 @@ def present(value: Any) -> bool:
     return value is not None and value != '' and value != [] and value != {}
 
 
-def accepted_work(asset: dict[str, Any], work: dict[str, Any], edition: dict[str, Any]) -> dict[str, Any] | None:
-    """Read one accepted work without rewriting compatible legacy records.
-
-    A retained exact-edition identity owns its work. Automatic work results are
-    proposals beside that identity, not another accepted work. Publication state
-    is not bibliographic metadata. Contested ownership remains unaccepted.
-    """
+def accepted_work(asset: dict[str, Any]) -> dict[str, Any] | None:
     if asset.get('contested'):
         return None
-    if asset.get('identity'):
-        return {**work, **{field: value for field, value in edition.items() if field != 'publication'}}
     result = asset.get('work_result', {})
     if result.get('status') == 'identified':
         return {**result['work'], 'field_conflicts': result.get('field_conflicts', {})}
     return None
-
-
-def proposal_conflicts(asset: dict[str, Any], work: dict[str, Any]) -> list[str]:
-    """Keep proposal disagreements visible without changing confirmed ownership."""
-    result = asset.get('work_result', {})
-    if not asset.get('identity') or result.get('status') != 'identified':
-        return []
-    proposed = result.get('work', {})
-    return [field for field in IDENTITY_FIELDS if present(work.get(field)) and present(proposed.get(field))
-            and normalized(work[field], field) != normalized(proposed[field], field)]
-
-
-def merge_work_decision(result: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
-    """Confirm supplied work fields without replacing fresh source observations.
-
-    Empty work-confirmation fields are unknown, not field overrides. Explicit
-    overrides remain in the separate canonical override action and asset map.
-    """
-    merged = {**deepcopy(decision), **deepcopy(result)}
-    for field in ('status', 'edition_status', 'reason', 'decision'):
-        if field in decision:
-            merged[field] = deepcopy(decision[field])
-    source_work, confirmed = result.get('work', {}), decision.get('work', {})
-    agrees = not any(present(source_work.get(field)) and present(confirmed.get(field))
-                     and normalized(source_work[field], field) != normalized(confirmed[field], field)
-                     for field in IDENTITY_FIELDS)
-    # Keep contradictory source assertions in candidates/evidence, but do not
-    # attach their metadata to the operator's different accepted work.
-    merged['work'] = {**deepcopy(source_work if agrees else {}),
-                      **{field: deepcopy(value) for field, value in decision.get('work', {}).items()
-                         if present(value)}}
-    merged['field_conflicts'] = {**deepcopy(decision.get('field_conflicts', {})),
-                                 **deepcopy(result.get('field_conflicts', {}))}
-    return merged
 
 
 def informative(value: Any) -> bool:
@@ -144,7 +102,7 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
     are source assertions, not operator decisions or exact-edition confirmations.
     """
     result: dict[str, Any] = {'status': 'review', 'reason': 'No informative asset-bound evidence',
-        'work': {}, 'edition_status': 'unknown', 'field_conflicts': {}, 'provenance': [],
+        'work': {}, 'field_conflicts': {}, 'provenance': [],
         'candidates': deepcopy(candidates)}
     if evidence.get('identity_conflicts'):
         result.update(reason='Contradictory asset identity evidence',

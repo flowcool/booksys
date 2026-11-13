@@ -1,4 +1,3 @@
-"""Versioned catalogue, optimistic writes, immutable decision evidence."""
 from __future__ import annotations
 
 import copy
@@ -21,7 +20,7 @@ import yaml
 
 from library.primitives import (LibraryError, digest, now, sync_dir, atomic_yaml, lock,
                                 TABLES, empty, validate, WorkingState)
-from library.effects import apply_effect
+
 
 
 class Catalog:
@@ -29,7 +28,6 @@ class Catalog:
         from library.store import Store
         self.directory = directory
         self.path = directory / 'library.yaml'
-        self.decisions = directory / 'library-decisions'
         if store is None:
             from library.authority import read_manifest
             manifest = read_manifest(directory)
@@ -114,129 +112,12 @@ class Catalog:
             removed = sorted(set(before) - set(after))
             if removed:
                 change.deletes[kind] = removed
-        if state['ledger'] != state.original['ledger']:
-            change.ledger = list(state['ledger'])
         return PreparedResult(change, copy.deepcopy(state.conflict), int(state['revision']))
 
     def save(self, state: dict[str, Any], *, expected: int) -> None:
         prepared = self.prepare(state)
         self._store.commit(prepared.change, expected_revision=expected, conflict=prepared.conflict)
 
-    def ledger(self) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
-        self.decisions.mkdir(parents=True, exist_ok=True)
-        for path in sorted(self.decisions.glob('*.yaml')):
-            record = yaml.safe_load(path.read_text())
-            if not isinstance(record, dict) or 'id' not in record:
-                raise LibraryError('Invalid decision record')
-            payload = {k: v for k, v in record.items() if k != 'id'}
-            if (record['id'] != digest(payload) or record.get('schema') not in (1, 2) or
-                    record.get('sequence') != len(records) + 1 or
-                    path.name != f"{len(records)+1:09d}-{record['id']}.yaml" or
-                    record.get('previous') != (records[-1]['id'] if records else None)):
-                raise LibraryError('Decision evidence lost or altered')
-            records.append(record)
-        indexed = self._store.decisions()
-        if len(indexed) > len(records) or any(record != records[index] for index,record in enumerate(indexed)):
-            raise LibraryError('Decision ledger is incomplete; admission suspended')
-        return records
-
-    def append_decision(self, payload: dict[str, Any], *, conflict: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Caller owns the process decision exclusion; immutable bytes precede indexing."""
-        backend = self.backend()
-        self.decisions.mkdir(parents=True, exist_ok=True)
-        # A retained suffix is resumed with the same immutable input only.
-        indexed=backend.decision_head()
-        sequence=indexed['sequence'] if indexed else 0
-        if indexed:
-            head=self.decisions/f"{sequence:09d}-{indexed['id']}.yaml"
-            if not head.is_file() or yaml.safe_load(head.read_text())!=indexed:
-                raise LibraryError('Decision evidence lost or altered')
-        # Startup audits the full prefix. Appends inspect only the predecessor and
-        # at most one retained suffix payload, under the existing process lock.
-        suffix=[]
-        for path in self.decisions.glob('*.yaml'):
-            try:position=int(path.name.split('-',1)[0])
-            except ValueError:raise LibraryError('Invalid decision record') from None
-            if position>sequence:
-                suffix.append(path)
-                if len(suffix)>1:
-                    raise LibraryError('Reconcile interrupted decision append before confirmation')
-        if suffix:
-            retained: dict[str,Any]=yaml.safe_load(suffix[0].read_text())
-            if not isinstance(retained,dict):
-                raise LibraryError('Invalid decision record')
-            actual={key:value for key,value in retained.items()
-                    if key not in ('schema','sequence','previous','id')}
-            expected={**actual,'schema':2 if actual.get('action') in ('resolve','resolution_result') else 1,
-                      'sequence':sequence+1,'previous':indexed['id'] if indexed else None}
-            if (actual!=payload or retained!={**expected,'id':digest(expected)}
-                    or suffix[0].name!=f"{sequence+1:09d}-{retained['id']}.yaml"):
-                raise LibraryError('Reconcile interrupted decision append before confirmation')
-            backend.index_decision(retained)
-            return retained
-        record = backend.reserve_decision(payload,conflict=conflict)
-        path = self.decisions / f"{record['sequence']:09d}-{record['id']}.yaml"
-        if not path.exists():
-            atomic_yaml(path, record, exclusive=True)
-        elif yaml.safe_load(path.read_text()) != record:
-            raise LibraryError('Decision differs from retained immutable evidence')
-        backend.index_decision(record)
-        return record
-
-    def project_pending(self, *, locked: bool = False) -> None:
-        backend = self.backend()
-        with nullcontext() if locked else lock(self.directory / 'decisions.lock'):
-            # The append may have committed its reservation before writing any
-            # immutable bytes. Recover that exact payload before chain indexing.
-            for record in backend.pending_decisions():
-                path = self.decisions / f"{record['sequence']:09d}-{record['id']}.yaml"
-                if not path.exists():
-                    atomic_yaml(path,record,exclusive=True)
-                elif yaml.safe_load(path.read_text()) != record:
-                    raise LibraryError('Decision differs from retained immutable evidence')
-            # Recovery indexes retained immutable bytes without repeating an effect.
-            for record in self.ledger():
-                backend.index_decision(record)
-            with backend._database.connection() as db:
-                _, applied = backend.check(db)
-            for record in backend.decisions(after=len(applied)):
-                if record.get('completion_task'):
-                    break  # The owning task must project this result in its completion transaction.
-                values = record.get('values', {})
-                refs = {'assets': [record['target']]}
-                for table, key in (('works', 'work_id'), ('editions', 'edition_id'), ('works', 'source_work_id')):
-                    if values.get(key):
-                        refs.setdefault(table, []).append(values[key])
-                refs.setdefault('editions', []).extend(record.get('affected_editions', []))
-                claims={field:[str(values['edition'][field])] for field in ('isbn','reference') if values.get('edition',{}).get(field)}
-                state = self.result_set(record['action'],refs,claims=claims)
-                if record['sequence'] != len(state['ledger']) + 1:
-                    raise LibraryError('Non-prefix decision projection')
-                from library.decision_model import verify_record_evidence
-                verify_record_evidence(self, record)
-                apply_effect(state, record, replay=True)
-                state['ledger'].append(record['id'])
-                prepared = self.prepare(state)
-                from dataclasses import asdict
-                from library.codec import encode
-                from library.store import _projection
-                capability=_projection.set((encode(record),encode(asdict(prepared.change))))
-                try:
-                    backend.commit(prepared.change, expected_revision=prepared.revision,
-                                   conflict=prepared.conflict, commit_key='decision-project:' + record['id'])
-                finally:
-                    _projection.reset(capability)
-
-    def replay(self) -> dict[str, Any]:
-        """Audit immutable evidence and project the pending prefix forward."""
-        from library.decision_model import verify_record_evidence
-        with lock(self.directory / 'decisions.lock'):
-            for record in self.ledger():
-                verify_record_evidence(self, record)
-            self.project_pending(locked=True)
-        return self.read()
-
 
 __all__ = ['Catalog', 'LibraryError', 'digest', 'now', 'sync_dir', 'atomic_yaml', 'lock',
-           'TABLES', 'empty', 'validate', 'WorkingState', 'apply_effect']
+           'TABLES', 'empty', 'validate', 'WorkingState']

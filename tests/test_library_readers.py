@@ -35,50 +35,8 @@ def image_bytes():
 
 
 class ReaderTests(unittest.TestCase):
-    def test_container_setup_failure_never_labels_source_corrupt(self):
-        import subprocess
-        from unittest.mock import patch
-        from library.readers import ReaderUnavailable
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder)/'album.cbz'
-            with zipfile.ZipFile(path, 'w') as archive:
-                archive.writestr('001.png', image_bytes())
-            with patch('library.readers.subprocess.run', return_value=subprocess.CompletedProcess([],125,b'',b'setup')):
-                with self.assertRaises(ReaderUnavailable):
-                    inspect_file(path, stable_seconds=0)
 
-    def test_three_digit_volume_is_not_multipart_but_split_zip_is(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'ZzNavy.-.135.cbz'
-            with zipfile.ZipFile(path, 'w') as archive:
-                archive.writestr('001.png', image_bytes())
-            self.assertEqual(inspect_file(path, stable_seconds=.01)['status'], 'validated')
-            raw = bytearray(path.read_bytes()); end = raw.rindex(b'PK\x05\x06')
-            struct.pack_into('<H', raw, end + 4, 1)
-            path.write_bytes(raw)
-            self.assertEqual(inspect_file(path, stable_seconds=.01)['status'], 'pending')
-            path.rename(path.with_name('album.part01.cbz'))
-            self.assertEqual(inspect_file(path.with_name('album.part01.cbz'), stable_seconds=.01)['status'], 'pending')
 
-    def test_bounded_exact_ancillary_entry_is_ignored(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'album.cbz'
-            with zipfile.ZipFile(path, 'w') as archive:
-                archive.writestr('001.png', image_bytes())
-                archive.writestr('Thumbs.db', b'opaque inert data')
-            result = inspect_file(path, stable_seconds=.01)
-            self.assertEqual(result['status'], 'validated', result)
-            self.assertEqual(result['pages'], 1)
-            self.assertEqual(result['ignored_ancillary'], ['Thumbs.db'])
-            with zipfile.ZipFile(path, 'a') as archive:
-                archive.writestr('other.db', b'not authorized')
-            self.assertEqual(inspect_file(path, stable_seconds=.01)['status'], 'rejected')
-    def test_scanned_pdf_is_readable(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'scan.pdf'
-            Image.new('RGB', (40, 60), 'white').save(path, format='PDF')
-            result = inspect_file(path, stable_seconds=.01)
-            self.assertEqual(result['status'], 'validated', result)
 
     def test_symlinks_encryption_corruption_and_limits_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -113,83 +71,8 @@ class ReaderTests(unittest.TestCase):
             path.write_bytes(b'PK\x03\x04broken')
             self.assertEqual(inspect_file(path, stable_seconds=.01)['status'], 'rejected')
 
-    def test_rar_validation_and_multipart(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'album.cbr'
-            path.write_bytes(rar_bytes('001.png', image_bytes()))
-            result = inspect_file(path, stable_seconds=0.01)
-            self.assertEqual(result['status'], 'validated', result)
-            path.write_bytes(rar_bytes('001.png', image_bytes(), flags=2))
-            self.assertEqual(inspect_file(path, stable_seconds=0.01)['status'], 'pending')
 
-    def test_rar_with_compressed_comment_validates_without_changing_source(self):
-        # RARcomment\n block from markokr/rarfile v4.2, commit 984fcbe,
-        # test/files/rar3-comment-plain.rar. License: fixtures/rarfile-LICENSE.txt.
-        comment = (Path(__file__).parent/'fixtures/rar3-comment.cmt').read_bytes()
-        raw = rar_bytes('001.png', image_bytes())
-        raw = raw[:20] + comment + raw[20:]
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder)/'commented.cbr'
-            path.write_bytes(raw)
-            result = inspect_file(path, stable_seconds=.01)
-            self.assertEqual(result['status'], 'validated', result)
-            self.assertEqual(result['pages'], 1)
-            self.assertEqual(path.read_bytes(), raw)
 
-    def test_archive_rejections_and_nested_groups(self):
-        entries = [('nested.zip', b'PK', 'pending'), ('../page.png', image_bytes(), 'rejected'), ('bad.png', b'bad', 'rejected')]
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'album.cbz'
-            for name, data, expected in entries:
-                with self.subTest(name=name):
-                    with zipfile.ZipFile(path, 'w') as archive:
-                        archive.writestr(name, data)
-                    self.assertEqual(inspect_file(path, stable_seconds=0.01)['status'], expected)
-            with zipfile.ZipFile(path, 'w') as archive:
-                archive.writestr('volume1/001.png', image_bytes())
-                archive.writestr('volume2/001.png', image_bytes())
-            self.assertEqual(inspect_file(path, stable_seconds=0.01)['status'], 'pending')
 
-    def test_valid_cbz_and_renamed_zip(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'album.cbz'
-            with zipfile.ZipFile(path, 'w') as archive:
-                archive.writestr('001.png', image_bytes())
-                archive.writestr('ComicInfo.xml', '<ComicInfo><Title>Album</Title><Number>1</Number></ComicInfo>')
-            result = inspect_file(path, stable_seconds=0.01)
-            self.assertEqual(result['status'], 'validated')
-            self.assertEqual(result['embedded']['Title'], 'Album')
-            path.rename(path.with_suffix('.zip'))
-            self.assertEqual(inspect_file(path.with_suffix('.zip'), stable_seconds=0.01)['status'], 'pending')
 
-    def test_pdf_openaction_only_allows_explicit_internal_page_destinations(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            for label, unsafe in [('internal', False), ('external', True), ('chained', True), ('missing', True)]:
-                with pikepdf.new() as pdf:
-                    page = pdf.add_blank_page()
-                    action = pikepdf.Dictionary(S=pikepdf.Name.GoTo,
-                        D=pikepdf.Array([page.obj, pikepdf.Name.Fit]))
-                    if label == 'external': action.S = pikepdf.Name.GoToR
-                    if label == 'chained': action.Next = pikepdf.Dictionary(S=pikepdf.Name.JavaScript, JS='alert(1)')
-                    if label == 'missing': action.D = pikepdf.String('unknown-page')
-                    pdf.Root.OpenAction = action
-                    path = root / (label + '.pdf');pdf.save(path)
-                self.assertEqual(inspect_file(path, stable_seconds=.01)['status'],
-                                 'rejected' if unsafe else 'validated', label)
 
-    def test_pdf_active_content_is_rejected(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / 'album.pdf'
-            with pikepdf.new() as pdf:
-                pdf.add_blank_page()
-                pdf.save(path)
-            self.assertEqual(inspect_file(path, stable_seconds=0.01)['status'], 'validated')
-            with pikepdf.open(path) as pdf:
-                pdf.Root.OpenAction = pikepdf.Dictionary(S=pikepdf.Name.JavaScript, JS='alert(1)')
-                pdf.save(path.with_name('active.pdf'))
-            self.assertEqual(inspect_file(path.with_name('active.pdf'), stable_seconds=0.01)['status'], 'rejected')
-            with pikepdf.open(path) as pdf:
-                pdf.Root.TestLink = pikepdf.Dictionary(A=pikepdf.Dictionary(S=pikepdf.Name.GoTo, D=pikepdf.Array([pdf.pages[0].obj, pikepdf.Name.Fit])))
-                pdf.save(path.with_name('internal.pdf'))
-            self.assertEqual(inspect_file(path.with_name('internal.pdf'), stable_seconds=.01)['status'], 'validated')

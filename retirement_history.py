@@ -26,6 +26,13 @@ def package_identity(package: dict[str, Any]) -> dict[str, Any]:
         'links': sorted([[f['fid'], f['url'], f['name'], f['status']] for f in package['links']])}
 
 
+def same_package(retained: dict[str, Any], live: dict[str, Any]) -> bool:
+    """pyLoad gives a deleted package's id to a later package. Name and link set tell them apart."""
+    def links(package: dict[str, Any]) -> list[tuple[Any, Any]]:
+        return sorted((f['fid'], f['url']) for f in package['links'])
+    return retained.get('name') == live.get('name') and links(retained) == links(live)
+
+
 def read_history(path: Path) -> dict[str, Any]:
     from library.operational_state import NativeHistory
     value = NativeHistory(path.parent).retirements()
@@ -59,11 +66,14 @@ def validate_history(value: dict[str,Any]) -> dict[str,Any]:
 def retained_snapshot(packages: list[dict[str, Any]], path: Path) -> list[dict[str, Any]]:
     result = copy.deepcopy(packages)
     live = {p['pid']: p for p in result}
+    kept: dict[Any, dict[str, Any]] = {}
     for source, record in read_history(path)['acquisitions'].items():
         if record['phase'] == 'prepared':
             continue
         for package in record['packages'].values():
             if package['pid'] in live:
+                if not same_package(package, live[package['pid']]):
+                    continue  # another package took the id after the delete; the retained one is gone
                 if package_identity(package) != package_identity(live[package['pid']]):
                     raise CollectionError('Retirement target changed; inspect before proceeding')
                 if record['phase'] == 'retired':
@@ -73,5 +83,8 @@ def retained_snapshot(packages: list[dict[str, Any]], path: Path) -> list[dict[s
             retained.update(retirement=record['phase'], retirement_source=source,
                             retirement_recorded_at=record['created_at'], live=False,
                             retirement_proof={'origins': record['origins'], 'files': record['files']})
-            result.append(retained)
+            older = kept.get(package['pid'])
+            if older is None or str(older['retirement_recorded_at']) <= str(retained['retirement_recorded_at']):
+                kept[package['pid']] = retained  # pyLoad reuses ids: one retained package per id, the newest record
+    result.extend(kept.values())
     return result

@@ -1,37 +1,38 @@
 # Candidate topology. Qualification and exact cutover proof remain required.
 name: ${BOOKSYS_PROJECT:-booksys}
-x-business: &id001
+x-business: &business
   image: ${BOOKSYS_APP_IMAGE:?Select an identified application candidate}
   user: 1000:1000
   read_only: true
-  cap_drop: &id014
+  cap_drop: &cap_drop_all
   - ALL
-  security_opt: &id015
+  security_opt: &no_new_privileges
   - no-new-privileges:true
   restart: on-failure
+  # Return a failed startup or shutdown within the recorded lifecycle deadline.
   stop_grace_period: 30s
+  # Bound service processes and threads; the browser requires more tasks than an application worker.
   pids_limit: 48
   cgroup_parent: ${BOOKSYS_CGROUP_PARENT:?Select the qualified shared business slice}
-  logging: &id016
+  logging: &json_logging
     driver: json-file
     options:
-      max-size: 10m
-      max-file: '3'
-  tmpfs: &id017
+      # Rotate container logs at three files of 10m to bound local disk consumption.
+      max-size: ${DOCKER_LOGGING_MAX_SIZE:-10m}
+      max-file: ${DOCKER_LOGGING_MAX_FILE:-3}
+  tmpfs: &tmp_tmpfs
+  # Bound memory-backed temporary files and browser shared memory inside service resource limits.
   - /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777
   cgroup: host
   init: true
-  environment: &id002
+  environment: &business_env
+    BOOKSYS_CRAWL_PAGES: ${BOOKSYS_CRAWL_PAGES:-100}  # newest catalogue pages the collector reads: a pass reads 5 fresh pages + 10 deep pages; passes are 5 min apart until the deep crawl reaches this page, then once a day (library/native_projection.py)
+    BOOKSYS_WORK_STAGES: ${BOOKSYS_WORK_STAGES:-}  # stages that run on work_items; empty = the old actor everywhere
     BOOKSYS_ADMISSION_STATE: /data/booksys/library-lab/state
-    BOOKSYS_ACTIVITY_DIR: /data/booksys/library-lab/state/activity
     BOOKSYS_RELOCATION_RECEIPT: /config/relocation.json
-    BOOKSYS_READER_SOCKET: /reader-ipc/reader.sock
-    BOOKSYS_READER_INPUTS: /data/booksys
-    BOOKSYS_READER_JOBS: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
     BOOKSYS_ATTACHMENT_ROOT: /media/attachments
     BOOKSYS_PIECES_ROOT: /media/pieces
     BOOKSYS_NAS_WRITER_UID: '1003'
-    BOOKSYS_READER_REQUESTS: /data/booksys/library-lab/state/reader-requests
     BOOKSYS_SUPERVISOR: compose
     TMPDIR: /nas-tmp
     BOOKSYS_PYLOAD_SCRIPTS_ROOT: /pyload-scripts
@@ -41,6 +42,13 @@ x-business: &id001
     BOOKSYS_FICHE_ROOT: /data/booksys/state/downloads
     BOOKSYS_BUNDLE_INPUT_ROOT: /data/booksys/library-lab/state/bundle-inputs
   volumes:
+  - &vol_work
+    type: bind
+    source: ${BOOKSYS_LOCAL_ROOT}/work
+    target: /data/booksys/work
+    read_only: false
+    bind:
+      create_host_path: false
   - &postgres_socket
     type: bind
     source: ${BOOKSYS_POSTGRES_SOCKET_ROOT:?Select local PostgreSQL socket directory}
@@ -54,115 +62,109 @@ x-business: &id001
     read_only: true
     bind:
       create_host_path: false
-  - &id003
+  - &vol_local_state
     type: bind
     source: ${BOOKSYS_LOCAL_ROOT:?Select local technical state}
     target: /data/booksys/library-lab
     read_only: false
     bind:
       create_host_path: false
-  - &id004
+  - &vol_collector_state
     type: bind
     source: ${BOOKSYS_COLLECTOR_ROOT:?Select collector state}
     target: /data/booksys/state
     read_only: false
     bind:
       create_host_path: false
-  - &id005
+  - &vol_stack_config
     type: bind
     source: ${BOOKSYS_STACK_CONFIG:?Select qualified stack configuration}
     target: /config
     read_only: true
     bind:
       create_host_path: false
-  - &id006
+  - &vol_pyload_credentials
     type: bind
     source: ${BOOKSYS_CREDENTIALS_FILE:?Select retained pyLoad credentials}
     target: /secrets/pyload.json
     read_only: true
     bind:
       create_host_path: false
-  - &id007
+  - &vol_nas_downloads
     type: bind
     source: ${BOOKSYS_NAS_FILES_ROOT:?Select qualified NAS files mount}/downloads
     target: /data/booksys/downloads
     read_only: true
-    bind: &id018
+    bind: &bind_existing_a
       create_host_path: false
-  - &id008
+  - &vol_bundle_inputs
     type: bind
-    source: ${BOOKSYS_NAS_FILES_ROOT}/work/bundle-inputs
+    source: ${BOOKSYS_LOCAL_ROOT}/bundle-inputs
     target: /data/booksys/library-lab/state/bundle-inputs
     read_only: false
-    bind: &id019
+    bind: &bind_existing_b
       create_host_path: false
-  - &id009
+  - &vol_web_covers
     type: bind
-    source: ${BOOKSYS_NAS_FILES_ROOT}/work/web-covers
+    source: ${BOOKSYS_LOCAL_ROOT}/web-covers
     target: /data/booksys/library-lab/evidence/web-covers
     read_only: false
     bind:
       create_host_path: false
-  - &id010
+  - &vol_collector_covers
     type: bind
-    source: ${BOOKSYS_NAS_FILES_ROOT}/work/collector-covers
+    source: ${BOOKSYS_LOCAL_ROOT}/collector-covers
     target: /data/booksys/state/downloads
     read_only: false
     bind:
       create_host_path: false
-  - &id011
+  - &vol_library
     type: bind
     source: ${BOOKSYS_NAS_LIBRARY_ROOT:?Select qualified managed-library mount}
     target: /data/booksys/library-lab/library
     read_only: false
-    bind: &id020
+    bind: &bind_existing_c
       create_host_path: false
-  - type: bind
-    source: ${BOOKSYS_READER_IPC_ROOT:?Select private reader IPC directory}
-    target: /reader-ipc
-    bind: &id012
-      create_host_path: false
-    read_only: true
-  - type: bind
-    source: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-    target: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-    bind:
-      create_host_path: false
-    read_only: true
-  - type: bind
+  - &vol_cgroup
+    type: bind
     source: /sys/fs/cgroup
     target: /sys/fs/cgroup
     read_only: true
     bind:
       create_host_path: false
-  - type: bind
-    source: ${BOOKSYS_NAS_FILES_ROOT}/work/attachments
+  - &vol_attachments
+    type: bind
+    source: ${BOOKSYS_LOCAL_ROOT}/attachments
     target: /media/attachments
     bind:
       create_host_path: false
-  - type: bind
-    source: ${BOOKSYS_NAS_FILES_ROOT}/work/pieces
+  - &vol_pieces
+    type: bind
+    source: ${BOOKSYS_LOCAL_ROOT}/pieces
     target: /media/pieces
     bind:
       create_host_path: false
-  - type: bind
-    source: ${BOOKSYS_NAS_FILES_ROOT}/work/tmp
+  - &vol_tmp
+    type: bind
+    source: ${BOOKSYS_LOCAL_ROOT}/tmp
     target: /nas-tmp
     bind:
       create_host_path: false
-  - type: bind
+  - &vol_nas_identity
+    type: bind
     source: ${BOOKSYS_NAS_FILES_ROOT}
     target: /nas-identity
     read_only: true
     bind:
       create_host_path: false
-  - type: bind
+  - &vol_pyload_scripts
+    type: bind
     source: ${BOOKSYS_PYLOAD_CONFIG_ROOT}/scripts
     target: /pyload-scripts
     read_only: true
     bind:
       create_host_path: false
-  - &id013
+  - &vol_library_identity
     type: bind
     source: ${BOOKSYS_NAS_LIBRARY_EXPORT_ROOT:?Select qualified library export mount}
     target: /nas-library-identity
@@ -173,18 +175,20 @@ services:
   postgres:
     profiles: [retained-dependencies]
     image: ${BOOKSYS_POSTGRES_IMAGE:?Select exact PostgreSQL 18.6 image}
-    container_name: ${BOOKSYS_PROJECT:-booksys}-postgres
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-postgres
     user: 999:999
     group_add: ['1000']
     network_mode: none
     restart: unless-stopped
     stop_grace_period: 60s
-    security_opt: *id015
-    cap_drop: *id014
-    logging: *id016
+    security_opt: *no_new_privileges
+    cap_drop: *cap_drop_all
+    logging: *json_logging
+    # Cap each service's memory and disallow extra swap; the shared slice can impose a lower aggregate ceiling.
     mem_limit: 512m
     memswap_limit: 512m
     pids_limit: 128
+    # Bound CPU use per service while preserving the separate application slice ceiling.
     cpus: '1'
     tmpfs:
     - /var/run/postgresql:rw,nosuid,nodev,noexec,size=1m,mode=0770,uid=999,gid=1000
@@ -204,6 +208,7 @@ services:
       PGDATA: /var/lib/postgresql/18/docker
     # The pinned entrypoint clears PGHOST for its temporary bootstrap psql.
     # Its private default socket is never mounted into another service.
+    # Bound PostgreSQL backend count and SQL working memory within its container envelope.
     command: ['postgres', '-c', 'listen_addresses=', '-c', 'unix_socket_directories=/var/run/postgresql,${BOOKSYS_POSTGRES_SOCKET_ROOT}', '-c', 'unix_socket_permissions=0770', '-c', 'unix_socket_group=1000', '-c', 'max_connections=40', '-c', 'shared_buffers=128MB', '-c', 'work_mem=4MB']
     volumes:
     - type: bind
@@ -219,91 +224,24 @@ services:
       bind:
         create_host_path: false
   controller:
-    depends_on:
-      reader-launcher:
-        condition: service_healthy
-    <<: *id001
+    <<: *business
     environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: controller
-      BOOKSYS_NAS_CONTRACT: /config/nas-controller.json
-    volumes:
-    - *postgres_socket
-    - *postgres_app_credential
-    - *id003
-    - *id004
-    - *id005
-    - *id006
-    - *id007
-    - *id008
-    - *id009
-    - *id010
-    - *id011
-    - type: bind
-      source: ${BOOKSYS_IPC_ROOT:?Select private IPC directory}
-      target: /ipc
-      read_only: false
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_READER_IPC_ROOT:?Select private reader IPC directory}
-      target: /reader-ipc
-      bind: *id012
-      read_only: true
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-      target: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-      bind:
-        create_host_path: false
-      read_only: true
-    - type: bind
-      source: /sys/fs/cgroup
-      target: /sys/fs/cgroup
-      read_only: true
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}/work/attachments
-      target: /media/attachments
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}/work/pieces
-      target: /media/pieces
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}/work/tmp
-      target: /nas-tmp
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}
-      target: /nas-identity
-      read_only: true
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_PYLOAD_CONFIG_ROOT}/scripts
-      target: /pyload-scripts
-      read_only: true
-      bind:
-        create_host_path: false
-    - *id013
-    mem_limit: 1024m
-    memswap_limit: 1024m
+      <<: *business_env
+    mem_limit: 2048m
+    memswap_limit: 2048m
     cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-controller
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-controller
+    ports:
+    - ${BOOKSYS_WEB_BIND_ADDRESS:?Preserve the existing web listen address}:${BOOKSYS_WEB_PORT:-8768}:8768
     command:
     - ops/library_service.py
     - --root
     - /data/booksys/library-lab
     - --credentials
     - /secrets/pyload.json
-    - --activity
     - --independent-queues
-    - --ipc-socket
-    - /ipc/controller.sock
+    - --listen
+    - 0.0.0.0
     - --public-host
     - ${BOOKSYS_PUBLIC_HOST:?Preserve the operator endpoint}
     - --public-origin
@@ -315,29 +253,7 @@ services:
       - CMD
       - /app/.venv/bin/python
       - -c
-      - |
-        import http.client,json
-        from pathlib import Path
-        from library.compose_transport import ReconnectingRemote
-        client=http.client.HTTPConnection('web',8768,timeout=2)
-        try:
-            client.connect()
-        except OSError:
-            client.close()
-            remote=ReconnectingRemote(Path('/ipc/controller.sock'))
-            try:
-                value=remote.call('token',dict(payload={},host='${BOOKSYS_PUBLIC_HOST}',origin='',token=''))
-            finally:
-                remote.close()
-        else:
-            try:
-                client.request('GET','/api/resolution/token',headers={'Host':'${BOOKSYS_PUBLIC_HOST}'})
-                response=client.getresponse()
-                assert response.status==200
-                value=json.loads(response.read())
-            finally:
-                client.close()
-        assert isinstance(value.get('token'),str)
+      - import http.client; client=http.client.HTTPConnection('127.0.0.1',8768,timeout=2); client.request('GET','/',headers={'Host':'${BOOKSYS_PUBLIC_HOST}'}); assert client.getresponse().status==200
       interval: 30s
       timeout: 10s
       retries: 3
@@ -346,15 +262,39 @@ services:
     depends_on:
       controller:
         condition: service_healthy
-    <<: *id001
+    <<: *business
+    volumes: &external_volumes
+    - *vol_work
+    - *postgres_socket
+    - *postgres_app_credential
+    - *vol_local_state
+    - *vol_collector_state
+    - *vol_stack_config
+    - *vol_pyload_credentials
+    - *vol_nas_downloads
+    - *vol_bundle_inputs
+    - *vol_web_covers
+    - *vol_collector_covers
+    - *vol_library
+    - *vol_cgroup
+    - *vol_attachments
+    - *vol_pieces
+    - *vol_tmp
+    - *vol_nas_identity
+    - *vol_pyload_scripts
+    - *vol_library_identity
+    - type: bind
+      source: /mnt/booksys-host/comics-originals
+      target: /opt/booksys/comics-originals
+      read_only: true
+      bind:
+        create_host_path: false
     environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: discovery
-      BOOKSYS_NAS_CONTRACT: /config/nas-discovery.json
-    mem_limit: 512m
-    memswap_limit: 512m
+      <<: *business_env
+    mem_limit: 1024m
+    memswap_limit: 1024m
     cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-discovery
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-discovery
     command:
     - -m
     - library.stage_worker
@@ -392,17 +332,15 @@ services:
       start_period: 30s
   collection:
     depends_on:
-      discovery:
+      controller:
         condition: service_healthy
-    <<: *id001
+    <<: *business
     environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: collection
-      BOOKSYS_NAS_CONTRACT: /config/nas-collection.json
+      <<: *business_env
     mem_limit: 512m
     memswap_limit: 512m
     cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-collection
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-collection
     command:
     - -m
     - library.stage_worker
@@ -433,17 +371,16 @@ services:
       start_period: 30s
   intake:
     depends_on:
-      collection:
+      controller:
         condition: service_healthy
-    <<: *id001
+    <<: *business
+    volumes: *external_volumes
     environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: intake
-      BOOKSYS_NAS_CONTRACT: /config/nas-intake.json
-    mem_limit: 256m
-    memswap_limit: 256m
+      <<: *business_env
+    mem_limit: 2048m
+    memswap_limit: 2048m
     cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-intake
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-intake
     command:
     - -m
     - library.stage_worker
@@ -472,50 +409,34 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-  processing:
+  metadata:
+    <<: *business
     depends_on:
-      intake:
+      controller:
         condition: service_healthy
-    <<: *id001
-    environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: processing
-      BOOKSYS_NAS_CONTRACT: /config/nas-processing.json
-    mem_limit: 512m
-    memswap_limit: 512m
-    cpus: '2'
-    pids_limit: 96
-    container_name: ${BOOKSYS_PROJECT:-booksys}-processing
-    command:
-    - -m
-    - supervisor.supervisord
-    - --configuration
-    - /app/ops/processing.conf
+    mem_limit: 1024m
+    memswap_limit: 1024m
+    cpus: '1'
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-metadata
+    command: -m library.stage_worker --root /data/booksys/library-lab --collector /data/booksys/state --reception /data/booksys/downloads --credentials /secrets/pyload.json --endpoint http://pyload:8000 --byparr http://byparr:8191/v1 --queue metadata
     healthcheck:
-      test:
-      - CMD
-      - /app/.venv/bin/python
-      - -c
-      - *actor_readiness
-      - ocr
-      - metadata
+      test: [CMD, /app/.venv/bin/python, -c, *actor_readiness, metadata]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
   copies:
     depends_on:
-      processing:
+      controller:
         condition: service_healthy
-    <<: *id001
+    <<: *business
+    volumes: *external_volumes
     environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: copies
-      BOOKSYS_NAS_CONTRACT: /config/nas-copies.json
-    mem_limit: 256m
-    memswap_limit: 256m
+      <<: *business_env
+    mem_limit: 2048m
+    memswap_limit: 2048m
     cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-copies
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-copies
     command:
     - -m
     - library.stage_worker
@@ -546,17 +467,15 @@ services:
       start_period: 30s
   routing:
     depends_on:
-      copies:
+      controller:
         condition: service_healthy
-    <<: *id001
+    <<: *business
     environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: routing
-      BOOKSYS_NAS_CONTRACT: /config/nas-routing.json
+      <<: *business_env
     mem_limit: 512m
     memswap_limit: 512m
     cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-routing
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-routing
     command:
     - -m
     - library.stage_worker
@@ -585,102 +504,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-  retirement:
-    depends_on:
-      routing:
-        condition: service_healthy
-    <<: *id001
-    environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: retirement
-      BOOKSYS_NAS_CONTRACT: /config/nas-retirement.json
-    mem_limit: 512m
-    memswap_limit: 512m
-    cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-retirement
-    command:
-    - -m
-    - library.stage_worker
-    - --root
-    - /data/booksys/library-lab
-    - --collector
-    - /data/booksys/state
-    - --reception
-    - /data/booksys/downloads
-    - --credentials
-    - /secrets/pyload.json
-    - --endpoint
-    - http://pyload:8000
-    - --byparr
-    - http://byparr:8191/v1
-    - --queue
-    - retirement
-    healthcheck:
-      test:
-      - CMD
-      - /app/.venv/bin/python
-      - -c
-      - *actor_readiness
-      - retirement
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-  web:
-    depends_on:
-      controller:
-        condition: service_healthy
-    image: ${BOOKSYS_APP_IMAGE:?Select an identified application candidate}
-    user: 1000:1000
-    read_only: true
-    cap_drop: *id014
-    security_opt: *id015
-    restart: on-failure
-    stop_grace_period: 30s
-    pids_limit: 48
-    mem_limit: 64m
-    memswap_limit: 64m
-    cpus: '1'
-    cgroup_parent: ${BOOKSYS_CGROUP_PARENT:?Select the qualified shared business slice}
-    logging: *id016
-    tmpfs: *id017
-    environment:
-      BOOKSYS_PUBLIC_HOST: ${BOOKSYS_PUBLIC_HOST}
-    container_name: ${BOOKSYS_PROJECT:-booksys}-web
-    volumes:
-    - type: bind
-      source: ${BOOKSYS_IPC_ROOT}
-      target: /ipc
-      read_only: true
-      bind:
-        create_host_path: false
-    ports:
-    - ${BOOKSYS_WEB_BIND_ADDRESS:?Preserve the existing web listen address}:${BOOKSYS_WEB_PORT:-8768}:8768
-    command:
-    - -m
-    - library.compose_web
-    - --socket
-    - /ipc/controller.sock
-    - --public-host
-    - ${BOOKSYS_PUBLIC_HOST}
-    - --public-origin
-    - ${BOOKSYS_PUBLIC_ORIGIN:-}
-    healthcheck:
-      test:
-      - CMD
-      - /app/.venv/bin/python
-      - -m
-      - library.stack_health
-      - web
-      interval: 30s
-      timeout: 10s
-      retries: 3
   byparr:
     profiles: [retained-dependencies]
     restart: unless-stopped
     stop_grace_period: 30s
-    logging: *id016
-    security_opt: *id015
+    logging: *json_logging
+    security_opt: *no_new_privileges
     container_name: ${BOOKSYS_PROJECT:-booksys}-byparr
     image: ${BOOKSYS_BYPARR_IMAGE:?Select retained Byparr extension}
     shm_size: 512m
@@ -705,8 +534,8 @@ services:
     profiles: [retained-dependencies]
     restart: unless-stopped
     stop_grace_period: 60s
-    logging: *id016
-    security_opt: *id015
+    logging: *json_logging
+    security_opt: *no_new_privileges
     container_name: ${BOOKSYS_PROJECT:-booksys}-pyload
     image: ${BOOKSYS_PYLOAD_IMAGE:?Select retained pyLoad extension}
     mem_limit: 1024m
@@ -716,8 +545,8 @@ services:
     ports:
     - ${BOOKSYS_BIND_ADDRESS:-0.0.0.0}:${BOOKSYS_PYLOAD_PORT:-8000}:8000
     environment:
-      PUID: '1000'
-      PGID: '1000'
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       TZ: ${TZ:-Europe/Zurich}
       BOOKSYS_NFS_SOURCE: ${BOOKSYS_NFS_FILES_SOURCE}
       BOOKSYS_NFS_SENTINEL_SHA256: 4f34ea560d283a641de4daf0a32b3ceea7ef34882e90f11ef1a6214b8fb4fc40
@@ -754,141 +583,20 @@ services:
       retries: 6
       start_period: 30s
   tools:
-    <<: *id001
+    <<: *business
     restart: 'no'
     environment:
-      <<: *id002
-      BOOKSYS_NAS_PROBE_ROLE: tools
-      BOOKSYS_NAS_CONTRACT: /config/nas-tools.json
+      <<: *business_env
     mem_limit: 512m
     memswap_limit: 512m
     cpus: '1'
-    container_name: ${BOOKSYS_PROJECT:-booksys}-tools
+    container_name: ${COMPOSE_PROJECT_NAME:?missing}-tools
     profiles:
     - tools
     command:
     - -m
     - library.cli
     - --help
-  reader-launcher:
-    user: 1000:1000
-    read_only: true
-    cap_drop: *id014
-    security_opt: *id015
-    restart: on-failure
-    stop_grace_period: 30s
-    pids_limit: 48
-    logging: *id016
-    tmpfs: *id017
-    cgroup_parent: ${BOOKSYS_CGROUP_PARENT:?Select the qualified shared business slice}
-    image: ${BOOKSYS_LAUNCHER_IMAGE:?Select the restricted launcher candidate}
-    container_name: ${BOOKSYS_PROJECT:-booksys}-reader-launcher
-    mem_limit: 128m
-    memswap_limit: 128m
-    cpus: '1'
-    network_mode: none
-    group_add:
-    - ${BOOKSYS_DOCKER_GID:?Select daemon socket group}
-    volumes:
-    - *postgres_socket
-    - type: bind
-      source: ${BOOKSYS_LAUNCHER_DATABASE_ROOT:?Select launcher-only PostgreSQL selector}
-      target: /launcher-db
-      read_only: true
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_LAUNCHER_DSN_FILE:?Select restricted launcher PostgreSQL credential}
-      target: ${BOOKSYS_LAUNCHER_DSN_FILE:?Select restricted launcher PostgreSQL credential}
-      read_only: true
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_READER_IPC_ROOT:?Select private reader IPC directory}
-      target: /reader-ipc
-      bind: *id012
-    - type: bind
-      source: /run/docker.sock
-      target: /var/run/docker.sock
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_LOCAL_ROOT}/state
-      target: /state
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-      target: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT:?Select qualified NAS files mount}/downloads
-      target: /data/booksys/downloads
-      read_only: true
-      bind: *id018
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}/work/bundle-inputs
-      target: /data/booksys/library-lab/state/bundle-inputs
-      read_only: true
-      bind: *id019
-    - type: bind
-      source: ${BOOKSYS_NAS_LIBRARY_ROOT:?Select qualified managed-library mount}
-      target: /data/booksys/library-lab/library
-      read_only: true
-      bind: *id020
-    - type: bind
-      source: ${BOOKSYS_STACK_CONFIG}
-      target: /config
-      read_only: true
-      bind:
-        create_host_path: false
-    - type: bind
-      source: ${BOOKSYS_NAS_FILES_ROOT}
-      target: /nas-identity
-      read_only: true
-      bind:
-        create_host_path: false
-    - *id013
-    command:
-    - -m
-    - library.reader_service
-    - --socket
-    - /reader-ipc/reader.sock
-    - --inputs
-    - /data/booksys
-    - --jobs
-    - ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-    - --state
-    - /state
-    - --image
-    - ${BOOKSYS_READER_IMAGE:?Select exact retained decoder ID}
-    - --job-uid
-    - '1003'
-    - --cgroup-parent
-    - ${BOOKSYS_CGROUP_PARENT}
-    healthcheck:
-      test:
-      - CMD
-      - /app/.venv/bin/python
-      - -c
-      - "import os; os.environ['BOOKSYS_READER_SOCKET']='/reader-ipc/reader.sock'; from library.reader_client import available; assert available()"
-      interval: 5s
-      timeout: 5s
-      retries: 6
-      start_period: 5s
-    environment:
-      BOOKSYS_LAUNCHER_DATABASE_DIR: /launcher-db
-      BOOKSYS_HOST_DOWNLOADS: ${BOOKSYS_NAS_FILES_ROOT}/downloads
-      BOOKSYS_HOST_BUNDLES: ${BOOKSYS_NAS_FILES_ROOT}/work/bundle-inputs
-      BOOKSYS_HOST_LIBRARY: ${BOOKSYS_NAS_LIBRARY_ROOT}
-      BOOKSYS_NAS_CONTRACT: /config/launcher-nas.json
-      BOOKSYS_COMPOSE_PROJECT: ${BOOKSYS_PROJECT:-booksys}
-      BOOKSYS_RETAINED_SOURCES_FILE: /config/retained-sources.json
-      BOOKSYS_NFS_FILES_SOURCE: ${BOOKSYS_NFS_FILES_SOURCE}
-      BOOKSYS_NFS_LIBRARY_SOURCE: ${BOOKSYS_NFS_LIBRARY_SOURCE}
-      BOOKSYS_READER_JOBS: ${BOOKSYS_NAS_FILES_ROOT}/work/reader-jobs
-
 # Candidate services join the exact retained dependency network.
 networks:
   default:

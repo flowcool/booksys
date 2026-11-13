@@ -1,51 +1,29 @@
 # PostgreSQL runtime
 
-Booksys has one operational authority: PostgreSQL 18.6 or later. Historical
-SQLite and YAML files are migration inputs and retained proof. They are not a
-runtime fallback. Preserve original downloads and uncertain-effect journals.
+Booksys has one operational authority: PostgreSQL 18.6 or later.
+Historical SQLite and YAML files remain migration inputs and retained proof.
+Preserve original downloads and uncertain-effect journals.
 
-The three public images have these roles:
-
-| Image | Roles |
+| Image | Role |
 | --- | --- |
-| `booksys-worker` | Controller, discovery, seven queue actors, web, tools and restricted reader launcher |
-| `booksys-library` | Networkless per-file archive, PDF and OCR readers |
+| `booksys-worker` | Collector pipeline |
+| `booksys-library` | Library CLI, HTTP controller and queue workers |
 | `booksys-byparr` | Retained browser-session adapter |
 
-PostgreSQL and pyLoad are separate upstream dependencies. Keep one existing
-downloader. The worker includes the Docker client for the restricted launcher.
-The retained pyLoad needs the NAS guard extension from Dockerfile.pyload.
-Build that extension locally, or retain an already qualified exact image.
-It is not a fourth published Booksys package and is not qualified by the three
-Booksys image jobs. Never replace an existing downloader through publication.
-Only that launcher receives a Docker socket. The other roles receive no Docker
-authority. The web receives read-only typed IPC, not database credentials.
+`Dockerfile.stack` supplies the application image used by `compose.stack.yaml`.
+The controller serves HTTP in its own process.
+Collection, intake, metadata, copies and routing use work_items.
+PostgreSQL and the single retained pyLoad remain separate dependencies.
+`Dockerfile.pyload` adds the NAS guard to the downloader image.
+It is not a fourth published Booksys package.
 
-`compose.stack.yaml` is the complete topology. It requires explicit image,
-credential, IPC, qualified NAS mount and retained dependency selections. It does
-not create a ready installation from defaults. `ops/stack_config.py` generates
-NAS contracts from resolved Compose and verified host mounts. Its files must
-match the selected environment. Private DSN files must have mode 0600.
+Compose requires explicit images, credentials, qualified NAS mounts and retained
+dependency selections. Private DSN files must have mode 0600.
+Inspect the selected configuration before any lifecycle action.
+Never repeat an uncertain downloader or file write without reconciliation.
+Keep recovery copies and proof until the outcome is known.
 
-The application entrypoint is `/app/.venv/bin/python`. Compose selects modules
-such as `library.stage_worker`, `ops.library_service`, `library.compose_web`
-and `library.reader_service`. OCR and metadata share one processing container
-under the fixed `ops/processing.conf` Supervisor configuration. A queue retains
-its own owner, durable grants, heartbeat and diagnostics.
-
-Use `ops/postgres_roles.py` after an explicit schema import to provision the
-restricted application and launcher roles. `ops/postgresql_stack.py` manages
-exact selected container identities and ordered lifecycle. Inspect its help and
-the selected runtime record before any lifecycle action. Publication runs none
-of these commands and does not deploy a stack.
-
-The launcher validates exact inputs, worker image, native readiness and stopped
-worker state before releasing grants. Store commit receipts resolve uncertain
-SQL commits. Never repeat an uncertain native write. Keep recovery copies and
-proof until the outcome is known. A responding web page alone does not prove
-reader availability or processing progress.
-
-CI uses a fresh PostgreSQL service, a synthetic catalogue and temporary paths.
-Its database has no connection to an operator installation. Image probes run
-without external network or real mounts. Source publication and image release
-remain separate from runtime activation.
+CI uses a disposable PostgreSQL service and synthetic temporary paths.
+Several tests require `BOOKSYS_TEST_PG_DSN_FILE`; they do not all skip when it is absent.
+Never point tests at an operator database.
+Source publication and image release remain separate from runtime activation.

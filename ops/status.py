@@ -15,17 +15,10 @@ collector = CollectorState(root / "state")
 monitor = collector.monitor()
 from mirrors import logical_snapshot
 queue = logical_snapshot(api, root / "state/mirror-routing.yaml")
-backfill = collector.backfill()
-backfill_summary = None if backfill is None else {
-    "status": backfill["status"], "pages_requested": backfill["pages_requested"],
-    "pages_captured": len(backfill["pages"]), "unique_items": len(backfill["items"]),
-    "submitted": backfill["submitted"],
-}
 result = {
     "server": api.call("status_server"),
     "categories": monitor["categories"],
     "submitted_items": len(monitor["submissions"]),
-    "backfill": backfill_summary,
     "fiches": None,
     "package_count": len(queue),
     "packages": [{"pid": p["pid"], "name": p["name"], "destination": p["dest"],

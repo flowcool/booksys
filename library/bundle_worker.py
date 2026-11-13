@@ -1,11 +1,10 @@
-"""Networkless one-level bundle extraction; original member names are data only."""
+"""One-level bundle extraction; original member names are data only."""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
-import re
 import resource
 import stat
 import struct
@@ -57,6 +56,8 @@ def extract(source: Path, output: Path, parts: list[Path] | None = None) -> dict
             target = hashlib.sha256(name.encode()).hexdigest() + suffix
         elif path.name in ancillary and 0 <= size <= ancillary[path.name]:
             target = None
+        elif suffix in ('.db', '.txt', '.nfo') and 0 <= size <= (4*1024**2 if suffix == '.db' else 64*1024):
+            target = None   # same ignored notes and thumbnail database as library/reader_worker.py
         else:
             raise LibraryError('Bundle contains unknown, recursive or mixed loose content')
         total += size
@@ -184,8 +185,6 @@ def extract(source: Path, output: Path, parts: list[Path] | None = None) -> dict
 
 def main() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
-    resource.setrlimit(resource.RLIMIT_AS, (768*1024**2, 768*1024**2))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_CHILD, MAX_CHILD))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     try:
         source, output = Path(sys.argv[1]), Path(sys.argv[2])
@@ -197,7 +196,8 @@ def main() -> None:
         result['parent_sha256'] = sha256(source)
         print(json.dumps({'status': 'extracted', **result}))
     except Exception as exc:
-        print(json.dumps({'status': 'rejected', 'reason': type(exc).__name__ + ': ' + str(exc)}))
+        print(json.dumps({'status': 'pending' if isinstance(exc, (subprocess.TimeoutExpired, TimeoutError, MemoryError)) else 'rejected',
+                          'reason': type(exc).__name__ + ': ' + str(exc)}))
 
 
 if __name__ == '__main__':

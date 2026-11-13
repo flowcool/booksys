@@ -16,7 +16,7 @@ import yaml
 from library.primitives import LibraryError
 
 ROOT = Path(__file__).resolve().parents[1]
-TOP_LEVEL = ('booksys.py', 'pipeline.py', 'fiches.py', 'activity.py', 'mirrors.py',
+TOP_LEVEL = ('booksys.py', 'pipeline.py', 'fiches.py', 'mirrors.py',
              'mirror_routing.py', 'retirement_history.py',
              'ops/library_service.py', 'ops/library_cycle.py', 'ops/retire_packages.py',
              'ops/route_mirrors.py')
@@ -68,7 +68,7 @@ def read_manifest(directory: Path, *, expected_code: str | None = None) -> dict[
     with store._database.connection() as db:
         if db.info.server_version < 180006:
             raise LibraryError('Selected authority requires the qualified PostgreSQL runtime')
-        store.check(db)
+        store.verify(db)
         source = db.execute('SELECT imported_source_digest,source_semantic FROM meta').fetchone()
         if source != (value['source_digest'], value['source_semantic_sha256']):
             raise LibraryError('Catalogue source differs from selected authority')

@@ -107,6 +107,8 @@ def _route_package(client: Any, source: str, entry: dict[str, Any], record: dict
         package = owned_package(client, entry)
         pid = package['pid']; key = str(pid)
         operation = journal['packages'].get(key)
+        if operation and operation.get('source') not in (None, source):
+            operation = None  # an entry of an earlier package that had this id
         if operation and operation.get('phase') in ('stopped', 'active', 'restored') and (operation.get('kind') == 'park' or operation.get('phase') in ('active', 'restored')):
             return {'outcome': 'unchanged', 'pid': pid}
         sets = host_sets(record) if record.get('downloads') else {}

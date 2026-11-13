@@ -15,35 +15,27 @@ def digest(value: str) -> str:
 
 
 def operator_row(oid: str, origin: dict[str, Any], asset: dict[str, Any],
-                 edition: dict[str, Any], work: dict[str, Any],
                  captured: dict[str, Any]) -> dict[str, Any]:
-    identity = asset.get('identity', {})
     work_result = asset.get('work_result', {})
-    from library.work_identity import accepted_work, proposal_conflicts
-    conflicts = proposal_conflicts(asset, work)
-    work = accepted_work(asset, work, edition) or work
+    from library.work_identity import accepted_work
+    work = accepted_work(asset) or {}
     overrides = asset.get('overrides', {})
-    publication = edition.get('publication', {})
-    published = bool(publication and publication.get('asset') == origin.get('sha256'))
     hints = list(asset.get('captured_hints', {}).values()) or [captured.get(origin['source'], {})]
     title = overrides.get('title') or work.get('title') or next((hint.get('title') for hint in hints
         if isinstance(hint, dict) and hint.get('title')), Path(origin['path']).name)
-    if origin.get('parent_origin') and not identity and not work:
+    if origin.get('parent_origin') and not work:
         title = origin.get('member', title)
     automation = asset.get('automation', {})
     result = asset.get('work_result', asset.get('identity_result', {}))
     reason = origin.get('reason') if origin.get('availability') != 'validated' else (
         automation.get('reason') or result.get('reason', 'Metadata not attempted'))
-    if conflicts:
-        reason = 'Work proposal conflicts with confirmed identity: ' + ', '.join(conflicts)
     if origin.get('transfer_error'):
         reason = 'Downloader reports an error; inspect pyLoad'
     candidates = [candidate for candidate in [result.get('candidate'), *result.get('candidates', [])]
                   if isinstance(candidate, dict)][:10]
     from library.printed_model import printed_isbns
     codes = sorted(printed_isbns(asset.get('printed', {}))[0])
-    isbn = ', '.join(codes) or bounded(edition.get('isbn') or asset.get('embedded', {}).get('ISBN'))
-    provisional = asset.get('provisional', {}).get('status') == 'published'
+    isbn = ', '.join(codes) or bounded(work.get('isbn') or asset.get('embedded', {}).get('ISBN'))
     admission = asset.get('admission', {})
     classified = admission.get('status') == 'classified'
     holding = admission.get('status') == 'holding'
@@ -54,9 +46,8 @@ def operator_row(oid: str, origin: dict[str, Any], asset: dict[str, Any],
            'retirement': bounded(origin.get('retirement', 'live')),
            'ocr': bounded(asset.get('printed', {}).get('status') or
                           (asset.get('printed_attempts') or [{}])[-1].get('status', 'not attempted')),
-           'identity': 'contested' if asset.get('contested') else 'identified' if identity or work else 'pending' if asset else 'not attempted',
-           'edition': 'confirmed' if identity else 'unknown',
-           'publication': 'classified' if classified else 'À identifier' if holding else 'published' if published else 'available_edition_unknown' if provisional else 'pending', 'reason': operator_reason(reason),
+           'identity': 'contested' if asset.get('contested') else 'identified' if work else 'pending' if asset else 'not attempted',
+           'publication': 'classified' if classified else 'À identifier' if holding else 'pending', 'reason': operator_reason(reason),
            'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
            'fiche': '/fiche/' + oid}
     if origin.get('retirement'):
@@ -67,7 +58,7 @@ def operator_row(oid: str, origin: dict[str, Any], asset: dict[str, Any],
         row.update(title='Lot : ' + bounded(title), publication='not applicable', identity='not applicable', ocr='not applicable')
     elif origin.get('parent_origin'):
         row['title'] = 'Membre : ' + row['title']
-    row['status'] = 'rejected' if row['intake'] == 'rejected' else 'classified' if classified else 'À identifier' if holding else 'published' if published else 'available_edition_unknown' if provisional else 'pending'
+    row['status'] = 'rejected' if row['intake'] == 'rejected' else 'classified' if classified else 'À identifier' if holding else 'pending'
     for key, value in row.items():
         if isinstance(value, str):
             row[key] = safe_text(value) if key != 'fiche' else value

@@ -73,9 +73,40 @@ supported XML fields when the metadata object omits them, so changing codec does
 not replace a merge policy. XML 2.0 has an ordered sequence; merged fields must
 be reordered before validation. Preserve manual overrides before export.
 
-## Offline qualification
+## Executed proof
 
-Use the versioned synthetic probes to qualify the exact candidate.
+`ops/qualify_metadata_components.py` creates only owned synthetic CBZ fixtures in
+a new output directory. It exercises the selected hash component and the existing
+networkless isolated transform/readback path. It never scans reception, contacts
+a provider, starts Komga or reads a runtime catalogue.
+
+The qualified payload fixture preserves a prior summary, manual Notes, the first
+page bookmark and cover type, while changing title and adding genres/source URL.
+It omits unknown age and unsupported ISBN. This is an explicitly constructed
+mapping fixture; it does **not** prove that the current catalogue writer performs
+that merge. The proof reports current-writer gaps separately.
+
+Evidence retained at
+`/data/tmp/booksys-comicinfo-qualification-hwtcvlbv/proof-v3/proof.json`:
+
+- source archive hash is unchanged before/after;
+- both page bytes and page manifests are unchanged in the generated CBZ;
+- title, prior summary, manual Notes, genres, source URL and page bookmark read back;
+- age remains absent, ISBN remains central;
+- an unsupported source XML field remains in the unchanged source and explicit
+  central unmapped evidence, while the 2.0 export omits it;
+- GTIN, Tags and a private unknown XML element are rejected by the 2.0 schema;
+- two identical-cover edition candidates remain tied, without arbitrary selection;
+- flat covers abstain;
+- mean synthetic pHash time was 19.702 ms per call over ten calls; this is a
+  mechanism cost check, not a production throughput or matching-accuracy claim.
+
+The final fixture adds explicit retained unknown-field evidence.
+The first owned fixture run failed because a hand-built XML field order violated
+2.0. Its directory is retained as `proof-v1`; the fixture now uses schema order.
+No source or live state was modified. The isolated venv lives under the same
+owned `/data/tmp` root. Runtime packages installed there were existing Booksys
+pins only; type-check tools are test-only. The shared environment was untouched.
 
 ## Limits and next action
 
@@ -89,15 +120,6 @@ Select the pinned cover component. Retain the existing XML/archive machinery.
 Complete merge/mapping and real-corpus evidence in the integration work. Do not
 activate the old adult mapping or claim unknown-field preservation by the current
 writer. Future Komga import needs a separate compatibility proof.
-
-
-Focused validation: two cover tests pass. Strict mypy passes for the wrapper and
-qualifier. Three existing CBZ/XML transform tests pass. The existing CBR conversion
-test cannot run in this isolated native environment: no working UnRAR executable
-is available (`RarCannotExec`). This does not qualify CBR conversion and is not
-reported as a passing check. No archive transport code changed here. The parent
-runs integrated checks with its qualified reader image and toolchain.
-
 
 ## Pure work matching and work-level export contract
 
@@ -128,7 +150,3 @@ Unsupported elements remain only in the retained original and central record.
 ISBN, adult and numeric recommended age are not projected into unsupported or
 inferred XML fields. An explicit schema age_rating is supported. The legacy
 writer also no longer maps an adult flag to Adults Only 18+.
-
-These APIs are not connected to the catalogue, scheduler, provider network or
-operator decisions. Qualification includes a native CBZ transform using the
-new writer and verifies unchanged image bytes and page hashes.

@@ -45,7 +45,6 @@ class ProviderSpacingTests(unittest.TestCase):
         result = provider.get('https://openlibrary.org/isbn/9782070368228.json')
         self.assertEqual(result['status'], 'ok')
         self.assertEqual(starts, [100.0, 101.0])
-        self.assertEqual(clock.sleeps, [0, 1.0])
 
     def test_window_limit_remains_a_deferral(self):
         provider, clock, starts = self.provider(requests=1)

@@ -22,11 +22,3 @@ def fingerprint(path: Path) -> tuple[int, int, int, int, int]:
     if not stat.S_ISREG(info.st_mode):
         raise LibraryError('Not a regular file')
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
-
-
-class ReaderUnavailable(LibraryError):
-    """The execution dependency failed; input bytes have no corrupt verdict."""
-
-
-class ReaderBusy(ReaderUnavailable):
-    """The service refused this new job before any reader effect."""

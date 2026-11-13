@@ -56,7 +56,7 @@ def main() -> int:
             raise ValueError('Recovery checkpoint already exists')
         atomic_yaml(checkpoint,dict(before))
         after = receive(store, args.reception, captured, journal, queue,
-                        incremental=True, inspection_limit=3)
+                        incremental=True)
         atomic_yaml(evidence / 'result.yaml', {'created_at': now(), 'checkpoint': str(checkpoint),
             'before': selected, 'after': {oid: after['origins'][oid] for oid in selected}})
         print('Targeted incremental intake complete; see ' + str(evidence / 'result.yaml'))

@@ -83,7 +83,7 @@ def lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
         yield
 
 
-TABLES = ('works', 'editions', 'variants', 'assets', 'artifacts', 'origins', 'cases', 'operations')
+TABLES = ('assets', 'origins')
 
 
 def empty() -> dict[str, Any]:
@@ -103,19 +103,12 @@ def validate(state: Any) -> None:
         for key, record in state[table].items():
             if not isinstance(key, str) or not isinstance(record, dict):
                 raise LibraryError('Invalid entity')
-    requirements = {'works': ('title',), 'editions': ('work', 'language', 'publisher', 'evidence'),
-                    'variants': ('edition', 'asset'), 'assets': ('sha256', 'size', 'format', 'origins'),
+    requirements = {'assets': ('sha256', 'size', 'format', 'origins'),
                     'origins': ('source', 'pid', 'fid', 'path', 'sha256')}
     for table, fields in requirements.items():
         for key, record in state[table].items():
             if any(field not in record for field in fields):
                 raise LibraryError(f'Missing {table} fields: {key}')
-    for edition in state['editions'].values():
-        if edition['work'] not in state['works']:
-            raise LibraryError('Edition references missing work')
-    for variant in state['variants'].values():
-        if variant['edition'] not in state['editions'] or variant['asset'] not in state['assets']:
-            raise LibraryError('Variant references missing edition or asset')
     for key, asset in state['assets'].items():
         if not re.fullmatch('[0-9a-f]{64}', key) or asset['sha256'] != key:
             raise LibraryError('Invalid asset identity')
@@ -134,28 +127,12 @@ def validate(state: Any) -> None:
                     or set(admission.get('manifest', {})) != {'book.cbz', 'fiche.md'}
                     or any(not re.fullmatch('[0-9a-f]{64}', str(v)) for v in admission['manifest'].values())):
                 raise LibraryError('Invalid work admission record')
-        provisional = asset.get('provisional')
-        if provisional is not None:
-            if (not isinstance(provisional, dict) or provisional.get('target') != key
-                    or provisional.get('edition_status') != 'unknown'
-                    or provisional.get('artifact_format') != 'cbz'
-                    or provisional.get('status') not in ('published', 'recovered')
-                    or not re.fullmatch('[0-9a-f]{32}', str(provisional.get('operation', '')))
-                    or not isinstance(provisional.get('manifest'), dict)
-                    or set(provisional['manifest']) != {'book.cbz', 'fiche.md'}
-                    or any(not re.fullmatch('[0-9a-f]{64}', str(value))
-                           for value in provisional['manifest'].values())
-                    or (provisional['status'] == 'recovered' and provisional.get('recovery') !=
-                        'provisional-' + provisional['operation'])):
-                raise LibraryError('Invalid provisional publication record')
-        identity = asset.get('identity')
-        if identity and (identity.get('work') not in state['works'] or
-                         identity.get('edition') not in state['editions'] or
-                         identity.get('variant') not in state['variants']):
-            raise LibraryError('Asset identity references missing entity')
     for key, origin in state['origins'].items():
+        external = (origin['source'] == 'external:' + str(origin['path'])
+                    and key == digest({'external': origin['path'], 'size': origin.get('size'), 'mtime_ns': origin.get('mtime_ns')}))
         if (not all(isinstance(origin[k], str) for k in ('source', 'path')) or
-                type(origin['pid']) is not int or type(origin['fid']) is not int):
+                not ((type(origin['pid']) is int and type(origin['fid']) is int) or
+                     (external and origin['pid'] is None and origin['fid'] is None))):
             raise LibraryError('Invalid origin IDs or path')
         path = Path(origin['path'])
         if path.is_absolute() or '..' in path.parts:
@@ -169,10 +146,6 @@ def validate(state: Any) -> None:
                 raise LibraryError('Invalid bundle child provenance')
         if origin['sha256'] is not None and not re.fullmatch('[0-9a-f]{64}', origin['sha256']):
             raise LibraryError('Invalid origin hash')
-    for edition_id, edition in state['editions'].items():
-        selected = edition.get('selected')
-        if selected and (selected not in state['variants'] or state['variants'][selected]['edition'] != edition_id):
-            raise LibraryError('Selected variant belongs to a different edition')
 
 
 class WorkingState(dict[str, Any]):

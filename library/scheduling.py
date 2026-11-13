@@ -1,17 +1,6 @@
-"""Sequential work turns: drain intake, then two conversions per OCR opportunity."""
+"""Saved-queue eligibility for the routing stage."""
 from __future__ import annotations
 from typing import Any
-
-
-def next_delay(outcome: dict[str, Any]) -> int:
-    if outcome.get('status') == 'lab' and any(outcome.get(k, 0) > 0 for k in
-            ('intake_backlog', 'ready_backlog', 'provisional_ready_backlog')):
-        return 0
-    return 300
-
-
-def heavy_stage(intake_backlog: int, turn: int) -> str | None:
-    return None if intake_backlog else 'metadata' if turn % 3 == 2 else 'provisional'
 
 
 def routing_candidates(queue: list[dict[str, Any]], submissions: dict[str, Any],
@@ -25,6 +14,8 @@ def routing_candidates(queue: list[dict[str, Any]], submissions: dict[str, Any],
         if entry.get('status') != 'queued':
             continue
         operation = journal.get('packages', {}).get(str(entry['package_id']), {})
+        if operation.get('source') not in (None, source):
+            operation = {}  # an entry of an earlier package that had this reused pyLoad id
         if operation:
             if operation.get('phase') not in ('active', 'restored') and not (
                     operation.get('kind') == 'park' and operation.get('phase') == 'stopped'):
@@ -45,20 +36,3 @@ def routing_candidates(queue: list[dict[str, Any]], submissions: dict[str, Any],
                     if primary else any(item.get('status') == 0 and technical(origins.get(item['fid']), state) == 'valid' for item in links))):
             result.append(source)
     return result
-
-
-class RoutingClient:
-    """Record write attempts so only pre-write HTTP read failures are optional."""
-    def __init__(self, client: Any):
-        self.client = client
-        self.wrote = False
-        self.endpoint = ''
-
-    def call(self, method: str, *, write: bool = False, **parameters: Any) -> Any:
-        self.endpoint = '/api/' + method
-        self.wrote = self.wrote or write
-        return self.client.call(method, write=write, **parameters)
-
-    def mutation(self, owner: str, journal: Any) -> Any:
-        from booksys_core.network_admission import native_operation
-        return native_operation(self.client, owner, journal)

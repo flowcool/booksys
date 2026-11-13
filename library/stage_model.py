@@ -10,12 +10,12 @@ if TYPE_CHECKING:
 
 from library.primitives import LibraryError, digest
 
-QUEUES = ('collection', 'intake', 'ocr', 'metadata', 'copies', 'routing', 'retirement')
+QUEUES = ('collection', 'intake', 'metadata', 'copies', 'routing', 'retirement')
 # Bump only the method whose useful evidence or unsuccessful outcomes changed.
 # Repository revisions and process restarts are deliberately absent.
-METHODS = dict(metadata='metadata-step-v1', ocr='printed-step-v1', copies='admission-step-v2-nfs',
+METHODS = dict(metadata='metadata-step-v1', copies='admission-step-v2-nfs',
                intake='intake-step-v1', collection='collection-step-v1', routing='routing-step-v1',
-               retirement='retirement-step-v2-entry-wait', backfill='backfill-step-v1', manual='manual-apply-v1')
+               retirement='retirement-step-v2-entry-wait', manual='manual-apply-v1')
 
 
 def instant(value: datetime) -> str:
@@ -93,12 +93,14 @@ class Selection:
     waits: dict[str, str] = field(default_factory=dict)
     eligible: int = 0
     continued: bool = False
+    # Set only when a bounded window held no selectable task and more candidates
+    # remain: the caller resumes after the last examined candidate, never from the head.
+    after: list[str] | None = None
 
 
 @dataclass(frozen=True)
 class StepResult:
     outcome: str = 'done'
-    proof: str = ''
     due_at: datetime | None = None
     prepared: PreparedResult | None = None
     successors: list[Obligation] = field(default_factory=list)
@@ -109,7 +111,6 @@ class StepResult:
 class Change:
     upserts: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     deletes: dict[str, list[str]] = field(default_factory=dict)
-    ledger: list[str] | None = None
 
 
 @dataclass(frozen=True)

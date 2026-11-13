@@ -94,3 +94,18 @@ _Avoid_: Exact-edition confirmation
 **Unidentified copy**:
 A technically valid managed comic whose work identity is not established.
 _Avoid_: Corrupt file, missing download
+
+**Acquisition**:
+The tracked receipt of required source files, including original and fallback
+packages and their retained origins. An acquisition can contain several assets.
+_Avoid_: Work, single pyLoad package
+
+**Package retirement**:
+Removal of a completed tracked acquisition's pyLoad records while retaining its
+downloaded files, bindings and processing history.
+_Avoid_: Source deletion, acquisition abandonment
+
+**Activity observation**:
+A dated report about a Booksys stage or element. It describes known work and
+does not authorize or schedule that work.
+_Avoid_: Processing queue, submission journal

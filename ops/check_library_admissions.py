@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from library.admission import AdmissionPublisher
 from library.catalog import Catalog, LibraryError, lock
 from library.origins import resolve_asset
-from library.publish import verify
+from library.publication import verify
 from library.readers import inspect_file, sha256
 from library.xmlmetadata import validate_xml
 
