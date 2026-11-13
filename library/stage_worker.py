@@ -143,7 +143,10 @@ def main() -> None:
                 with (args.root/'state/library-cycle.lock').open('a') as serial:
                     fcntl.flock(serial, fcntl.LOCK_SH | fcntl.LOCK_NB)
                     notify('READY=1')
-                    snapshot_at = release_at = work_revive_at = intake_at = 0.0
+                    snapshot_at = time.monotonic()
+                    intake_at = snapshot_at + 5
+                    release_at = snapshot_at + 10
+                    work_revive_at = snapshot_at + 20
                     while not stop.is_set():
                         stamp = datetime.now(timezone.utc)
                         with defer_contention(), (args.root/"state/stage-checkpoint.lock").open("a") as boundary:

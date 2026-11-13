@@ -112,9 +112,8 @@ class AdmissionPublisher(Publisher):
         if not locked:
             with publication_lock(self.store.directory, self.root):
                 return self.reconcile(locked=True, asset=asset)
-        operations = self.operations.records()
-        if asset is not None:
-            operations = [op for op in operations if self.operation_applies(op, asset)]
+        operations = (self.operations.records() if asset is None
+                      else self.operations.for_asset(asset, self.operation_applies))
         for op in sorted(operations, key=lambda value: (value['phase'] == 'committed', value['created_at'])):
             target = self.target_path(op['target'])
             if op['phase'] == 'interrupted':

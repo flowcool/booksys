@@ -6,14 +6,11 @@ from pathlib import Path
 import signal
 import sys
 import threading
-import time
 import os
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from library.catalog import atomic_yaml
 from booksys_core.diagnostics import emit
-from library.web import build_projection
 
 
 def main() -> None:
@@ -58,26 +55,11 @@ def main() -> None:
     native_history=NativeHistory(args.collector,database=backend._database)
     server = HTTPRuntime((args.listen, args.port), api)
     server.start()
-    evidence = args.root / 'evidence'
-    evidence.mkdir(parents=True, exist_ok=True)
-
-    last = {'at': 0.0, 'revision': -1}
-
-    def snapshot() -> None:
-        # The projection reads the whole catalogue (65 MB): rebuild it when the catalogue moved, else at most every 5 minutes.
-        from library.catalog import Catalog
-        revision = Catalog(args.root / 'state').revision
-        if revision == last['revision'] and time.monotonic() - last['at'] < 300:
-            return
-        atomic_yaml(evidence / 'dashboard.yaml', build_projection(args.root))
-        last['at'], last['revision'] = time.monotonic(), revision
-
     def request_stop(*_: object) -> None:
         stop.set()
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    snapshot()
     def observations() -> None:
         while not stop.is_set():
             from library.retirement_observation import observe as retirement_observation

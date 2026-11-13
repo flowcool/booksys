@@ -3,7 +3,6 @@ from __future__ import annotations
 from library.postgres import DeadlineConnection
 from typing import Any, TYPE_CHECKING
 
-from library.codec import decode
 from library.primitives import TABLES, LibraryError, digest
 if TYPE_CHECKING:
     from library.store import Store, Change
@@ -11,17 +10,15 @@ if TYPE_CHECKING:
 
 def snapshot(store: Store, db: DeadlineConnection, action: str, refs: dict[str, list[str]],
              claims: dict[str, list[str]], *, media: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = store.working_set(action, refs, media=False, _db=db)
+    loaded: dict[str, dict[str, tuple[str, dict[str, Any]]]] = {}
+    state = store.working_set(action, refs, media=False, _db=db, _payloads=loaded)
     covers: dict[str, dict[str, str]] = {}
     payloads: dict[str, dict[str, str]] = {}
     for kind in TABLES:
-        for ident in state[kind]:
-            row = db.execute(f'SELECT payload FROM {kind} WHERE id=%s',(ident,)).fetchone()
-            if row:
-                payloads.setdefault(kind,{})[ident] = row[0]
-                envelope = decode(row[0])
-                if envelope.get('cover'):
-                    covers.setdefault(kind,{})[ident] = envelope['cover']
+        for ident, (payload, envelope) in loaded.get(kind, {}).items():
+            payloads.setdefault(kind,{})[ident] = payload
+            if envelope.get('cover'):
+                covers.setdefault(kind,{})[ident] = envelope['cover']
     claims = {field: list(values) for field, values in claims.items()}
     from library.bibliographic import isbn13
     for asset in state['assets'].values():

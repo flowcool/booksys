@@ -442,7 +442,8 @@ class Store:
                     'children_after': rows[limit - 1][0] if len(rows) > limit else None}
 
     def working_set(self, action: str, refs: dict[str, list[str]], *, media: bool = True,
-                    _db: DeadlineConnection | None = None) -> dict[str, Any]:
+                    _db: DeadlineConnection | None = None,
+                    _payloads: dict[str, dict[str, tuple[str, dict[str, Any]]]] | None = None) -> dict[str, Any]:
         """Resolve relation closure in a consistent snapshot, with exact legacy media.
 
         """
@@ -464,7 +465,13 @@ class Store:
                 row = db.execute(f'SELECT payload FROM {kind} WHERE id=%s', (ident,)).fetchone()
                 if row is None:
                     continue  # Named new IDs are legal; mutation validates mandatory edges.
-                record = self.restore(row[0], media=media)
+                if _payloads is not None and not media:
+                    # Conflict snapshots reuse this exact envelope and raw payload.
+                    envelope = decode(row[0])
+                    _payloads.setdefault(kind, {})[ident] = (row[0], envelope)
+                    record = envelope['record']
+                else:
+                    record = self.restore(row[0], media=media)
                 state[kind][ident] = record
                 for name, (source, target) in RELATIONS.items():
                     if source == kind:
