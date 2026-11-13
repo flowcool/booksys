@@ -127,9 +127,12 @@ def main() -> None:
     def watchdog() -> None:
         # Use finite heartbeat freshness and health retries; a heartbeat proves liveness only.
         while not stop.wait(5):
-            for queue in QUEUES if args.queue == 'serial' else (args.queue,):
-                from library.operational_state import RuntimeObservation
-                RuntimeObservation(runtime.catalog.backend()._database).heartbeat(queue,at=time.time())
+            try:
+                for queue in QUEUES if args.queue == 'serial' else (args.queue,):
+                    from library.operational_state import RuntimeObservation
+                    RuntimeObservation(runtime.catalog.backend()._database).heartbeat(queue,at=time.time())
+            except Exception as exc:  # A busy database must not end the thread: a dead thread leaves the heartbeat stale forever.
+                emit(service=service, stage='diagnostics', queue=args.queue, code='heartbeat_failed', **exception_details(exc))
             notify('WATCHDOG=1')
     pulse = threading.Thread(target=watchdog, daemon=True)
     pulse.start()
@@ -227,7 +230,7 @@ def main() -> None:
                     if outcome == 'nas_unavailable':
                         next_check[actor.queue] = time.monotonic()+30  # Cache successful NAS sentinel checks for thirty seconds and back off unavailable stages for thirty seconds.
                     elif outcome == 'idle':
-                        next_check[actor.queue] = time.monotonic()+3      # Recheck an empty stage after three seconds instead of polling its database every second.
+                        next_check[actor.queue] = time.monotonic()+15     # Recheck an empty stage after fifteen seconds.
                 stop.wait(1)
     finally:
         graceful = stop.is_set()

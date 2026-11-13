@@ -326,7 +326,7 @@ services:
         pulses=RuntimeObservation(Database.configured(Path('/data/booksys/library-lab/state'))).heartbeats();
         assert all(started <= pulses.get(r,0) <= time.time() and time.time()-pulses.get(r,0) <= 15 for r in sys.argv[1:])
       - discovery
-      interval: 30s
+      interval: 120s
       timeout: 10s
       retries: 3
       start_period: 30s
@@ -365,7 +365,7 @@ services:
       - -c
       - *actor_readiness
       - collection
-      interval: 30s
+      interval: 120s
       timeout: 10s
       retries: 3
       start_period: 30s
@@ -405,7 +405,7 @@ services:
       - -c
       - *actor_readiness
       - intake
-      interval: 30s
+      interval: 120s
       timeout: 10s
       retries: 3
       start_period: 30s
@@ -421,7 +421,7 @@ services:
     command: -m library.stage_worker --root /data/booksys/library-lab --collector /data/booksys/state --reception /data/booksys/downloads --credentials /secrets/pyload.json --endpoint http://pyload:8000 --byparr http://byparr:8191/v1 --queue metadata
     healthcheck:
       test: [CMD, /app/.venv/bin/python, -c, *actor_readiness, metadata]
-      interval: 30s
+      interval: 120s
       timeout: 10s
       retries: 3
       start_period: 30s
@@ -461,7 +461,7 @@ services:
       - -c
       - *actor_readiness
       - copies
-      interval: 30s
+      interval: 120s
       timeout: 10s
       retries: 3
       start_period: 30s
@@ -500,7 +500,7 @@ services:
       - -c
       - *actor_readiness
       - routing
-      interval: 30s
+      interval: 120s
       timeout: 10s
       retries: 3
       start_period: 30s

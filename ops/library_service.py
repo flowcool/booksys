@@ -92,7 +92,7 @@ def main() -> None:
                         retirement=retirement)
             except Exception:
                 emit(service='library', stage='diagnostics', code='degraded', reason='diagnostic_unavailable')
-            stop.wait(30)
+            stop.wait(120)
     observer_thread = threading.Thread(target=observations, name='catalogue-observer')
     observer_thread.start()
     try:

@@ -63,7 +63,7 @@ class StageRuntime:
             chunk, self._pending_keys = self._pending_keys[:100], self._pending_keys[100:]
             return self.business.discover(self.tasks, now=now, keys=chunk) if chunk else 0
         page = store.scan('assets', after=after, limit=100)
-        count = self.business.discover(self.tasks, now=now, after=after, limit=100)
+        count = self.business.discover(self.tasks, now=now, keys=[key for key, _ in page])
         finished = len(page) < 100
         state.save_discovery('' if finished else page[-1][0])
         if finished:
