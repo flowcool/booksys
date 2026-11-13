@@ -1,3 +1,5 @@
+[Français](README.fr.md)
+
 # Booksys
 
 Local Bookys collector, pyLoad submission pipeline and portable comic-library tools.
