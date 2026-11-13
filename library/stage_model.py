@@ -10,10 +10,10 @@ if TYPE_CHECKING:
 
 from library.primitives import LibraryError, digest
 
-QUEUES = ('collection', 'intake', 'ocr', 'metadata', 'copies', 'routing', 'retirement')
+QUEUES = ('collection', 'intake', 'metadata', 'copies', 'routing', 'retirement')
 # Bump only the method whose useful evidence or unsuccessful outcomes changed.
 # Repository revisions and process restarts are deliberately absent.
-METHODS = dict(metadata='metadata-step-v1', ocr='printed-step-v1', copies='admission-step-v2-nfs',
+METHODS = dict(metadata='metadata-step-v1', copies='admission-step-v2-nfs',
                intake='intake-step-v1', collection='collection-step-v1', routing='routing-step-v1',
                retirement='retirement-step-v2-entry-wait', manual='manual-apply-v1')
 

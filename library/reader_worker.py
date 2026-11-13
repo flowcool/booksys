@@ -30,7 +30,8 @@ MAX_EXPANDED = 2 * 1024 ** 3
 MAX_PAGES = 2000
 # rarfile 4.5 decodes comments (at most 256 KiB) through a temporary RAR.
 RAR_COMMENT_SCRATCH = 1024 ** 2
-Image.MAX_IMAGE_PIXELS = 50_000_000
+# Reject images above 100 million decoded pixels (about 400 MB as RGBA) before retaining their pixels; the decoder address space is 1.5 GiB.
+Image.MAX_IMAGE_PIXELS = 100_000_000
 
 
 class PendingFile(LibraryError):
@@ -58,8 +59,12 @@ def member(name: str, data: bytes, output: dict[str, Any]) -> None:
             raise LibraryError('Oversized Picasa ancillary file')
         output.setdefault('ignored_ancillary', []).append(name)
         return
-    if path.name == 'Thumbs.db' and len(data) <= 4 * 1024**2:
-        if any(PurePosixPath(n).name == 'Thumbs.db' for n in output.get('ignored_ancillary', [])):
+    # Ignore text notes and one thumbnail database of any name (20 archives of one series carry '<series> - NN - NNN.db').
+    if path.suffix.lower() in ('.txt', '.nfo') and len(data) <= 64 * 1024:
+        output.setdefault('ignored_ancillary', []).append(name)
+        return
+    if path.suffix.lower() == '.db' and len(data) <= 4 * 1024**2:
+        if any(PurePosixPath(n).suffix.lower() == '.db' for n in output.get('ignored_ancillary', [])):
             raise LibraryError('Several ancillary database files')
         output.setdefault('ignored_ancillary', []).append(name)
         return
@@ -227,18 +232,10 @@ def main() -> None:
     path, suffix = Path(sys.argv[1]), sys.argv[2]
     operation = sys.argv[3]
     work = Path(sys.argv[4])
-    if operation in ('ocr', 'proof', 'bundle'):
+    if operation == 'bundle':
         request = json.loads(sys.stdin.buffer.read(2 * 1024**2))
-        if operation == 'ocr':
-            from library.printed_worker import main as worker
-            sys.stdin = io.TextIOWrapper(io.BytesIO(json.dumps(request).encode()))
-            sys.argv = [sys.argv[0], str(path), suffix]
-        elif operation == 'proof':
-            from library.proof_worker import main as worker
-            sys.argv = [sys.argv[0], str(path), suffix, str(request['page'])]
-        else:
-            from library.bundle_worker import main as worker
-            sys.argv = [sys.argv[0], str(path), str(work), *request.get('parts', [])]
+        from library.bundle_worker import main as worker
+        sys.argv = [sys.argv[0], str(path), str(work), *request.get('parts', [])]
         worker()
         return
     transform = operation == 'transform'

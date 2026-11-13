@@ -204,11 +204,8 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
                 raise HTTPException(502, detail('invalid_content', 'remote', request_id))
             count += 1
             last_used = clock()
-            if memory_pressure():
-                emit(service='byparr', stage='byparr', code='completed', request_id=request_id)
-                detach()
-                await close()
             detach()
+            await close()
             return result
         except BaseException:
             # Native Playwright cannot update subscriptions after its transport

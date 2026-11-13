@@ -1,6 +1,7 @@
 """One retained collection, routing or retirement step; native downloads stay in pyLoad."""
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,6 @@ import yaml
 
 from library.catalog import Catalog
 from library.primitives import LibraryError, digest, lock
-from library.source_tasks import bounded_read
 from library.stage_model import Task, StepResult, Obligation, METHODS
 from library.stage_tasks import StageTasks
 
@@ -20,6 +20,9 @@ from library.operational_state import CollectorState,RuntimeObservation,Operatio
 
 # Prefilter only: retirement and routing re-read the live pyLoad queue before any write.
 # Discovery refreshes the snapshot about every minute, but a loaded host stretches that.
+
+_EXTERNAL_SCAN_AT = 0.0
+
 
 class NativeStages:
     def __init__(self, catalog: Catalog, reception: Path, library: Path, collector: Path,
@@ -47,11 +50,26 @@ class NativeStages:
             state = self.catalog.working_set('retire', origin_refs(self.catalog, source), media=False)
             revision = digest({'package': {key: package.get(key) for key in ('pid', 'name', 'folder', 'retirement')},
                 'files': [{key: item.get(key) for key in ('fid', 'name', 'status', 'size', 'input_folder')} for item in package.get('links', [])],
-                'origins': {oid: {key: row.get(key) for key in ('sha256', 'fingerprint', 'availability', 'intake_attempts', 'bundle_attempts')}
+                'origins': {oid: {key: row.get(key) for key in ('sha256', 'fingerprint', 'availability', 'reason', 'intake_attempts', 'bundle_attempts')}
                             for oid, row in state['origins'].items()}})
             tasks.discover(Obligation('intake', 'source-' + digest(source), revision, METHODS['intake']), now=now)
             count += 1
+        # Discover at most one hundred source obligations per pass and save the continuation cursor.
         cursor_state.save_discovery(sources[-1] if len(sources) == 100 else '',kind='intake')
+        from library.intake import EXTERNAL_ROOT, external_origins
+        from library.readers import READER_POLICY
+        # The originals do not change: walk the share once a day, not at every 5-30 s sweep (about 1,400 NFS entries).
+        global _EXTERNAL_SCAN_AT
+        if EXTERNAL_ROOT.is_dir() and time.monotonic() >= _EXTERNAL_SCAN_AT:
+            _EXTERNAL_SCAN_AT = time.monotonic() + 86400
+            for oid, origin in external_origins(EXTERNAL_ROOT):
+                if self.catalog.get('origins', oid) is None:
+                    state = self.catalog.result_set('retire', {'origins': [oid]}, media=False)
+                    state['origins'][oid] = origin
+                    self.catalog.save(state, expected=state['revision'])
+                tasks.discover(Obligation('intake', 'external-' + oid,
+                    digest({'origin': oid, 'reader': READER_POLICY}), METHODS['intake']), now=now)
+                count += 1
         return count
 
     def binding(self, task: Task) -> tuple[str, dict[str, Any], dict[str, Any]]:
@@ -66,17 +84,21 @@ class NativeStages:
         return source, dict(entries[source]), monitor
 
     def ready(self, task: Task, *, now: datetime) -> str:
-        if task.stage == 'collection':
+        if task.stage == 'collection' or (task.stage == 'intake' and task.entity.startswith('external-')):
             return ''
-        if self.snapshots is None:
+        if self.snapshots is None and task.stage != 'routing':
             return 'queue_snapshot_unavailable'
         try:
-            queue, _ = RuntimeObservation(self.catalog.backend()._database).queue()  # Refreshed every 60 s; age never blocks a stage.
             source, entry, monitor = self.binding(task)
+            if task.stage == 'routing':
+                retired = NativeHistory(self.collector, database=self.catalog.backend()._database).retirements()['acquisitions'].get(source, {})
+                if retired.get('phase') == 'retired' and digest(retired.get('submission')) == task.input_revision == digest(entry):
+                    return ''
+            if self.snapshots is None:
+                return 'queue_snapshot_unavailable'
+            queue, _ = RuntimeObservation(self.catalog.backend()._database).queue()  # Refreshed every 60 s; age never blocks a stage.
             package = next((p for p in queue if p['pid'] == entry.get('package_id')), None)
             if package is None or (task.stage == 'routing' and package.get('retirement')):
-                # A released package stays in the logical queue as a retained record: pyLoad no longer has it, so routing
-                # would call get_package_data on a missing id at every step (HTTP error, 24 a half hour, nothing else moved).
                 return 'native_package_unavailable'
             state = self.catalog.working_set('retire', origin_refs(self.catalog, source), media=False)
             if task.stage == 'routing':
@@ -105,6 +127,9 @@ class NativeStages:
 
     def _execute(self, task: Task, *, now: datetime, completions: list[OperationalCompletion]) -> StepResult:
         value: Any
+        if task.stage == 'intake' and task.entity.startswith('external-'):
+            from library.intake import receive_external
+            return StepResult('done', prepared=receive_external(self.catalog, task.entity.removeprefix('external-')))
         source, entry, monitor = self.binding(task)
         if task.stage == 'intake':
             if self.snapshots is None:
@@ -115,7 +140,7 @@ class NativeStages:
             from library.store import PreparedResult
             intake_results: list[PreparedResult]=[]
             state = receive(self.catalog, self.reception, captured, monitor, queue,
-                    source_only=source, incremental=True, inspection_limit=1,prepared=intake_results)
+                    source_only=source, incremental=True, prepared=intake_results)
             from booksys_core.diagnostics import emit, opaque
             import hashlib
             # Reuse the committed scoped intake result. No diagnostic-only I/O.
@@ -144,14 +169,17 @@ class NativeStages:
                 if not completions and progress.get('items', {}).get(source, {}).get('status') != 'complete':
                     return StepResult('retry')
         else:
-            state = self.catalog.result_set('retire', origin_refs(self.catalog, source), media=False)
+            state = self.catalog.result_set('retire', origin_refs(self.catalog, source), media=False) if task.stage != 'routing' else {}
             attempt = (task.key, task.generation) if task.native_attempt is not None else None
             if task.stage == 'routing':
                 from mirror_routing import route_package
                 from mirrors import public_hosts
-                captured = CollectorState(self.collector,database=self.catalog.backend()._database).captured()
-                value = route_package(self.client, source, entry, captured['items'][source], state,
-                    self.reception, self.collector/'mirror-routing.yaml', apply=True, availability=public_hosts(),completions=completions,task_attempt=attempt)
+                retired = NativeHistory(self.collector, database=self.catalog.backend()._database).retirements()['acquisitions'].get(source, {})
+                is_retired = retired.get('phase') == 'retired' and digest(retired.get('submission')) == task.input_revision == digest(entry)
+                value = route_package(self.client, source, entry,
+                    {} if is_retired else CollectorState(self.collector,database=self.catalog.backend()._database).captured()['items'][source],
+                    state if is_retired else self.catalog.result_set('retire', origin_refs(self.catalog, source), media=False),
+                    self.reception, self.collector/'mirror-routing.yaml', apply=True, availability=None if is_retired else public_hosts(),completions=completions,task_attempt=attempt)
             elif task.stage == 'retirement':
                 from library.retirement import Retirement
                 from library.runtime import configured_scripts
@@ -196,6 +224,8 @@ class NativeStages:
 
     def _receipt(self, task: Task, *, completions: list[OperationalCompletion]) -> tuple[str,str]:
         """Resolve existing effects only; selection owns any later new work."""
+        if task.stage == 'intake' and task.entity.startswith('external-'):
+            return 'absent', ''
         from booksys_core.network_admission import NativeMutation
         from booksys_core.errors import CollectionError
         budget = getattr(self.client, 'admission', None)

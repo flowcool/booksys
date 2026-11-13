@@ -204,6 +204,8 @@ class WorkItems:
                   reason: str = '', next_at: datetime | None = None, refund: bool = False) -> bool:
         """Fenced end of a claim, inside the caller's transaction. False when the claim was lost."""
         at = _instant(now)
+        previous = db.execute('SELECT last_error FROM work_items WHERE stage=%s AND item=%s FOR UPDATE',
+                              (item.stage, item.item)).fetchone() if error else None
         row = db.execute(
             "UPDATE work_items SET "
             "state = CASE WHEN input_rev=%(rev)s THEN %(to)s ELSE 'ready' END, state_at=%(at)s, "
@@ -218,6 +220,8 @@ class WorkItems:
              'st': item.stage, 'it': item.item, 'w': item.claimed_by, 'n': item.attempts}).fetchone()
         if row is None:
             return False            # the claim was lost: the caller must discard its result
+        if error and row[1] and previous and previous[0] == error:
+            return True
         db.execute("INSERT INTO work_events(stage,item,at,from_state,to_state,detail) VALUES (%s,%s,%s,'claimed',%s,%s)",
                    (item.stage, item.item, at, row[0], (detail or to_state if row[1] else 'input changed during the step')[:200]))
         return True
@@ -267,12 +271,17 @@ class WorkItems:
             db.execute("INSERT INTO work_events(stage,item,at,from_state,to_state,detail) VALUES (%s,%s,%s,'blocked','ready','released')", (stage, item, at))
             return True
 
-    def revive(self, stage: str, *, now: datetime | None = None, older_than: timedelta = timedelta(hours=1)) -> int:
-        """Give failed items one more round after a fixed cause (hourly retry of exhausted work)."""
+    def revive(self, stage: str, *, now: datetime | None = None, older_than: timedelta = timedelta(minutes=10)) -> int:
+        """Retry exhausted work with backoff; the recurring collection keeps its fixed interval."""
         at = _instant(now)
         with self._tx() as db:
-            rows = db.execute("UPDATE work_items SET state='ready', attempts=0, state_at=%s, next_at=%s "
-                              "WHERE stage=%s AND state='failed' AND state_at < %s RETURNING item", (at, at, self._stage(stage), at - older_than)).fetchall()
+            # A failed item waits half its own age between rounds, at least 10 minutes and at most 6 hours (collection: always
+            # 10 minutes): 251 copies revivals an hour with no new cause. attempts restarts at 0, the claim guard refuses more.
+            rows = db.execute("UPDATE work_items SET state='ready', attempts=0, state_at=%(at)s, next_at=%(at)s "
+                              "WHERE stage=%(stage)s AND state='failed' AND state_at < %(at)s - "
+                              "CASE WHEN stage='collection' THEN %(age)s ELSE LEAST(interval '6 hours', "
+                              "GREATEST(%(age)s, (%(at)s - ready_at) / 2)) END RETURNING item",
+                              {'at': at, 'stage': self._stage(stage), 'age': older_than}).fetchall()
             for (key,) in rows:
                 db.execute("INSERT INTO work_events(stage,item,at,from_state,to_state,detail) VALUES (%s,%s,%s,'failed','ready','revive')", (stage, key, at))
             return len(rows)

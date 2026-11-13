@@ -44,18 +44,9 @@ def parser() -> argparse.ArgumentParser:
     intake_mode.add_argument('--lab', action='store_true')
     intake.add_argument('--policy', type=Path)
     intake.add_argument('--library', type=Path)
-    printed_cmd = commands.add_parser('printed')
-    printed_cmd.add_argument('--asset', required=True)
-    printed_cmd.add_argument('--reception', type=Path, required=True)
-    printed_mode = printed_cmd.add_mutually_exclusive_group()
-    printed_mode.add_argument('--isolated', action='store_true')
-    printed_mode.add_argument('--lab', action='store_true')
-    printed_cmd.add_argument('--policy', type=Path)
-    printed_cmd.add_argument('--library', type=Path)
     enrich_cmd = commands.add_parser('enrich')
     enrich_cmd.add_argument('--asset', required=True)
     enrich_cmd.add_argument('--source', action='append', default=[], help='provider:reference')
-    enrich_cmd.add_argument('--budget', type=int, default=12)
     for name in ('admit', 'reconcile', 'preflight', 'activate'):
         command = commands.add_parser(name)
         command.add_argument('--reception', type=Path, required=True)
@@ -104,27 +95,13 @@ def run(args: argparse.Namespace) -> Any:
             queue=RuntimeObservation(store.backend()._database).queue()[0]
         state=receive(store,args.reception,captured,journal,queue)
         return {'status': 'received', 'assets': len(state['assets']), 'origins': len(state['origins'])}
-    if args.command == 'printed':
-        if args.lab:
-            if args.library is None:
-                raise LibraryError('Lab printed evidence requires --library')
-            lab_preflight(args.reception, args.library, args.state)
-        elif args.isolated:
-            isolated_paths(args.state, args.reception)
-        elif args.policy and args.library:
-            preflight(args.reception, args.library, args.state, args.policy)
-        else:
-            raise LibraryError('Runtime printed evidence requires --policy and --library')
-        from library.printed import scan_printed
-        value = scan_printed(store, args.asset, args.reception)
-        return {key: value.get(key) for key in ('status', 'asset', 'window', 'tool', 'reason')}
     if args.command == 'enrich':
         refs = []
         for source in args.source:
             if ':' not in source:
                 raise LibraryError('Source reference must be provider:reference')
             refs.append(tuple(source.split(':', 1)))
-        providers = Providers(args.state / 'library-provider-cache', budget=min(50, max(0, args.budget)))
+        providers = Providers(args.state / 'library-provider-cache')
         state = enrich(store, args.asset, providers, refs)
         return {'status': 'enriched', 'identity': state['assets'][args.asset].get('work_result')}
     if args.lab:

@@ -1,24 +1,85 @@
-"""Select only known Booksys submission origins; never scan shared reception."""
+"""Receive tracked downloads and read-only external comic origins."""
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import time
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlsplit
 
 from library.catalog import Catalog
 from library.store import PreparedResult
-from library.relocation import matches_retained
-from library.primitives import LibraryError, digest, now
+from library.primitives import LibraryError, WorkingState, digest, now
 from library.readers import inspect_file, fingerprint, sha256, READER_POLICY
 
 
 from library.reception import reception_path as reception_path
 
+EXTERNAL_ROOT = Path('/opt/booksys/comics-originals')
+
+
+def external_origins(root: Path) -> Iterator[tuple[str, dict[str, Any]]]:
+    def fail(error: OSError) -> None:
+        raise error
+    visited = 0
+    for folder, directories, files in os.walk(root, onerror=fail):
+        directories[:] = [name for name in directories if name not in ('booksys', '@eaDir')
+                          and not name.startswith('ug-tmp') and not (Path(folder)/name).is_symlink()]
+        visited += len(directories) + len(files)
+        if visited > 4096:
+            raise LibraryError('External originals scan capacity exceeded')
+        for name in files:
+            if (name.startswith('ug-tmp') or (Path(folder)/name).is_symlink()
+                    or Path(name).suffix.lower() not in ('.cbz', '.cbr', '.cb7', '.pdf')):
+                continue
+            relative = (Path(folder)/name).relative_to(root)
+            path = reception_path(root, str(relative.parent), name)
+            stamp = fingerprint(path)
+            identity = {'external': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3]}
+            yield digest(identity), {'source': 'external:' + str(relative), 'pid': None, 'fid': None,
+                'path': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3], 'sha256': None,
+                'availability': 'pending'}
+
+
+def receive_external(store: Catalog, oid: str) -> PreparedResult:
+    origin = store.get('origins', oid)
+    if origin is None or not origin['source'].startswith('external:'):
+        raise LibraryError('External origin is missing')
+    relative = Path(origin['path'])
+    path = reception_path(EXTERNAL_ROOT, str(relative.parent), relative.name)
+    stamp = fingerprint(path)
+    if digest({'external': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3]}) != oid:
+        raise LibraryError('External origin bytes changed since discovery')
+    result = inspect_file(path)
+    if result.get('reason') == 'Stage enclosing deadline exceeded':
+        raise RuntimeError(result['reason'])
+    refs = {'origins': [oid], 'assets': [result['sha256']] if result.get('sha256') else []}
+    state = store.result_set('retire', refs, media=False)
+    origin = state['origins'][oid]
+    origin.update(availability=result['status'], reason=result.get('reason', ''),
+                  reader_policy=result.get('reader_policy'), observed_at=now(), fingerprint=list(stamp))
+    if result['status'] == 'validated':
+        key = result['sha256']
+        origin['sha256'] = key
+        asset = state['assets'].setdefault(key, {**result, 'origins': [], 'assertions': [],
+            'overrides': {}, 'disposition': 'pending', 'captured_hints': {}})
+        if not asset['assertions']:
+            for field, raw_field in [('genres', 'Genre'), ('public', 'AgeRating')]:
+                raw = result.get('embedded', {}).get(raw_field)
+                if raw:
+                    asset['assertions'].append({'field': field, 'raw': raw,
+                        'normalized': [x.strip() for x in raw.split(',')] if field == 'genres' else raw,
+                        'source': 'embedded', 'upstream': 'embedded-unverified',
+                        'url': 'sha256:' + key, 'retrieved_at': now(), 'validation': 'asserted'})
+        if oid not in asset['origins']:
+            asset['origins'].append(oid)
+    return store.prepare(state)
+
 
 def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[str, Any],
             queue: list[dict[str, Any]], *, stable_seconds: float = 2,
-            incremental: bool = False, inspection_limit: int | None = None, source_only: str | None = None,
+            incremental: bool = False, source_only: str | None = None,
             prepared: list[PreparedResult] | None = None, media_directory: Path | None=None) -> dict[str, Any]:
     # The caller obtains immutable snapshots without holding a collector lock.
     # Parsing and hashing happen before the short catalogue compare-and-save.
@@ -32,11 +93,18 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             if candidate_package['pid'] == entry.get('package_id') or candidate_package.get('mirror_source') == source_only:
                 refs['origins'].extend(digest({'source': source_only, 'pid': candidate_package['pid'], 'fid': item['fid']}) for item in candidate_package.get('links', []))
     state = store.result_set('retire', refs, media=False)
-    completed_before = {(oid, o.get('sha256'), o.get('availability')) for oid, o in state['origins'].items()
-                        if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
+    assert isinstance(state, WorkingState)
+    def save() -> None:
+        try:
+            store.save(state, expected=state['revision'])
+            fresh = store.result_set('retire', {'origins': list(state['origins'])}, media=False)
+        except (LibraryError, OSError) as exc:
+            raise RuntimeError('Intake save failed') from exc
+        assert isinstance(fresh, WorkingState)
+        state.clear()
+        state.update(fresh)
+        state.original, state.conflict = fresh.original, fresh.conflict
     packages = {int(p['pid']): p for p in queue}
-    inspected = 0
-    bundle_preparations = 0
     submissions = list(journal.get('submissions', {}).items())
     for attempt_package in queue:
         attempt_source = attempt_package.get('mirror_source')
@@ -73,8 +141,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                     origin['availability'] = 'package_missing'
             continue
         from library.multipart import is_multipart, receive_parts
-        inspected += receive_parts(state, media_directory or store.directory, root, source, package, captured['items'][source],
-            max(0, (inspection_limit if inspection_limit is not None else 8) - inspected), stable_seconds, detached=media_directory is not None)
+        receive_parts(state, media_directory or store.directory, root, source, package, captured['items'][source],
+            stable_seconds, save=save, detached=media_directory is not None)
         for item in package.get('links', []):
             if is_multipart(item['name']):
                 continue
@@ -108,23 +176,9 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                                         if item.get('size') != stamp[2] else ''}
                     origin.update(size_fields)
                     previous = state['origins'].get(oid, {})
-                    # Recover only the unique canonical reverse link lost by an older budget deferral.
-                    if (incremental and not previous.get('sha256')
-                            and previous.get('path') == origin['path']
-                            and previous.get('reason') in ('Intake budget deferred', 'Ambiguous canonical origin references')):
-                        inverse = [key for key, asset in state['assets'].items()
-                                   if oid in asset.get('origins', [])]
-                        if len(inverse) > 1:
-                            origin['reason'] = 'Ambiguous canonical origin references'
-                            state['origins'][oid] = origin
-                            continue
-                        if len(inverse) == 1:
-                            previous = {**previous, 'sha256': inverse[0]}
-                            origin['sha256'] = inverse[0]
                     known = state['assets'].get(previous.get('sha256'), {})
                     if (incremental and 'fingerprint' not in previous
-                            and (previous.get('availability') == 'validated' or
-                                 previous.get('reason') == 'Intake budget deferred')
+                            and previous.get('availability') == 'validated'
                             and previous.get('path') == origin['path']
                             and known.get('status') == 'validated' and known.get('size') == stamp[2]
                             and known.get('format') == path.suffix.lower().lstrip('.')
@@ -150,17 +204,11 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                                 previous.get('availability') == 'rejected' and not retry_bundle):
                             state['origins'][oid] = {**previous, **size_fields, 'observed_at': origin['observed_at']}
                             continue
-                        if not previous.get('bundle') and (bundle_preparations >= 1 or
-                                (inspection_limit is not None and inspected >= inspection_limit)):
-                            origin['reason'] = 'Intake budget deferred'
-                            state['origins'][oid] = origin
-                            continue
-                        bundle_preparations += not bool(previous.get('bundle'))
                         attempts = int(previous.get('bundle_attempts', 0)) + 1 if same_attempt else 1
                         origin.update(fingerprint=stamp, bundle_policy=POLICY, bundle_engine_policy=engine_policy,
                                       bundle_attempts=attempts, bundle_next_attempt=time.time() + (300 if attempts == 1 else 900))
-                        inspected += receive_bundle(state, media_directory or store.directory, path, oid, origin,
-                            captured['items'][source], budget=max(0, (inspection_limit if inspection_limit is not None else 8) - inspected),
+                        receive_bundle(state, media_directory or store.directory, path, oid, origin,
+                            captured['items'][source], save=save,
                             stable_seconds=stable_seconds, detached=media_directory is not None)
                         continue
                     temporary = any(text in previous.get('reason', '').lower() for text in
@@ -175,31 +223,22 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             'Reader policy differs from controller'))
                     if (incremental and not retry_due and not policy_retry and previous.get('fingerprint') == stamp
                             and previous.get('path') == origin['path']
-                            and previous.get('availability') in ('validated', 'rejected', 'pending')
+                            and previous.get('availability') in ('validated', 'rejected')
                             and previous.get('reason') != 'Decoder unavailable; retry later'):
                         if previous.get('availability') == 'validated' and previous.get('sha256') not in state['assets']:
                             raise LibraryError('Cached origin references missing asset')
                         state['origins'][oid] = {**previous, **size_fields, 'observed_at': origin['observed_at'], 'transfer_status': 0, 'transfer_error': bool(item.get('error'))}
                         continue
-                    if inspection_limit is not None and inspected >= inspection_limit:
-                        origin['reason'] = 'Intake budget deferred'
-                        state['origins'][oid] = origin
-                        continue
-                    inspected += 1
                     result = inspect_file(path, stable_seconds=stable_seconds)
+                    if result.get('reason') == 'Stage enclosing deadline exceeded':
+                        raise RuntimeError(result['reason'])
                     if result['status'] == 'rejected':
                         from booksys_core.diagnostics import emit
                         emit(service='library', stage='local', code='failed', reason='invalid_archive')
                     if result['status'] == 'pending' and 'Nested container' in result.get('reason', ''):
                         from library.bundles import receive_bundle
-                        inspected -= 1
-                        if bundle_preparations >= 1:
-                            origin['reason'] = 'Intake budget deferred'
-                            state['origins'][oid] = origin
-                            continue
-                        bundle_preparations += 1
-                        inspected += receive_bundle(state, media_directory or store.directory, path, oid, origin,
-                            captured['items'][source], budget=max(0, (inspection_limit if inspection_limit is not None else 8) - inspected),
+                        receive_bundle(state, media_directory or store.directory, path, oid, origin,
+                            captured['items'][source], save=save,
                             stable_seconds=stable_seconds, detached=media_directory is not None)
                         continue
                     count = (int(previous.get('intake_attempts', 0)) + 1
@@ -230,6 +269,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             asset['origins'].append(oid)
                         asset['captured_hints'][source] = captured['items'][source]
             except (LibraryError, OSError) as exc:
+                if str(exc) == 'Stage enclosing deadline exceeded':
+                    raise RuntimeError(str(exc)) from exc
                 from booksys_core.diagnostics import emit, exception_details
                 emit(service='library', stage='local', code='failed',
                      **{**exception_details(exc), 'reason': 'invalid_archive'})
@@ -238,6 +279,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                 if previous_hash:
                     origin['sha256'] = previous_hash
             state['origins'][oid] = origin
+            save()
     for origin in state['origins'].values():
         package = packages.get(origin['pid'], {})
         if package.get('retirement'):
@@ -246,11 +288,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
         prepared.append(store.prepare(state))
         return state
     store.save(state, expected=state['revision'])
-    completed_after = {(oid, o.get('sha256'), o.get('availability')) for oid, o in state['origins'].items()
-                       if o.get('availability') in ('validated', 'bundle', 'multipart_member')}
     if backend is None:
         return store.read()
-    from library.primitives import WorkingState
     state['revision'] = store.revision
     result = WorkingState(state)
     result.media_omitted = True

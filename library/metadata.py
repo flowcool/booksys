@@ -54,7 +54,9 @@ def http_fetch(url: str) -> tuple[int, str]:
     try:
         request = Request(url, headers={'User-Agent': 'Booksys/0.1 (personal metadata catalogue)',
                                        'Accept': 'application/json,text/html'})
+        # Network reads have finite socket timeouts so an unavailable peer cannot hold a worker forever.
         with build_opener(QualifiedRedirect).open(request, timeout=15) as response:
+            # Read at most 2 MiB of provider HTML or JSON.
             body = response.read(2 * 1024 ** 2 + 1)
             if len(body) > 2 * 1024 ** 2:
                 raise LibraryError('Provider response exceeds limit')
@@ -98,9 +100,10 @@ class Providers:
         cached=self._cache.get(url)
         if cached is not None and cached['expires']>time.time():
             return cached
-        if self.budget <= 0:
+        if self.admission is None and self.budget <= 0:
             return {'status': 'unavailable', 'reason': 'Request budget exhausted', 'url': url}
-        time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
+        if self.admission is None:
+            time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
         try:
             self.charge()
         except LibraryError as exc:
@@ -119,6 +122,8 @@ class Providers:
                       'url': url, 'retrieved_at': now(),
                       'expires': time.time() + (7 * 86400 if status == 200 else 300)}
         except (OSError, ValueError, LibraryError) as exc:
+            if str(exc) == 'Request budget exhausted':
+                return {'status': 'unavailable', 'reason': str(exc), 'url': url}
             result = {'status': 'unavailable', 'reason': str(exc), 'url': url,
                       'retrieved_at': now(), 'expires': time.time() + 300}
         result['dependency'] = parts.hostname
@@ -132,17 +137,13 @@ class Providers:
         return result
 
     def charge(self) -> None:
-        if self.budget <= 0:
+        if self.admission is None and self.budget <= 0:
             raise LibraryError('Request budget exhausted')
-        if self.admission is not None or self.shared is not None:
-            from booksys_core.network_admission import RollingBudget, BudgetWait
+        if self.admission is not None:
+            from booksys_core.network_admission import BudgetWait
             from booksys_core.errors import CollectionError
             try:
-                if self.admission is not None:
-                    admission: RollingBudget = self.admission
-                else:
-                    assert self.shared is not None
-                    admission = RollingBudget(self.shared / 'provider-admission.yaml')
+                admission = self.admission
                 admission.debit()
             except BudgetWait as exc:
                 # Redirects debit the same budget. Wait only for a short pacing
@@ -159,7 +160,6 @@ class Providers:
                     raise LibraryError('Network authority unavailable') from retry
             except CollectionError as exc:
                 raise LibraryError('Network authority unavailable') from exc
-            self.budget -= 1
             return
         self.budget -= 1
 

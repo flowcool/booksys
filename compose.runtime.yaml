@@ -5,6 +5,11 @@ services:
       context: .
       dockerfile: Dockerfile.byparr
     image: booksys-byparr:local
+    logging:
+      driver: json-file
+      options:
+        max-size: "${DOCKER_LOGGING_MAX_SIZE:?Load the canonical common environment}"
+        max-file: "${DOCKER_LOGGING_MAX_FILE:?Load the canonical common environment}"
     restart: unless-stopped
     shm_size: 512m
     mem_limit: 1536m
@@ -21,6 +26,11 @@ services:
   worker:
     build: .
     image: booksys-worker:local
+    logging:
+      driver: json-file
+      options:
+        max-size: "${DOCKER_LOGGING_MAX_SIZE:?Load the canonical common environment}"
+        max-file: "${DOCKER_LOGGING_MAX_FILE:?Load the canonical common environment}"
     restart: unless-stopped
     command:
       - --directory

@@ -16,7 +16,7 @@ from booksys_core.diagnostics import parse_event
 
 DOCKER_SOURCES = {'worker': ('booksys-worker-1', 'worker'), 'byparr': ('booksys-byparr-1', 'byparr')}
 UNIT = 'booksys-library.service'
-COMPOSE_ROLES = ('controller', 'discovery', 'collection', 'intake', 'ocr', 'metadata',
+COMPOSE_ROLES = ('controller', 'discovery', 'collection', 'intake', 'metadata',
                  'copies', 'routing', 'retirement', 'byparr', 'pyload')
 
 

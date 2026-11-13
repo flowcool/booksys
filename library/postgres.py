@@ -106,6 +106,7 @@ class Database:
             return False
 
     @contextmanager
+    # Connection, lock, query and commit waits share one remaining total database deadline.
     def connection(self, *, write: bool = False, seconds: float = 10, lock_cap_ms: int | None = None) -> Iterator[DeadlineConnection]:
         """One transaction. The backend connection is kept for the next call of this thread when the transaction ended
         cleanly: opening one costs a server process, a password check and two statements (15 ms; about 250 a second
@@ -200,6 +201,7 @@ class Database:
 
 # One idle connection per (dsn, schema, process, thread): see Database.connection.
 _POOL: dict[tuple[str, str, int, int], DeadlineConnection] = {}
+# Retain at most eight idle database connections per process and reconnect a stale idle session only once.
 _POOL_LIMIT = 8
 
 

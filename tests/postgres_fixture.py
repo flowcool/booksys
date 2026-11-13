@@ -18,9 +18,11 @@ def create_store(test, directory, state, *, authority='test'):
             db.execute(sql.SQL('DROP SCHEMA IF EXISTS {} CASCADE').format(sql.Identifier(namespace)))
     test.addCleanup(cleanup)
     store = Store.create(directory,database=database,authority=authority,state=state)
-    dsn_path = Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+    secret = directory / 'postgresql-test.dsn'
+    secret.write_text(dsn)
+    secret.chmod(0o600)
     config = directory / 'postgresql.json'
-    config.write_text(json.dumps({'schema':namespace,'dsn_file':str(dsn_path)}))
+    config.write_text(json.dumps({'schema':namespace,'dsn_file':str(secret)}))
     config.chmod(0o600)
     from library.authority import code_digest
     from library.primitives import atomic_yaml

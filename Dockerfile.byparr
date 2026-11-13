@@ -1,16 +1,6 @@
 FROM ghcr.io/thephaseless/byparr@sha256:c66fa161187b8fa527bfad7eefa2647ea1c553f77df68cbffd6fe83366d1787b
-USER root
-# Fix inherited Ubuntu findings. The adapter uses installed dependencies, not pip.
-# Unlike the worker build, this base has no venv pip; remove only the inherited
-# interpreter's installer and its vulnerable vendored packages.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade apt=3.2.1ubuntu0.1 libapt-pkg7.0=3.2.1ubuntu0.1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && runtime_python=$(readlink -f /app/.venv/bin/python) \
-    && "$runtime_python" -m pip uninstall --break-system-packages -y pip
-COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/booksys/
-COPY third_party/ /usr/share/doc/booksys/third_party/
-USER 1000
-COPY booksys_core/ /app/booksys_core/
+ARG BOOKSYS_REVISION
+LABEL org.opencontainers.image.revision=$BOOKSYS_REVISION
 COPY ops/byparr/session_api.py /app/session_api.py
+COPY booksys_core /app/booksys_core
 ENTRYPOINT ["tini", "-s", "--", "/app/.venv/bin/python", "/app/session_api.py"]

@@ -216,21 +216,3 @@ class AdmissionPublisher(Publisher):
             self.transition(op, 'published')
             self.commit(op)
             return op
-
-
-def process_admissions(store: Any, reception: Path, library: Path, *, limit: int = 1,
-                       **options: Any) -> dict[str, int]:
-    ready = []
-    for key, asset in store.records('assets'):
-        state = store.working_set('admit', {'assets': [key]})
-        if eligible(state, key) and asset.get('admission', {}).get('signature') != projection(state, key)['signature']:
-            ready.append(key)
-    if limit > 0:
-        options.setdefault('lab', True)
-        writer = AdmissionPublisher(store, reception, library, **options)
-        writer.reconcile()
-        for key in ready[:limit]:
-            writer.publish_asset(key)
-    processed = min(len(ready), max(0, limit))
-    return {'processed': processed, 'published': processed, 'backlog': len(ready)-processed,
-            'ready_backlog': len(ready)-processed}

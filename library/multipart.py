@@ -1,23 +1,20 @@
 """Select exact tracked RAR volume sets without scanning reception."""
 from __future__ import annotations
-from typing import Any
+from typing import Any, Callable
 from library.primitives import LibraryError
 
 from library.multipart_model import is_multipart as is_multipart, select_parts as select_parts
 
 
 def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
-                  package: dict[str, Any], hint: dict[str, Any], budget: int,
-                  stable_seconds: float, *, detached: bool = False) -> int:
+                  package: dict[str, Any], hint: dict[str, Any],
+                  stable_seconds: float, *, save: Callable[[], None], detached: bool = False) -> None:
     from pathlib import Path
     from library.reception import reception_path
     from library.bundles import receive_bundle
     from library.bundle_worker import POLICY, MAX_SOURCE
     from library.primitives import digest, now
     from library.readers import fingerprint, sha256
-    import os
-    used = 0
-    preparations = 0
     seen: set[int] = set()
     for item in package.get('links', []):
         if not is_multipart(item['name']) or item['fid'] in seen:
@@ -55,13 +52,9 @@ def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
             if unchanged and previous.get('availability') == 'rejected':
                 state['origins'][oid] = {**previous, 'observed_at': now()}
                 continue
-            if not previous.get('bundle') and (used >= budget or preparations >= 1):
-                origin['reason'] = 'Intake budget deferred'
-            else:
-                preparations += not bool(previous.get('bundle'))
-                origin['multipart_policy'] = policy
-                used += receive_bundle(state, directory, paths[0], oid, origin, hint,
-                    budget=max(0, budget-used), stable_seconds=stable_seconds, parts=paths, detached=detached)
+            origin['multipart_policy'] = policy
+            receive_bundle(state, directory, paths[0], oid, origin, hint,
+                save=save, stable_seconds=stable_seconds, parts=paths, detached=detached)
             state['origins'][oid] = origin
             for member,record in zip(members[1:],records[1:]):
                 mid = digest({'source': source, 'pid': package['pid'], 'fid': member['fid']})
@@ -70,9 +63,11 @@ def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
                     'multipart_parent': oid, 'observed_at': now(), 'transfer_status': 0,
                     'reason': 'Volume retained as part of tracked RAR source set'}
         except (LibraryError, OSError) as exc:
+            if str(exc) == 'Stage enclosing deadline exceeded':
+                raise RuntimeError(str(exc)) from exc
             canonical = state['origins'].get(oid, {})
             if canonical.get('bundle'):
                 origin = {**canonical, 'observed_at': now()}
             origin.update(reason=str(exc), availability='pending' if str(exc).startswith(('Awaiting part', 'Missing part')) else 'rejected')
             state['origins'][oid] = origin
-    return used
+        save()

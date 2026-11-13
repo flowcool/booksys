@@ -20,10 +20,3 @@ class BoundaryTests(unittest.TestCase):
                     if module and (module in ('booksys', 'pipeline', 'library.cli', '__main__') or module.startswith('ops.')):
                         edges.append(f'{path.relative_to(root)}:{node.lineno} -> {module}')
         self.assertEqual(edges, [])
-
-
-    def test_cycle_and_views_are_application_modules(self):
-        from library.cycle import run_cycle
-        from library.views import build_projection
-        from library.http import handler
-        self.assertTrue(all(callable(value) for value in (run_cycle, build_projection, handler)))

@@ -19,7 +19,9 @@ WORK_ROOT = '/data/booksys/work'
 
 
 def _limits() -> None:
+    # Bound decoder virtual address space independently of the container memory cap.
     resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024**2, 1536 * 1024**2))
+    # Bound each decoder output file to 1 GiB of local work storage.
     resource.setrlimit(resource.RLIMIT_FSIZE, (1024**3, 1024**3))
 
 
@@ -29,7 +31,8 @@ def run(operation: str, source: Path, payload: dict[str, Any] | None = None,
     its own pending or rejected outcomes in its JSON."""
     source = source.absolute()
     before = fingerprint(source)
-    timeout = {'validate': 45, 'ocr': 300, 'proof': 180, 'bundle': 180,
+    # Bound decoding wall time, including slow input reads (plus 1 s per 2 MiB of source); the process group is killed on expiry.
+    timeout = {'validate': 45, 'bundle': 180,
                'transform': 1800 if source.suffix.lower() == '.pdf' else 60}[operation]
     work = Path(tempfile.mkdtemp(dir=WORK_ROOT))
     try:

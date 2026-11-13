@@ -35,13 +35,13 @@ def main() -> None:
                 "(SELECT string_agg(wait_reason||' '||n, '; ') FROM (SELECT wait_reason, count(*) n FROM work_items w2 WHERE w2.stage=w.stage "
                 "AND state='waiting' AND wait_reason<>'' GROUP BY 1 ORDER BY 2 DESC LIMIT 3) x) "
                 "FROM work_items w GROUP BY stage ORDER BY stage").fetchall()
+        captured = db.execute('SELECT count(*) FROM captured_sources').fetchone()
         deleting = db.execute("SELECT count(*) FROM retirement_acquisitions WHERE payload::json->>'phase'='deleting'").fetchone()
         crawl = db.execute("SELECT COALESCE(payload::json->>'deep_page','6'), "
             "round(extract(epoch from now()-(payload::json->>'last_cycle')::timestamptz)) FROM collection_categories ORDER BY source LIMIT 1").fetchone()
     print(f'pyLoad snapshot age: {age[0] if age else "none"} s   retired packages: {retired[0] if retired else "?"}   sources in phase deleting: {deleting[0] if deleting else "?"}')
-    pages = int(os.environ.get('BOOKSYS_CRAWL_PAGES', '5'))
-    print(f'collection: crawling {pages} pages (BOOKSYS_CRAWL_PAGES), deep cursor page {crawl[0] if crawl else 6}, '
-          f'last cycle {str(crawl[1]) + " s" if crawl and crawl[1] is not None else "unknown"} ago')
+    print(f'collection: deep crawl cursor at page {crawl[0] if crawl else 6}, '
+          f'last cursor save {str(int(crawl[1])) + " s" if crawl and crawl[1] is not None else "unknown"} ago; sources captured: {captured[0]}')
     if work:
         print('work items per stage')
         print(f'{"stage":11} {"done/60min":>10} {"waiting":>8} {"held":>6} {"claimed":>8}  top wait reasons')

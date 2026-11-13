@@ -106,6 +106,7 @@ class RollingBudget:
                 due = max(due, starts[overflow - 1] + value['period'])
             return float(due)
 
+    # Keep native API starts below the pinned pyLoad ceiling of 100 per 60 seconds per client IP; this policy allows 90.
     def debit(self, *, timestamp: float | None = None) -> None:
         stamp = time.time() if timestamp is None else timestamp
         if not math.isfinite(stamp) or stamp < 0:
@@ -129,6 +130,7 @@ class RollingBudget:
         with self._transaction(write=True) as value:
             value['not_before'] = max(due, value['not_before'])
 
+    # Do not start before a valid received Retry-After deadline; block when no safe deadline can be represented.
     def remote_deadline(self, header: str | None) -> None:
         from booksys_core.browser_outcomes import retry_after
         stamp = time.time()

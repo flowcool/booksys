@@ -30,7 +30,7 @@ Retirement must not trigger automatic resubmission.
    abandons the acquisition. Failure, age and retry count do not imply abandonment.
    This feature does not add an automatic abandonment rule.
 4. Preserve original downloads, derived bundle inputs, recovery copies,
-   manifests, decisions and evidence. Retirement removes pyLoad records only.
+   manifests and evidence. Retirement removes pyLoad records only.
 5. Keep downstream processing available after removal and after restart.
 6. A retired package cannot use the current native parking rollback.
    Disabling retirement stops future removals. It does not restore deleted IDs.

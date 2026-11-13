@@ -19,13 +19,9 @@ from library.source_tasks import SourcePolicy
 from library.stage_model import Task, StepResult
 from library.stage_tasks import StageTasks
 
-TIMEOUTS = dict(collection=300, intake=1200, ocr=900, metadata=1200, copies=3600, routing=300, retirement=1200)
+# A stage step must finish within its enclosing deadline; input size alone does not prove that it will fit.
+TIMEOUTS = dict(collection=300, intake=1200, metadata=1200, copies=3600, routing=300)
 
-
-from library.external_capacity import external_capacity as external_capacity
-
-
-RETIREMENT_CALLS = 16
 
 class StageRuntime:
     def __init__(self, root: Path, reception: Path, collector: Path, *, providers: Providers,
@@ -40,7 +36,6 @@ class StageRuntime:
         self.native = NativeStages(self.catalog, reception, root/'library', collector,
             client=client, browser=browser, snapshots=root/'snapshots')
         self.client, self.isolated = client, isolated
-        self.provider_allowance = providers.budget
         self.failure_cursor = ''
         self._pass_revision: int | None = None      # catalogue revision when the running full pass started
         self._seen_revision = -1                    # revision up to which discovery has looked at the assets
@@ -53,6 +48,7 @@ class StageRuntime:
         state = OperationalState(self.tasks.store._database)
         after = state.discovery()
         store = self.tasks.store
+        # Scan at most one hundred assets per pass and reuse changed IDs between five-minute full scans.
         if not after and time.monotonic() - self._done_at >= 300:
             # A full pass reads every asset (844 assets, 65 MB): it also covers the obligations that depend on runtime state.
             self._pass_revision = store.polled_revision()
@@ -76,10 +72,9 @@ class StageRuntime:
         return count
 
     def actor(self, queue: str) -> Any:
-        business = queue in ('metadata', 'ocr', 'copies')
+        business = queue in ('metadata', 'copies')
         def execute(task: Task, stamp: datetime) -> Any:
             if task.stage == 'metadata':
-                self.business.providers.budget = self.provider_allowance
                 self.business.providers.events.clear()
             try:
                 return self.business.execute(task, now=stamp) if business else self.native.execute(task, now=stamp)
@@ -110,16 +105,14 @@ class StageRuntime:
     def queue_gate(self, stage: str, stamp: datetime) -> str:
         """Waits that hold for every task of the stage: NAS and the shared pyLoad budget."""
         from booksys_core.errors import CollectionError
-        if stage in ('collection', 'intake', 'ocr', 'copies', 'retirement'):
+        if stage in ('collection', 'intake', 'copies', 'retirement'):
             try:
                 require_nas()
             except LibraryError:
                 return 'nas_unavailable'
         try:
             budget = getattr(self.client, 'admission', None) if stage in ('collection', 'routing', 'retirement') else None
-            # A retirement makes about 13 to 16 pyLoad calls; it must not start with one free slot.
-            reserve = RETIREMENT_CALLS if stage == 'retirement' else 1
-            if budget is not None and budget.next_due(timestamp=stamp.timestamp(), reserve=reserve) > stamp.timestamp():
+            if budget is not None and budget.next_due(timestamp=stamp.timestamp()) > stamp.timestamp():
                 return 'network_budget_wait'
         except (CollectionError, OSError):
             return 'network_authority_unavailable'
@@ -136,7 +129,7 @@ class StageRuntime:
                 return 'network_budget_wait'
         except (CollectionError, OSError):
             return 'network_authority_unavailable'
-        if task.stage in ('metadata', 'ocr', 'copies'):
+        if task.stage in ('metadata', 'copies'):
             asset = self.tasks.store.get('assets', task.entity, media=False)
             if asset is None:
                 return 'inputs_changed'
@@ -149,4 +142,4 @@ class StageRuntime:
                 state = self.catalog.working_set('admit', {'assets': [task.entity]}, media=False)
                 if projection(state, task.entity)['signature'] != task.input_revision:
                     return 'inputs_changed'
-        return self.native.ready(task, now=stamp) if task.stage not in ('metadata', 'ocr', 'copies') else ''
+        return self.native.ready(task, now=stamp) if task.stage not in ('metadata', 'copies') else ''

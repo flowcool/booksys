@@ -32,6 +32,24 @@ def captured(url):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_run_once_continues_after_one_unconfirmed_submission(self):
+        from unittest.mock import Mock, patch
+        from booksys_core.collection import run_once
+        journal = {'categories': {}, 'submissions': {FIRST: {'status': 'creating'}}}
+        records = {source: {'downloads': {}} for source in (FIRST, SECOND)}
+        store = Mock(); store.monitor.return_value = journal; store.captured.return_value = {'items': records}
+        downloader = Mock(); downloader.call.return_value = {'pause': False, 'download': True}
+        downloader.submit.side_effect = [CollectionError('Unconfirmed write'), 2]
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch('booksys_core.collection.CollectorState', return_value=store), \
+                patch('booksys_core.collection.ScheduledCalls'), \
+                patch('booksys_core.collection.catalogue', return_value=([FIRST, SECOND], None)), \
+                patch('booksys_core.collection.CRAWL_PAGES', 1):
+            counts = run_once(Path(temporary), Mock(), downloader)
+        self.assertEqual(counts, {'pages': 1, 'queued': 1, 'skipped': 1})
+        self.assertEqual([call.args[0] for call in downloader.submit.call_args_list], [FIRST, SECOND])
+        self.assertEqual(journal['submissions'][FIRST], {'status': 'creating'})
+
     def test_real_catalogues_have_40_distinct_items_and_next_page(self):
         first, next_url = catalogue(captured(DEFAULT_CATEGORY), DEFAULT_CATEGORY)
         second, _ = catalogue(captured(next_url), next_url)
@@ -46,8 +64,8 @@ class CollectorTests(unittest.TestCase):
                              {"1fichier", "nitroflare"}, max_items=2)
             self.assertEqual(counts["collected"], 2)
             self.assertEqual(set((directory / "nitroflare.txt").read_text().splitlines()), {
-                "https://files.example.invalid/fixture-0b011ea44ebc45f9",
-                "https://files.example.invalid/fixture-c74ce0a976f7b459"})
+                "https://nitroflare.com/view/E2C0E9A951C27E1",
+                "https://nitroflare.com/view/5C559684FE7B60E"})
             self.assertEqual(len((directory / "1fichier.txt").read_text().splitlines()), 2)
             calls = []
 
@@ -90,7 +108,7 @@ class CollectorTests(unittest.TestCase):
             with self.assertRaises(CollectionError):
                 collect([DEFAULT_CATEGORY], fetch, directory, {"nitroflare"})
             self.assertEqual((directory / "nitroflare.txt").read_text(),
-                             "https://files.example.invalid/fixture-0b011ea44ebc45f9\n")
+                             "https://nitroflare.com/view/E2C0E9A951C27E1\n")
             self.assertIn(FIRST, CollectorState(directory).captured()["items"])
             self.assertNotIn(SECOND, CollectorState(directory).captured()["items"])
 

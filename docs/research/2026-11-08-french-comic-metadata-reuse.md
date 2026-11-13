@@ -75,6 +75,8 @@ A tool must refuse an ambiguous match. Inspect preview first; write only owned
 copies, then independently validate ComicInfo and page hashes. Do not promise a
 publication or identification rate before that proof.
 
+## Current project checkpoints
+
 ## Pinned primary sources
 
 - [lbesnard/bdnex](https://github.com/lbesnard/bdnex/tree/31f135652e62332c24b88cb86f89f76e6feb212d) — `31f135652e`.
@@ -91,7 +93,7 @@ publication or identification rate before that proof.
 - [maforget/Bedetheque-Scrapper-2](https://github.com/maforget/Bedetheque-Scrapper-2/tree/0cda4994b04a1e44d5bc6d4e2db1d17804b1de0e) — `0cda4994b0`.
 - [comictagger/comicinfoxml](https://github.com/comictagger/comicinfoxml/tree/034b5d39c2973fac4ebb42f61ebe09ac66385df5) — `034b5d39c2`.
 
-Public Bedetheque robots/home/operator and one sitemap were fetched read-only.
+Public Bedetheque robots/home/search and one sitemap were fetched read-only.
 Homepage and sampled sitemap returned HTTP200; the sitemap contains 6,413
 references in about1.27MB. This proves public access for that sample, not a bulk
 service guarantee. Existing public search mechanics were verified in the scraper

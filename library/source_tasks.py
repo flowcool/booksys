@@ -1,11 +1,8 @@
 """PostgreSQL source policy and bounded, non-executing source discovery."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import copy
-import hashlib
-import os
 import stat
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -13,26 +10,10 @@ if TYPE_CHECKING:
     from library.postgres import DeadlineConnection
     from library.store import Store, SourceProgress
 
-import yaml
-
 from library.primitives import LibraryError, digest
 from library.stage_model import Task
 
-MAX_BYTES = 4194304
-MAX_POLICY_BYTES = 8388608
 MAX_SOURCES = 16
-PAGE = 256
-
-
-def bounded_read(path: Path, *, max_bytes: int = MAX_BYTES) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(descriptor, 'rb') as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise LibraryError('source_journal_not_regular')
-        raw = stream.read(max_bytes + 1)
-    if len(raw) > max_bytes:
-        raise LibraryError('source_journal_capacity')
-    return raw
 
 
 from library.stage_model import Scan as Scan
@@ -239,36 +220,3 @@ class SourcePolicy:
         value['_source_sha256']=digest(value)
         value['_source_registration']=row[0]
         return value
-
-
-
-def parse_journal(path: Path, queue: str | None = None) -> None:
-    import resource
-    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
-    raw = bounded_read(path)
-    value = yaml.safe_load(raw)
-    if isinstance(value, dict) and 'submissions' in value and queue is not None:
-        from library.native_projection import project
-        auxiliary_path = path.parent/'fiches.yaml'
-        auxiliary = yaml.safe_load(bounded_read(auxiliary_path)) if queue == 'collection' and auxiliary_path.exists() else None
-        value = project(queue, value, auxiliary=auxiliary)
-    if not isinstance(value, dict) or not isinstance(value.get('items'), dict):
-        raise LibraryError('Invalid discovery journal view')
-    from library.stage_model import Obligation, instant
-    from datetime import datetime
-    import re
-    for entity, record in value['items'].items():
-        if not isinstance(record, dict) or set(record) - {'input_revision', 'method', 'due_at', 'blocked'}:
-            raise LibraryError('Invalid source task view')
-        Obligation('collection', entity, record['input_revision'], record['method']).key
-        if record.get('due_at'):
-            instant(datetime.fromisoformat(record['due_at']))
-        if record.get('blocked') and not re.fullmatch('[a-z_]{1,80}', record['blocked']):
-            raise LibraryError('Invalid source block reason')
-    value['_source_sha256'] = hashlib.sha256(raw).hexdigest()
-    print(json.dumps(value, ensure_ascii=False, allow_nan=False))
-
-
-if __name__ == '__main__':
-    import sys
-    parse_journal(Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)

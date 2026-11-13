@@ -225,16 +225,31 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
                     if journal['submissions'].get(source, {}).get('status') == 'queued':
                         counts['skipped'] += 1
                         continue
+                    # A solver or HTML failure while reading the fiche still stops the pass (do not hammer the site);
+                    # only a refused submission of this one source is skipped.
                     record = records.get(source)
                     if record is None:
                         record = resolve(fetch(source), source, None, fetch)
                         record['complete_hosters'] = ['*']
                         store.capture(source, record)
                         records[source] = record
-                    downloader.submit(source, record, journal, directory / 'monitor.yaml')
+                    try:
+                        downloader.submit(source, record, journal, directory / 'monitor.yaml')
+                    except CollectionError:
+                        from booksys_core.diagnostics import emit
+                        from booksys_core.values import digest
+                        emit(service='collector', stage='collection', code='failed', reason='unknown_effect',
+                             refs=[{'kind': 'source', 'id': digest(source)}])
+                        counts['skipped'] += 1
+                        continue
                     counts['queued'] += 1
                 if page > 5:
                     deep_page = page + 1
+                    # Save the cursor after every deep page: a restart or a failure in the middle of a long cycle used to
+                    # throw the whole cycle away (the cursor was saved at the very end and stayed at page 6 for hours).
+                    saved = {'deep_page': deep_page, 'last_cycle': datetime.fromtimestamp(clock(), timezone.utc).isoformat()}
+                    store.category(category, saved)
+                    prior = saved
             value = {'deep_page': deep_page, 'last_cycle': datetime.fromtimestamp(clock(), timezone.utc).isoformat()}
             if completions is not None:
                 completions.append(store.prepare_completion('category', category, value,

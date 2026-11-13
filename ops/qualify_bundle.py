@@ -37,19 +37,15 @@ def qualify(state_path: Path, reception: Path, oid: str, output: Path, *, transf
     journal = {'submissions': {source: {'status': 'queued', 'package_id': original['pid'], 'name': 'bundle-proof'}}}
     queue = [{'pid': original['pid'], 'name': 'bundle-proof', 'folder': str(path.parent), 'links': [
         {'fid': original['fid'], 'name': path.name, 'status': 0, 'size': parent.stat().st_size}]}]
-    # At most eight validations per cycle, including the real 13-child example.
-    for _ in range(8):
-        state = receive(store, reception, captured, journal, queue, stable_seconds=.01,
-                        incremental=True, inspection_limit=8)
-        children = {key: origin for key, origin in state['origins'].items() if origin.get('parent_origin')}
-        if not any(origin.get('reason') == 'Intake budget deferred' for origin in children.values()):
-            break
+    state = receive(store, reception, captured, journal, queue, stable_seconds=.01,
+                    incremental=True)
+    children = {key: origin for key, origin in state['origins'].items() if origin.get('parent_origin')}
     parent_record = state['origins'].get(oid, {})
     if parent_record.get('availability') != 'bundle':
         raise LibraryError('Bundle extraction blocked: ' + parent_record.get('reason', 'no parent'))
     inventory = {key: value['sha256'] for key, value in state['origins'].items()}
     rerun = receive(store, reception, captured, journal, queue, stable_seconds=.01,
-                    incremental=True, inspection_limit=8)
+                    incremental=True)
     if inventory != {key: value['sha256'] for key, value in rerun['origins'].items()}:
         raise LibraryError('Bundle rerun duplicated or changed origins')
     proof_path = output / 'proof.yaml'

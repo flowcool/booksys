@@ -82,7 +82,7 @@ class WorkItemsTests(unittest.TestCase):
         self.assertEqual(work.counts('intake')['intake'], {'done': 240})
 
     def test_lost_claim_cannot_finish(self) -> None:
-        work = self.make(idempotent=frozenset({'intake'}), lease_seconds=60)
+        work = self.make(lease_seconds=60)
         work.add('intake', 'x', input_rev='r', method='m', now=T0)
         a = work.claim('intake', 'A', now=T0)
         assert a is not None
@@ -94,20 +94,13 @@ class WorkItemsTests(unittest.TestCase):
         self.assertTrue(work.done(b, now=T0 + timedelta(seconds=140)))
         self.assertEqual(self.state('intake', 'x'), 'done')
 
-    def test_non_idempotent_claim_is_never_reclaimed(self) -> None:
-        work = self.make(idempotent=frozenset({'intake'}), lease_seconds=60)
-        work.add('routing', 'p', input_rev='r', method='m', now=T0)
-        self.assertIsNotNone(work.claim('routing', 'A', now=T0))
-        self.assertIsNone(work.claim('routing', 'B', now=T0 + timedelta(hours=5)))
-        self.assertEqual(self.state('routing', 'p'), 'claimed', 'the item stays for exact reconciliation')
-
     def test_kill_at_each_point_ends_in_the_same_state(self) -> None:
         """The worker dies after the claim (before any effect). The next run finishes the item once."""
         env = dict(os.environ, BOOKSYS_SCRATCH_SCHEMA=self.schema)
-        work = self.make(idempotent=frozenset({'intake'}), lease_seconds=60)
+        work = self.make(lease_seconds=60)
         work.add('intake', 'k', input_rev='r', method='m', now=datetime.now(timezone.utc) - timedelta(hours=1))
         child = ("import os; from library.postgres import Database; from library.work_items import WorkItems; "
-                 "w=WorkItems(Database(os.environ['BOOKSYS_SCRATCH_DSN'], os.environ['BOOKSYS_SCRATCH_SCHEMA']), idempotent=frozenset({'intake'})); "
+                 "w=WorkItems(Database(os.environ['BOOKSYS_SCRATCH_DSN'], os.environ['BOOKSYS_SCRATCH_SCHEMA']), lease_seconds=60); "
                  "i=w.claim('intake','dying'); assert i is not None; os._exit(17)")
         result = subprocess.run([sys.executable, '-c', child], env=env, cwd=os.getcwd(), capture_output=True)
         self.assertEqual(result.returncode, 17, result.stderr.decode()[-300:])
@@ -160,52 +153,40 @@ class WorkItemsTests(unittest.TestCase):
         self.assertEqual(self.state('intake', 'o1'), 'done')
         self.assertEqual(self.state('copies', 'a1'), 'ready')
 
-    def test_obligation_block_holds_and_releases_but_never_clears_an_actor_hold(self) -> None:
+    def test_obligation_block_holds_and_releases(self) -> None:
         work = self.make()
         self.assertEqual(work.add('routing', 's:a', input_rev='r', method='m', blocked='remote_review_block', now=T0), 'created')
         self.assertEqual(self.state('routing', 's:a'), 'blocked')
         self.assertIsNone(work.claim('routing', 'w', now=T0 + timedelta(hours=1)), 'a held item is not claimable')
         self.assertEqual(work.add('routing', 's:a', input_rev='r', method='m', now=T0 + timedelta(hours=2)), 'same')
         self.assertEqual(self.state('routing', 's:a'), 'ready', 'the next scan gave no reason: the hold ends')
-        item = work.claim('routing', 'w', now=T0 + timedelta(hours=3))
-        assert item is not None
-        self.assertTrue(work.block(item, 'effect_uncertain', now=T0 + timedelta(hours=3)))
-        work.add('routing', 's:a', input_rev='r', method='m', now=T0 + timedelta(hours=4))
-        self.assertEqual(self.state('routing', 's:a'), 'blocked', 'only a reconcile clears effect_uncertain')
         work.add('routing', 's:a', input_rev='r2', method='m', blocked='remote_review_block', now=T0 + timedelta(hours=5))
         self.assertEqual(self.state('routing', 's:a'), 'blocked', 'a new input keeps the obligation block')
 
-    def test_claim_orphan_takes_an_own_claim_again_with_one_more_attempt(self) -> None:
-        work = self.make()
-        work.add('routing', 'p', input_rev='r', method='m', now=T0)
-        first = work.claim('routing', 'routing', now=T0)
-        assert first is not None
-        self.assertIsNone(work.claim_orphan('routing', 'other', now=T0), 'only the own name')
-        orphan = work.claim_orphan('routing', 'routing', now=T0 + timedelta(minutes=1))
-        assert orphan is not None and orphan.attempts == 2
-        self.assertFalse(work.done(first, now=T0 + timedelta(minutes=2)), 'the old attempt is fenced out')
-        self.assertTrue(work.done(orphan, now=T0 + timedelta(minutes=2)))
-
-    def test_claim_orphan_also_takes_a_legacy_claim(self) -> None:
-        """The migration marks an active old task as claimed by 'legacy': its effect may be half done."""
-        work = self.make()
-        work.add('routing', 'q', input_rev='r', method='m', now=T0)
-        with work._tx() as db:
-            db.execute("UPDATE work_items SET state='claimed', claimed_by='legacy', attempts=1, claimed_at=%s WHERE item='q'", (T0,))
-        orphan = work.claim_orphan('routing', 'routing', now=T0 + timedelta(minutes=1))
-        assert orphan is not None and orphan.claimed_by == 'routing' and orphan.attempts == 2
-        self.assertTrue(work.done(orphan, now=T0 + timedelta(minutes=2)))
-
     def test_retry_limit_then_revive(self) -> None:
-        work = self.make(max_attempts={'metadata': 2})
+        work = self.make(max_attempts={'metadata': 1, 'collection': 1})
+        for stage in ('metadata', 'collection'):
+            work.add(stage, 'm', input_rev='r', method='m', now=T0)
+            at = T0
+            for count, minutes in enumerate((10, 20, 40, 80, 160, 320, 360, 360), 1):
+                item = work.claim(stage, 'w', now=at)
+                assert item is not None and item.attempts == (1 if stage == 'collection' else count)
+                self.assertTrue(work.retry(item, 'TimeoutError: provider timeout', timedelta(minutes=5), now=at))
+                due = at + timedelta(minutes=10 if stage == 'collection' else minutes)
+                self.assertEqual(work.revive(stage, now=due - timedelta(seconds=1)), 0)
+                at = due + timedelta(seconds=1)
+                self.assertEqual(work.revive(stage, now=at), 1)
+
+    def test_identical_failure_has_no_new_event(self) -> None:
+        work = self.make(max_attempts={'metadata': 1})
         work.add('metadata', 'm', input_rev='r', method='m', now=T0)
-        for round_ in range(2):
-            item = work.claim('metadata', 'w', now=T0 + timedelta(hours=round_ + 1))
-            assert item is not None
-            self.assertTrue(work.retry(item, 'provider timeout', timedelta(minutes=5), now=T0 + timedelta(hours=round_ + 1)))
-        self.assertEqual(self.state('metadata', 'm'), 'failed')
-        self.assertEqual(work.revive('metadata', now=T0 + timedelta(hours=5)), 1)
-        self.assertEqual(self.state('metadata', 'm'), 'ready')
+        for count, (error, expected) in enumerate((('ValueError: a', 1), ('ValueError: a', 1), ('ValueError: b', 2), ('TypeError: b', 3))):
+            at = T0 + timedelta(days=count)
+            item = work.claim('metadata', 'w', now=at)
+            assert item is not None and item.attempts == count + 1
+            work.retry(item, error, timedelta(minutes=5), now=at)
+            self.assertEqual(sum(event[2] == 'failed' for event in work.events('metadata', 'm')), expected)
+            work.revive('metadata', now=at + timedelta(hours=7))
 
 
 if __name__ == '__main__':

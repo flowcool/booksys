@@ -56,7 +56,6 @@ def description_text(value: Any) -> str:
 def operator_reason(value: Any) -> str:
     reason = bounded(value)
     messages = {
-        'Intake budget deferred': 'En attente du prochain cycle : les fichiers terminés sont vérifiés avant les travaux lourds.',
         'Transfer is not confirmed finished': 'Téléchargement non terminé : le fichier sera examiné après sa fin.',
         'Skipped mirror link': 'Miroir ignoré par pyLoad. Ce lien ne fournit aucun fichier validé.',
         'Offline mirror link': 'Miroir hors ligne. Ce lien ne fournit aucun fichier validé.',

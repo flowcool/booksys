@@ -128,8 +128,11 @@ def validate(state: Any) -> None:
                     or any(not re.fullmatch('[0-9a-f]{64}', str(v)) for v in admission['manifest'].values())):
                 raise LibraryError('Invalid work admission record')
     for key, origin in state['origins'].items():
+        external = (origin['source'] == 'external:' + str(origin['path'])
+                    and key == digest({'external': origin['path'], 'size': origin.get('size'), 'mtime_ns': origin.get('mtime_ns')}))
         if (not all(isinstance(origin[k], str) for k in ('source', 'path')) or
-                type(origin['pid']) is not int or type(origin['fid']) is not int):
+                not ((type(origin['pid']) is int and type(origin['fid']) is int) or
+                     (external and origin['pid'] is None and origin['fid'] is None))):
             raise LibraryError('Invalid origin IDs or path')
         path = Path(origin['path'])
         if path.is_absolute() or '..' in path.parts:

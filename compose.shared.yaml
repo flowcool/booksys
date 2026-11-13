@@ -10,8 +10,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "20m"
-        max-file: "5"
+        max-size: "${DOCKER_LOGGING_MAX_SIZE:?Load the canonical common environment}"
+        max-file: "${DOCKER_LOGGING_MAX_FILE:?Load the canonical common environment}"
     ports:
       - "0.0.0.0:8000:8000"
     environment:
@@ -20,7 +20,7 @@ services:
       TZ: Europe/Zurich
       PYTHONPATH: /opt/booksys-python
     volumes:
-      - /data/booksys/config/pyload:/config
+      - /opt/related-project/lunii/.pyload/config:/config
       - /data/booksys/downloads:/downloads
       - ./ops/pyload_python:/opt/booksys-python:ro
     networks:

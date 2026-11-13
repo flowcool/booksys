@@ -58,17 +58,15 @@ def qualify(snapshots: Path, reception: Path, pid: int, output: Path, limit: int
         for origin in retryable:
             origin['intake_next_attempt'] = 0
         store.save(retry_state, expected=retry_state['revision'])
-    for _ in range(8):
-        state = receive(store,copied,captured,{'submissions':{source:journal['submissions'][source]}},
-                        [package],stable_seconds=.01,incremental=True,inspection_limit=8)
-        children = {oid:o for oid,o in state['origins'].items() if o.get('parent_origin')}
-        if not any(o.get('reason') == 'Intake budget deferred' for o in children.values()): break
+    state = receive(store,copied,captured,{'submissions':{source:journal['submissions'][source]}},
+                    [package],stable_seconds=.01,incremental=True)
+    children = {oid:o for oid,o in state['origins'].items() if o.get('parent_origin')}
     parent = state['origins'][digest({'source':source,'pid':pid,'fid':members[0]['fid']})]
     if parent.get('availability') != 'bundle':
         raise LibraryError('Multipart qualification blocked: '+parent.get('reason','unknown'))
     inventory = {oid:o['sha256'] for oid,o in state['origins'].items()}
     rerun = receive(store,copied,captured,{'submissions':{source:journal['submissions'][source]}},
-                    [package],stable_seconds=.01,incremental=True,inspection_limit=8)
+                    [package],stable_seconds=.01,incremental=True)
     if inventory != {oid:o['sha256'] for oid,o in rerun['origins'].items()}:
         raise LibraryError('Multipart retry changed or duplicated origins')
     previous_proof = yaml.safe_load((output / 'proof.yaml').read_text()) if (output / 'proof.yaml').exists() else {}

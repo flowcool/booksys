@@ -16,10 +16,10 @@ Weekly and manual validation run all slices and publish nothing.
 `ops/ci_scope.py` compares complete local Git ranges. PRs use the merge base and
 both PR SHAs, not a paginated file API. Renames include old and new paths. Shared
 modules, CI files, locks and unknown paths select every slice. Library modules
-select both application and reader images. Byparr-only files select its image.
+select both application and library images. Byparr-only files select its image.
 Any selected slice runs the complete offline
 suite once. Each selected image uses the common exact-artifact probe/scan workflow.
-The suite installs native archive/PDF/OCR tools and Node explicitly. The existing
+The suite installs native archive/PDF tools and Node explicitly. The existing
 core and library type checks run on Python 3.14, the current runtime interpreter.
 The declared source compatibility remains >=3.11. The suite uses a pinned,
 temporary PostgreSQL 18.6 service and a private synthetic DSN file. It cannot

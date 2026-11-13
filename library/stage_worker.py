@@ -7,7 +7,6 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import shutil
 import signal
 import threading
 import time
@@ -23,7 +22,7 @@ from library.launcher import verify_startup
 from library.metadata import Providers
 from library.primitives import LibraryError, lock
 from library.stage_model import QUEUES
-from library.stage_runtime import StageRuntime, TIMEOUTS, external_capacity
+from library.stage_runtime import StageRuntime, TIMEOUTS
 from library.stage_supervisor import deadline, notify
 from library.locking import defer_contention
 
@@ -43,7 +42,8 @@ def verify_activation(root: Path) -> dict[str, Any]:
         raise LibraryError('Actor is outside the qualified shared cgroup')
     memory = int((pool/'memory.max').read_text())
     quota, period = map(int, (pool/'cpu.max').read_text().split())
-    if not 0 < memory <= 3584*1024**2 or not 0 < quota <= 2*period:
+    # Refuse application workers outside the qualified aggregate memory and CPU envelope.
+    if not 0 < memory <= 4608*1024**2 or not 0 < quota <= 2*period:
         raise LibraryError('Shared cgroup envelope is not enforced')
     if not value.get('io_device'):
         raise LibraryError('I/O qualification is missing')
@@ -58,26 +58,10 @@ def snapshot(runtime: StageRuntime) -> None:
         raise LibraryError('Invalid native observation')
     from library.operational_state import RuntimeObservation
     observation=RuntimeObservation(runtime.catalog.backend()._database)
-    remaining: int | None = 0
-    for package in queue:
-        for item in package.get('links', []):
-            if item.get('status') != 12:
-                continue  # Pinned pyLoad DOWNLOADING; offline/finished/parked links do not write.
-            size = item.get('size')
-            if type(size) is not int or size <= 0:
-                remaining = None
-                break
-            if remaining is not None:
-                remaining += size  # Full size is conservative; no progress deduction.
-    # Overshoot is qualified at activation, never invented from an empty status.
-    activation = observation.activation()
-    bound = activation.get('pyload_bound', {})
-    actual = {key: runtime.client.call('get_config_value', category='download', option=key)
-              for key in ('limit_speed', 'max_speed', 'max_downloads', 'chunks')}
-    overshoot = bound.get('overshoot_bytes') if actual == bound.get('configuration') else None
-    observation.publish(queue,at=time.time(),remaining=remaining,overshoot=overshoot)
+    observation.publish(queue,at=time.time(),remaining=None,overshoot=None)
 
 
+# Poll the native queue once per minute and escalate a snapshot failure after five minutes without a good observation.
 def snapshot_failure_code(database: Any, *, now: float, limit: float = 300) -> str:
     """A failed snapshot is a warning first and an error once the last good one is old.
 
@@ -95,15 +79,7 @@ def snapshot_failure_code(database: Any, *, now: float, limit: float = 300) -> s
 def verify_budgets(state: Path) -> None:
     """Read retained allowances; a concurrent owner never means missing state."""
     for name in ('provider', 'native'):
-        until = time.monotonic()+5
-        while True:
-            try:
-                RollingBudget(state/f'{name}-admission.yaml').next_due()
-                break
-            except CollectionError as exc:
-                if str(exc) != 'Shared network lane busy' or time.monotonic() >= until:
-                    raise
-                time.sleep(.05)
+        RollingBudget(state/f'{name}-admission.yaml').next_due()
 
 
 def main() -> None:
@@ -127,7 +103,7 @@ def main() -> None:
     # Read existing authorities. Constructors must not create a fresh allowance.
     verify_budgets(args.root/'state')
     runtime = StageRuntime(args.root, args.reception, args.collector,
-        providers=Providers(args.root/'state/library-provider-cache', budget=50),
+        providers=Providers(args.root/'state/library-provider-cache'),
         client=Pyload(args.endpoint, json.loads(args.credentials.read_text())['api_key']), browser=Byparr(args.byparr))
     runtime.client.downloads = Path(os.environ.get('BOOKSYS_FICHE_ROOT', str(args.reception)))
     runtime.client.fetch_image = runtime.native.browser.cover
@@ -137,6 +113,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     def watchdog() -> None:
+        # Use finite heartbeat freshness and health retries; a heartbeat proves liveness only.
         while not stop.wait(5):
             for queue in QUEUES if args.queue == 'serial' else (args.queue,):
                 from library.operational_state import RuntimeObservation
@@ -151,7 +128,7 @@ def main() -> None:
                 with (args.root/'state/library-cycle.lock').open('a') as serial:
                     fcntl.flock(serial, fcntl.LOCK_SH | fcntl.LOCK_NB)
                     notify('READY=1')
-                    source_scan_at = snapshot_at = retry_at = release_at = work_revive_at = intake_at = 0.0
+                    snapshot_at = release_at = work_revive_at = intake_at = 0.0
                     while not stop.is_set():
                         stamp = datetime.now(timezone.utc)
                         with defer_contention(), (args.root/"state/stage-checkpoint.lock").open("a") as boundary:
@@ -170,7 +147,6 @@ def main() -> None:
                                     pass  # Prior observation ages; disk workers defer safely.
                                 try:
                                     from library.dependency_recovery import DependencyRecovery
-                                    runtime.business.providers.budget = 1
                                     DependencyRecovery(args.root/'state/dependency-readiness.yaml').probe(
                                         runtime.business.providers, at=stamp.timestamp())
                                 except (CollectionError, LibraryError, OSError) as exc:
@@ -205,19 +181,17 @@ def main() -> None:
                                              released=str(moved['released']), candidates=str(moved['candidates']))
                                 except (CollectionError, LibraryError, OSError) as exc:
                                     emit(service=service, stage='release', queue=args.queue, code='release_failed', **exception_details(exc))
-                            if time.monotonic() >= source_scan_at:
-                                source_scan_at = time.monotonic() + 1
-                                runtime.tasks.scan_next(now=stamp)
+                            runtime.tasks.scan_next(now=stamp)
                             try:
                                 if time.monotonic() >= intake_at:
                                     before = runtime.tasks.changes
                                     runtime.native.discover_intake(runtime.tasks, now=stamp)
                                     # 100 sources per sweep: a sweep that changed nothing waits 30 s, one that did runs again in 5 s.
-                                    intake_at = time.monotonic() + (30 if runtime.tasks.changes == before else 5)
+                                    intake_at = time.monotonic() + (30 if runtime.tasks.changes == before else 5)  # Revisit unchanged intake discovery after thirty seconds and changed passes after five seconds.
                             except (CollectionError, LibraryError, OSError) as exc:
                                 emit(service=service, stage='diagnostics', queue=args.queue, code='degraded', **exception_details(exc))
                                 pass  # Missing snapshot cannot create an intake obligation.
-                        stop.wait(5)  # obligations: seconds of latency are fine; a loop of one second kept discovery at 35 percent of a CPU
+                        stop.wait(5)  # Wait five seconds between discovery loops; one-second polling consumed 35 percent of a CPU.
         else:
             expected_mode = 'serial' if args.queue == 'serial' else 'independent'
             if activation['mode'] != expected_mode:
@@ -225,7 +199,6 @@ def main() -> None:
             actors = [runtime.actor(queue) for queue in (QUEUES if args.queue == 'serial' else (args.queue,))]
             notify('READY=1')
             next_check: dict[str, float] = {}
-            free_at, free_cache = 0.0, 0
             while not stop.is_set():
                 for actor in actors:
                     if next_check.get(actor.queue, 0) > time.monotonic():
@@ -238,15 +211,11 @@ def main() -> None:
                                 ScheduledCalls(args.collector, runtime.native.browser).recover_cleanup()
                             except (CollectionError, LibraryError, OSError) as exc:
                                 emit(service=service, stage='diagnostics', queue=actor.queue, code='degraded', **exception_details(exc))
-                        if time.monotonic() >= free_at:
-                            free_at = time.monotonic() + 10          # statvfs on NFS twice a second per role was pure metadata traffic
-                            free_cache = min(shutil.disk_usage(args.root/'library').free, shutil.disk_usage('/data/booksys/work').free)
-                        outcome = actor.step(now=stamp, free_bytes=free_cache,
-                            external_bytes=external_capacity(args.root/'snapshots/external-capacity.yaml', now=stamp))
+                        outcome = actor.step(now=stamp)  # Run one synchronous step per stage worker; independent stages may proceed in parallel.
                     if outcome == 'nas_unavailable':
-                        next_check[actor.queue] = time.monotonic()+30
+                        next_check[actor.queue] = time.monotonic()+30  # Cache successful NAS sentinel checks for thirty seconds and back off unavailable stages for thirty seconds.
                     elif outcome == 'idle':
-                        next_check[actor.queue] = time.monotonic()+3      # nothing ready: look again in 3 s, not every second
+                        next_check[actor.queue] = time.monotonic()+3      # Recheck an empty stage after three seconds instead of polling its database every second.
                 stop.wait(1)
     finally:
         graceful = stop.is_set()

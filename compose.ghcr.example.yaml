@@ -7,12 +7,12 @@ services:
     profiles: [collector]
   worker:
     image: ghcr.io/flowcool/booksys-worker:0.1.0
-    command: ["-m", "library.cli", "--help"]
+    command: ["--help"]
     profiles: [collector]
-    # This image also provides controller, queue, web, tools and launcher roles.
+    # This image runs the collector pipeline.
   library:
     image: ghcr.io/flowcool/booksys-library:0.1.0
     command: ["--help"]
-    profiles: [reader]
+    profiles: [library]
     network_mode: none
-    # The restricted launcher invokes readers with bounded synthetic or owned inputs.
+    # The library CLI accepts explicit commands and owned input paths.

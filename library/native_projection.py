@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from booksys_core.collection import CRAWL_PAGES
 from booksys_core.values import seconds
 from booksys_core.errors import CollectionError
 from library.primitives import LibraryError, digest
@@ -26,8 +27,10 @@ def project(queue: str, value: dict[str, Any], *, auxiliary: dict[str, Any] | No
     if queue == 'collection':
         for source, checkpoint in value['categories'].items():
             key = 'category-' + digest(source)
+            # A pass is 5 fresh pages plus 10 deep pages: 5 minutes apart while the deep crawl has pages left, once a day after.
+            wait = 86400 if checkpoint.get('deep_page', 0) > CRAWL_PAGES else 300
             category_due = max(deadline_at,
-                               datetime.fromisoformat(checkpoint['last_cycle']).timestamp() + 300 if checkpoint.get('last_cycle') else 0)
+                               datetime.fromisoformat(checkpoint['last_cycle']).timestamp() + wait if checkpoint.get('last_cycle') else 0)
             revision = digest(checkpoint)
             bindings[key]={'kind':'category','identity':source,'original':digest(checkpoint)}
             items[key] = {'input_revision': revision, 'method': METHODS['collection'], 'due_at': instant(datetime.fromtimestamp(category_due, timezone.utc)), 'blocked': blocked}

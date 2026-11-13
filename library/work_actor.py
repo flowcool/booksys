@@ -13,14 +13,12 @@ from library.primitives import LibraryError
 from booksys_core.network_admission import before_native_write
 from library.stage_model import Change, Obligation, StepResult, Task, instant
 
-RESERVE = 20 * 1024**3   # free space kept beyond the output of one step
 from library.stage_tasks import StageTasks
 from library.work_items import Item, WorkItems
 
 # A prerequisite that only another stage can satisfy will not change within 30 s (same table as StageActor).
 WAIT_BACKOFF = {'retirement_prerequisites': 600, 'native_package_unavailable': 300, 'routing_prerequisites': 120}
-OUTPUT_BYTES = {'intake': 12 * 1024**3, 'copies': 12 * 1024**3, 'ocr': 4 * 1024**3}
-STAGE_OF = {'collection': 'collection', 'intake': 'local', 'ocr': 'local', 'metadata': 'identity',
+STAGE_OF = {'collection': 'collection', 'intake': 'local', 'metadata': 'identity',
             'copies': 'publication', 'routing': 'downloads', 'retirement': 'retirement'}
 MAPPED = {'network_budget_wait': 'provider_wait', 'network_authority_unavailable': 'missing_dependency',
           'storage_wait': 'storage_busy'}
@@ -76,10 +74,10 @@ class WorkActor:
         return task
 
     # -- the step --
-    def step(self, *, now: datetime, free_bytes: int, external_bytes: int | None) -> str:
+    def step(self, *, now: datetime) -> str:
         try:
             with context(queue=self.queue):
-                outcome = self._step(now=now, free_bytes=free_bytes)
+                outcome = self._step(now=now)
         except Exception as exc:
             self.report('failed', **exception_details(exc))
             raise
@@ -87,17 +85,24 @@ class WorkActor:
             self.report('waiting', outcome, next_attempt=(now + timedelta(seconds=1)).isoformat())
         return outcome
 
-    def _step(self, *, now: datetime, free_bytes: int) -> str:
+    def _step(self, *, now: datetime) -> str:
         closed = self.gate(now)                              # NAS or the shared pyLoad budget: waits for the whole stage
         if closed:
             return closed
-        need = OUTPUT_BYTES.get(self.queue, 0)
-        if need and free_bytes < need + RESERVE:
-            return 'output_capacity'
         item = self.work.claim(self.queue, self.worker, now=self._now(now))
         if item is None:
             return 'idle'
         try:
+            if item.stage == 'routing' and item.source:
+                from library.codec import decode
+                from library.primitives import digest
+                with self.store._database.connection(write=True) as db:
+                    if db.execute('SELECT 1 FROM source_inputs WHERE source=%s AND entity=%s', (item.source, item.item)).fetchone() is None:
+                        for source, payload in db.execute('SELECT source,payload FROM retirement_acquisitions'):
+                            retired = decode(payload)
+                            if (retired.get('phase') == 'retired' and 'source-' + digest(source) == item.item.split(':')[-1]
+                                    and digest(retired.get('submission')) == item.input_rev):
+                                return 'done' if self.work.finish_in(db, item, 'superseded', now=self._now(now)) else 'idle'
             task = self._task_for(item)
             if item.attempts > 1 and self.receipt is not None:
                 settled = self._reconcile(item, task, now=self._now(now))
@@ -113,7 +118,7 @@ class WorkActor:
                 return reason
             return self._run(item, task, now=self._now(now))
         except Exception as exc:
-            self.work.retry(item, type(exc).__name__, timedelta(seconds=300 if item.attempts == 1 else 900), now=self._now(now))
+            self.work.retry(item, f'{type(exc).__name__}: {str(exc)[:200]}', timedelta(seconds=300 if item.attempts == 1 else 900), now=self._now(now))
             self.report('failed', item=item, **exception_details(exc))
             return 'retry'
 

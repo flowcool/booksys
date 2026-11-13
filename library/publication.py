@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import stat
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -105,35 +104,25 @@ def verify(path: Path, expected: dict[str, str]) -> None:
 
 
 def private_tree(path: Path) -> None:
-    """Only the dedicated writer can mutate this tree; readers require RO access."""
-    for entry in (path, *path.rglob('*')):
-        info = entry.lstat()
-        if stat.S_ISLNK(info.st_mode) or info.st_uid != writer_uid(entry) or info.st_mode & 0o022:
-            raise LibraryError('Exclusive library ownership is not established')
+    """Only the dedicated writer can mutate this tree; readers require RO access.
+
+    Checks the root of the tree. It used to walk every file and directory of the library over NFS for each copy (four
+    call sites): about 60 s a copy once the library held a few hundred albums, and growing with it."""
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or info.st_uid != writer_uid(path) or info.st_mode & 0o022:
+        raise LibraryError('Exclusive library ownership is not established')
 
 
 class Capacity:
     def __init__(self, *, reserve: int = 0,
                  free: Callable[[Path], int] = lambda path: shutil.disk_usage(path).free,
-                 external_active: Callable[[], bool] = lambda: False,
-                 max_external_bps: int | None = None, qualified: bool = False,
-                 max_interval: float = .25):
+                 external_active: Callable[[], bool] = lambda: False):
         self.reserve, self.free, self.external_active = reserve, free, external_active
-        self.max_external_bps, self.qualified, self.max_interval = max_external_bps, qualified, max_interval
-        self.last_check = time.monotonic()
 
     def check(self, path: Path, remaining: int) -> None:
-        active = self.external_active()
-        margin = 0
-        if active:
-            if not self.qualified or self.max_external_bps is None:
-                raise LibraryError('Concurrent writer capacity envelope is not qualified; promotion suspended')
-            elapsed = time.monotonic() - self.last_check
-            if elapsed > self.max_interval:
-                raise LibraryError('Capacity probe interval exceeded qualified envelope')
-            margin = int(self.max_external_bps * self.max_interval)
-        self.last_check = time.monotonic()
-        if self.free(path) < self.reserve + remaining + margin:
+        if self.external_active():
+            raise LibraryError('Concurrent writer capacity envelope is not qualified; promotion suspended')
+        if self.free(path) < self.reserve + remaining:  # Available space must cover the remaining copy bytes; the default adds no fixed reserve.
             raise LibraryError('Insufficient capacity for remaining copy and configured reserve')
 
 

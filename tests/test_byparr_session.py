@@ -143,8 +143,7 @@ class SessionApiTests(unittest.TestCase):
                   return_value=invisible_core.SessionGeo('UTC', None)),
               patch('ops.byparr.session_api._navigate_and_solve', side_effect=navigate)):
             with TestClient(create_app(browser, memory_pressure=lambda: False)) as client:
-                response = client.post('/v1', json={'url': ORIGIN + '/ok'})
-                self.assertEqual(response.status_code, 200, response.json())
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok'}).status_code, 200)
                 failed = client.post('/v1', json={'url': ORIGIN + '/slow', 'maxTimeout': 1000})
                 self.assertEqual((failed.status_code, client.get('/health').status_code), (408, 200))
                 self.assertEqual(len(closed), 1)

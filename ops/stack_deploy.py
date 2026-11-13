@@ -34,7 +34,7 @@ CONFIG = OP / 'audit1'
 PROJECT = 'booksys-pg-prfpw-audit1'
 # Compose owns the application roles. PostgreSQL, pyLoad and Byparr are retained containers (their own
 # restart policy is unless-stopped); they are started by name and never recreated from this project.
-ROLES = ('controller', 'discovery', 'collection', 'intake', 'ocr', 'metadata', 'copies',
+ROLES = ('controller', 'discovery', 'collection', 'intake', 'metadata', 'copies',
          'routing')
 RETAINED = ('booksys-pg-prfpw-postgres', 'booksys-pyload', 'booksys-byparr')
 TARGET = dict(system_identifier='7706873868704579611', database='booksys',

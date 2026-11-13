@@ -38,9 +38,9 @@ def source(root, state=None):
 
 def private_selector(directory,database):
     directory.mkdir(mode=0o700,parents=True,exist_ok=True)
-    dsn_path=Path(os.environ['BOOKSYS_TEST_PG_DSN_FILE'])
+    secret=directory/'test.dsn';secret.write_text(database.dsn);secret.chmod(0o600)
     config=directory/'postgresql.json'
-    config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(dsn_path)}));config.chmod(0o600)
+    config.write_text(json.dumps({'schema':database.schema,'dsn_file':str(secret)}));config.chmod(0o600)
 
 
 def imported(test, root, state=None, *, select=True):

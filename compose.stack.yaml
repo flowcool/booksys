@@ -9,20 +9,24 @@ x-business: &business
   security_opt: &no_new_privileges
   - no-new-privileges:true
   restart: on-failure
+  # Return a failed startup or shutdown within the recorded lifecycle deadline.
   stop_grace_period: 30s
+  # Bound service processes and threads; the browser requires more tasks than an application worker.
   pids_limit: 48
   cgroup_parent: ${BOOKSYS_CGROUP_PARENT:?Select the qualified shared business slice}
   logging: &json_logging
     driver: json-file
     options:
+      # Rotate container logs at three files of 10m to bound local disk consumption.
       max-size: ${DOCKER_LOGGING_MAX_SIZE:-10m}
       max-file: ${DOCKER_LOGGING_MAX_FILE:-3}
   tmpfs: &tmp_tmpfs
+  # Bound memory-backed temporary files and browser shared memory inside service resource limits.
   - /tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777
   cgroup: host
   init: true
   environment: &business_env
-    BOOKSYS_CRAWL_PAGES: ${BOOKSYS_CRAWL_PAGES:-50}  # newest catalogue pages the collector reads: 5 are re-read every cycle, the rest 10 pages per cycle
+    BOOKSYS_CRAWL_PAGES: ${BOOKSYS_CRAWL_PAGES:-100}  # newest catalogue pages the collector reads: a pass reads 5 fresh pages + 10 deep pages; passes are 5 min apart until the deep crawl reaches this page, then once a day (library/native_projection.py)
     BOOKSYS_WORK_STAGES: ${BOOKSYS_WORK_STAGES:-}  # stages that run on work_items; empty = the old actor everywhere
     BOOKSYS_ADMISSION_STATE: /data/booksys/library-lab/state
     BOOKSYS_RELOCATION_RECEIPT: /config/relocation.json
@@ -38,7 +42,8 @@ x-business: &business
     BOOKSYS_FICHE_ROOT: /data/booksys/state/downloads
     BOOKSYS_BUNDLE_INPUT_ROOT: /data/booksys/library-lab/state/bundle-inputs
   volumes:
-  - type: bind
+  - &vol_work
+    type: bind
     source: ${BOOKSYS_LOCAL_ROOT}/work
     target: /data/booksys/work
     read_only: false
@@ -120,34 +125,40 @@ x-business: &business
     read_only: false
     bind: &bind_existing_c
       create_host_path: false
-  - type: bind
+  - &vol_cgroup
+    type: bind
     source: /sys/fs/cgroup
     target: /sys/fs/cgroup
     read_only: true
     bind:
       create_host_path: false
-  - type: bind
+  - &vol_attachments
+    type: bind
     source: ${BOOKSYS_LOCAL_ROOT}/attachments
     target: /media/attachments
     bind:
       create_host_path: false
-  - type: bind
+  - &vol_pieces
+    type: bind
     source: ${BOOKSYS_LOCAL_ROOT}/pieces
     target: /media/pieces
     bind:
       create_host_path: false
-  - type: bind
+  - &vol_tmp
+    type: bind
     source: ${BOOKSYS_LOCAL_ROOT}/tmp
     target: /nas-tmp
     bind:
       create_host_path: false
-  - type: bind
+  - &vol_nas_identity
+    type: bind
     source: ${BOOKSYS_NAS_FILES_ROOT}
     target: /nas-identity
     read_only: true
     bind:
       create_host_path: false
-  - type: bind
+  - &vol_pyload_scripts
+    type: bind
     source: ${BOOKSYS_PYLOAD_CONFIG_ROOT}/scripts
     target: /pyload-scripts
     read_only: true
@@ -173,9 +184,11 @@ services:
     security_opt: *no_new_privileges
     cap_drop: *cap_drop_all
     logging: *json_logging
+    # Cap each service's memory and disallow extra swap; the shared slice can impose a lower aggregate ceiling.
     mem_limit: 512m
     memswap_limit: 512m
     pids_limit: 128
+    # Bound CPU use per service while preserving the separate application slice ceiling.
     cpus: '1'
     tmpfs:
     - /var/run/postgresql:rw,nosuid,nodev,noexec,size=1m,mode=0770,uid=999,gid=1000
@@ -195,6 +208,7 @@ services:
       PGDATA: /var/lib/postgresql/18/docker
     # The pinned entrypoint clears PGHOST for its temporary bootstrap psql.
     # Its private default socket is never mounted into another service.
+    # Bound PostgreSQL backend count and SQL working memory within its container envelope.
     command: ['postgres', '-c', 'listen_addresses=', '-c', 'unix_socket_directories=/var/run/postgresql,${BOOKSYS_POSTGRES_SOCKET_ROOT}', '-c', 'unix_socket_permissions=0770', '-c', 'unix_socket_group=1000', '-c', 'max_connections=40', '-c', 'shared_buffers=128MB', '-c', 'work_mem=4MB']
     volumes:
     - type: bind
@@ -249,10 +263,36 @@ services:
       controller:
         condition: service_healthy
     <<: *business
+    volumes: &external_volumes
+    - *vol_work
+    - *postgres_socket
+    - *postgres_app_credential
+    - *vol_local_state
+    - *vol_collector_state
+    - *vol_stack_config
+    - *vol_pyload_credentials
+    - *vol_nas_downloads
+    - *vol_bundle_inputs
+    - *vol_web_covers
+    - *vol_collector_covers
+    - *vol_library
+    - *vol_cgroup
+    - *vol_attachments
+    - *vol_pieces
+    - *vol_tmp
+    - *vol_nas_identity
+    - *vol_pyload_scripts
+    - *vol_library_identity
+    - type: bind
+      source: /mnt/booksys-host/comics-originals
+      target: /opt/booksys/comics-originals
+      read_only: true
+      bind:
+        create_host_path: false
     environment:
       <<: *business_env
-    mem_limit: 512m
-    memswap_limit: 512m
+    mem_limit: 1024m
+    memswap_limit: 1024m
     cpus: '1'
     container_name: ${COMPOSE_PROJECT_NAME:?missing}-discovery
     command:
@@ -334,6 +374,7 @@ services:
       controller:
         condition: service_healthy
     <<: *business
+    volumes: *external_volumes
     environment:
       <<: *business_env
     mem_limit: 2048m
@@ -368,22 +409,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-  ocr:
-    <<: *business
-    depends_on:
-      controller:
-        condition: service_healthy
-    mem_limit: 1024m
-    memswap_limit: 1024m
-    cpus: '1'
-    container_name: ${COMPOSE_PROJECT_NAME:?missing}-ocr
-    command: -m library.stage_worker --root /data/booksys/library-lab --collector /data/booksys/state --reception /data/booksys/downloads --credentials /secrets/pyload.json --endpoint http://pyload:8000 --byparr http://byparr:8191/v1 --queue ocr
-    healthcheck:
-      test: [CMD, /app/.venv/bin/python, -c, *actor_readiness, ocr]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
   metadata:
     <<: *business
     depends_on:
@@ -405,6 +430,7 @@ services:
       controller:
         condition: service_healthy
     <<: *business
+    volumes: *external_volumes
     environment:
       <<: *business_env
     mem_limit: 2048m

@@ -56,7 +56,7 @@ class Byparr:
 
     def fetch_html(self, source_ref: str, url: str, request_id: str) -> str:
         if self.session.get('cookies') and self.session.get('userAgent'):
-            time.sleep(max(0, min(self.delay, 1) - (time.monotonic() - self.last_request)))
+            time.sleep(max(0, self.delay - (time.monotonic() - self.last_request)))
             try:
                 headers = {'User-Agent': self.session['userAgent'],
                            'Cookie': '; '.join(c['name'] + '=' + c['value'] for c in self.session['cookies'])}

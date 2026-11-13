@@ -60,10 +60,6 @@ class BusinessStages:
                         digest({'evidence': evidence, 'evaluation': prior.get('next_at', '')}))
             result.append(Obligation('metadata', key, revision, METHODS['metadata'],
                 due_at=due if not changed else now))
-        if (prior and asset.get('work_result', {}).get('status') != 'identified'
-                and asset.get('printed', {}).get('status') != 'ok'):
-            result.append(Obligation('ocr', key, digest({'asset': key, 'pages': asset.get('page_manifest'),
-                'format': asset['format']}), METHODS['ocr']))
         desired = projection(state, key)
         if asset.get('admission', {}).get('signature') != desired['signature']:
             result.append(Obligation('copies', key, desired['signature'], METHODS['copies']))
@@ -92,26 +88,13 @@ class BusinessStages:
                 asset['stage_metadata']['next_at'] = instant(now + timedelta(seconds=WEEK))
             prepared = self.catalog.prepare(state)
             if deferred:
-                # Cached evidence cannot improve before its expiry. Count the
-                # delay from completion, rather than the selection timestamp.
                 due = datetime.now(timezone.utc)+timedelta(seconds=30)
-                import math
-                for event in self.providers.events[start:]:
-                    expiry = event.get('expires')
-                    if (event.get('reason') == 'Request budget exhausted'
-                            and isinstance(expiry, (int, float)) and math.isfinite(expiry)):
-                        due = max(due, datetime.fromtimestamp(expiry, timezone.utc))
                 if self.providers.admission is not None:
                     timestamp = self.providers.admission.next_due()
                     if timestamp != float('inf'):
                         due = max(due, datetime.fromtimestamp(timestamp, timezone.utc))
                 return StepResult('defer', due_at=due, prepared=prepared, successors=self.obligations(state, task.entity, now=now))
             return StepResult(outcome, prepared=prepared, successors=self.obligations(state, task.entity, now=now))
-        if task.stage == 'ocr':
-            from library.printed import prepare_printed
-            state, result = prepare_printed(self.catalog, task.entity, self.reception)
-            return StepResult('done' if result['status'] == 'ok' else 'retry',
-                              prepared=self.catalog.prepare(state), successors=self.obligations(state, task.entity, now=now))
         if task.stage == 'copies':
             from library.store import PreparedResult
             copy_results: list[PreparedResult]=[]

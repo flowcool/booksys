@@ -56,6 +56,8 @@ def extract(source: Path, output: Path, parts: list[Path] | None = None) -> dict
             target = hashlib.sha256(name.encode()).hexdigest() + suffix
         elif path.name in ancillary and 0 <= size <= ancillary[path.name]:
             target = None
+        elif suffix in ('.db', '.txt', '.nfo') and 0 <= size <= (4*1024**2 if suffix == '.db' else 64*1024):
+            target = None   # same ignored notes and thumbnail database as library/reader_worker.py
         else:
             raise LibraryError('Bundle contains unknown, recursive or mixed loose content')
         total += size
