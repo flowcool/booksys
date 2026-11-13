@@ -9,6 +9,33 @@ from postgres_fixture import create_store
 
 
 class RelationshipTests(unittest.TestCase):
+    def test_origin_edges_use_assets_from_the_same_snapshot(self):
+        from unittest.mock import MagicMock
+        from library.relationships import Relationships
+        store = MagicMock()
+        db = store._database.connection.return_value.__enter__.return_value
+        store.check.return_value = (1, 0)
+        aid, missing = 'a' * 64, 'b' * 64
+        def rows(query):
+            if query.startswith('SELECT id,state'):
+                return ([(aid, 'validated', None, None, None)] if 'FROM assets' in query
+                        else [(oid, None, None, None, None) for oid in ('o1', 'o2')])
+            if query == 'SELECT id,source_ref,pid,fid,asset_id FROM origins':
+                return [('o1', None, None, None, aid), ('o2', None, None, None, missing)]
+            if query.startswith('SELECT source,target FROM '):
+                return []
+            self.fail('Unexpected query: ' + query)
+        db.execute.side_effect = rows
+        view = Relationships(store)
+        view.refresh(timestamp=100)
+        page = view.resolve({'kind': 'origin', 'id': 'o1'}, timestamp=101)
+        self.assertEqual({(n['kind'], n['id']) for n in page['nodes']},
+                         {('origin', 'o1'), ('asset', aid)})
+        self.assertEqual([e['relation'] for e in page['edges']], ['origin_asset'])
+        page = view.resolve({'kind': 'origin', 'id': 'o2'}, timestamp=101)
+        self.assertEqual(page['edges'], [])
+        store._database.connection.assert_called_once_with()
+
     def test_source_multiple_packages_and_bundle_members_without_urls_or_media(self):
         from library.relationships import Relationships
         with tempfile.TemporaryDirectory() as folder:

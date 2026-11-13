@@ -68,7 +68,7 @@ class Relationships:
                     edge(file, origin, 'file_origin')
                     if pid is not None:
                         edge(package(pid), file, 'package_file')
-                if asset and db.execute('SELECT 1 FROM assets WHERE id=%s', (asset,)).fetchone():
+                if asset and ('asset', asset) in nodes:
                     edge(origin, node('asset', asset), 'origin_asset')
             for relation, (first_kind, second_kind) in RELATIONS.items():
                 if first_kind in SINGULAR and second_kind in SINGULAR:

@@ -27,12 +27,11 @@ class BusinessStages:
         if backend is None:
             raise LibraryError('Independent stages require PostgreSQL authority')
         if keys is None:
-            items = backend.scan('assets', after=after, limit=limit)
-        else:                               # an incremental pass: only the assets written since the last one
-            found = ((key, backend.get('assets', key)) for key in keys)
-            items = [(key, record) for key, record in found if record is not None]
-        for key, asset in items:
+            keys = [key for key, _ in backend.scan('assets', after=after, limit=limit)]
+        for key in keys:
             state = self.catalog.working_set('identify', {'assets': [key]}, media=False)
+            if key not in state['assets']:
+                continue
             for obligation in self.obligations(state, key, now=now):
                 tasks.discover(obligation, now=now)
                 count += 1
