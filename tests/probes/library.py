@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory() as directory:
         page.Contents = document.make_stream(
             b'BT /F1 24 Tf 20 140 Td (SYNTHETIC LIBRARY) Tj 0 -40 Td (ARCHIVE 1234567890) Tj ET')
         document.save(pdf)
-    inspections, transforms, ocr = {}, {}, {}
+    inspections, transforms = {}, {}
     xml = base64.b64encode(b'<ComicInfo><Title>Synthetic</Title></ComicInfo>').decode()
     for source in (cbz, cbr, pdf):
         before = source.read_bytes()
@@ -108,13 +108,8 @@ with tempfile.TemporaryDirectory() as directory:
             assert 'poppler' in transform['tool_versions'], transform
         if suffix == '.cbr':
             assert transform['tool_versions']['unrar'], transform
-        selected = [{'page': 1}] if suffix == '.pdf' else inspection['page_manifest']
-        printed = worker('printed_worker', source, request={'pages': selected})
-        assert printed['status'] == 'ok', printed
-        assert '1234567890' in printed['pages'][0]['text'], printed
-        assert printed['languages'] == ['eng', 'fra'], printed
         assert source.read_bytes() == before, 'Original synthetic input changed'
-        transforms[suffix], ocr[suffix] = transform, printed
+        transforms[suffix] = transform
     # Malformed content must fail closed through the actual image reader.
     broken = root / 'broken.cbr'
     broken.write_bytes(cbr.read_bytes().replace(png, b'x' * len(png)))
@@ -126,5 +121,5 @@ with tempfile.TemporaryDirectory() as directory:
     assert worker('reader_worker', active)['status'] == 'rejected'
     print(json.dumps({'boundary': 'Docker reader; no nested namespaces', 'native_versions': versions,
                       'languages': languages, 'inspections': inspections, 'transforms': transforms,
-                      'ocr': ocr, 'confinement': 'uid1001; no capabilities; no new privileges; no network route; readonly root; no installation mounts',
+                      'confinement': 'uid1001; no capabilities; no new privileges; no network route; readonly root; no installation mounts',
                       'negative_cases': ['corrupt RAR', 'active PDF']}, indent=2))

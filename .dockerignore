@@ -22,3 +22,7 @@ booksys_core/__pycache__/
 !ops/route_mirrors.py
 !ops/pyload_python/
 !ops/pyload_python/*.py
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!third_party/
+!third_party/**

@@ -1,11 +1,46 @@
-FROM ghcr.io/thephaseless/byparr@sha256:c66fa161187b8fa527bfad7eefa2647ea1c553f77df68cbffd6fe83366d1787b
-USER root
-RUN /app/.venv/bin/python -m ensurepip && /app/.venv/bin/python -m pip install --no-cache-dir beautifulsoup4==4.14.3 PyYAML==6.0.3
-WORKDIR /collector
+FROM ghcr.io/thephaseless/byparr@sha256:c66fa161187b8fa527bfad7eefa2647ea1c553f77df68cbffd6fe83366d1787b AS qualified-python
+
+FROM python:3.14-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS dependencies
+COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu /opt/python
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+# Compile only in the disposable dependency stage against distro libpq.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libpq-dev=17.11-0+deb13u1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && test -f /opt/python/include/python3.14/Python.h \
+    && pip install --no-cache-dir uv==0.9.9 \
+    && CC=gcc LDSHARED='gcc -shared' uv sync --frozen --no-dev --no-install-project --python /opt/python/bin/python3.14
+
+FROM python:3.14-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS application
+ARG BOOKSYS_REVISION
+LABEL org.opencontainers.image.revision=$BOOKSYS_REVISION
+WORKDIR /app
+COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu /opt/python
+COPY --from=dependencies /app/.venv /app/.venv
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5=17.11-0+deb13u1 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && rm -rf /var/lib/apt/lists/*
+RUN /opt/python/bin/python3.14 -m pip uninstall --break-system-packages -y pip && python -m pip uninstall -y pip
+RUN /app/.venv/bin/python -c 'import psycopg,sys; from psycopg import pq; assert pq.__impl__ == "c" and sys.version_info[:2] == (3,14) and psycopg.__version__ == "3.3.8"'
 COPY booksys.py pipeline.py fiches.py mirrors.py mirror_routing.py retirement_history.py ./
 COPY booksys_core ./booksys_core
-COPY ops ./ops
 COPY library ./library
-ENV PYTHONUNBUFFERED=1 BOOKSYS_COLLECTION_DIR=/state
+COPY ops/library_service.py ops/library_cycle.py ops/retire_packages.py ops/route_mirrors.py ./ops/
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/booksys/
+COPY third_party/ /usr/share/doc/booksys/third_party/
+ENV PSYCOPG_IMPL=c PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PATH=/app/.venv/bin:$PATH
 USER 1000:1000
-ENTRYPOINT ["/app/.venv/bin/python", "/collector/pipeline.py"]
+ENTRYPOINT ["/app/.venv/bin/python"]
+CMD ["-m", "library.cli", "--help"]
+
+FROM application AS reader
+USER root
+RUN printf 'deb http://deb.debian.org/debian trixie non-free\n' > /etc/apt/sources.list.d/unrar.list \
+    && apt-get update && apt-get install -y --no-install-recommends bubblewrap zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 unrar=1:7.1.8-1 tesseract-ocr=5.5.0-1+b1 tesseract-ocr-eng=1:4.1.0-2 tesseract-ocr-fra=1:4.1.0-2 poppler-utils=25.03.0-5+deb13u4 fonts-liberation=1:2.1.5-3 \
+    && dpkg-query -W > /app/native-packages.txt \
+    && rm -rf /var/lib/apt/lists/*
+USER 1000:1000
+
+FROM application AS launcher
+COPY --from=docker:29-cli@sha256:2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d /usr/local/bin/docker /usr/local/bin/docker
+
+CMD ["-m", "library.cli", "--help"]
