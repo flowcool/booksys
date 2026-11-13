@@ -2,7 +2,7 @@
 from library.postgres import Database, DeadlineConnection
 from library.primitives import LibraryError,digest
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from dataclasses import dataclass
 import copy
 from library.codec import encode, decode
@@ -454,6 +454,19 @@ class CopyOperations:
         from library.versioned import cached
         records: list[dict[str, Any]] = cached(self._database, 'copy-records:' + self.namespace, ('copy_operations',), load)
         return records
+
+    def for_asset(self, asset: str, applies: Callable[[dict[str,Any],str],bool]) -> list[dict[str,Any]]:
+        """Validate every journal's scope; transfer full payloads only for this asset."""
+        with self._database.connection() as db:
+            rows = db.execute("SELECT json_build_object('asset',payload::json->'asset',"
+                "'kind',payload::json->'kind','target',payload::json->'target')::text,"
+                "CASE WHEN payload::json->>'asset'=%s THEN payload END "
+                "FROM copy_operations WHERE namespace=%s ORDER BY id", (asset,self.namespace))
+            records = []
+            for scope, payload in rows:
+                if applies(decode(scope),asset):
+                    records.append(decode(payload))
+            return records
 
     def prepare(self, value: dict[str,Any]) -> OperationalCompletion:
         with self._database.connection() as db:

@@ -130,16 +130,14 @@ class StageRuntime:
         except (CollectionError, OSError):
             return 'network_authority_unavailable'
         if task.stage in ('metadata', 'copies'):
-            asset = self.tasks.store.get('assets', task.entity, media=False)
-            if asset is None:
-                return 'inputs_changed'
             from library.admission import eligible
             current = self.catalog.working_set('admit', {'assets': [task.entity]}, media=False)
+            if task.entity not in current['assets']:
+                return 'inputs_changed'
             if not eligible(current, task.entity):
                 return 'domain_prerequisites'
             if task.stage == 'copies':
                 from library.admission import projection
-                state = self.catalog.working_set('admit', {'assets': [task.entity]}, media=False)
-                if projection(state, task.entity)['signature'] != task.input_revision:
+                if projection(current, task.entity)['signature'] != task.input_revision:
                     return 'inputs_changed'
         return self.native.ready(task, now=stamp) if task.stage not in ('metadata', 'copies') else ''
