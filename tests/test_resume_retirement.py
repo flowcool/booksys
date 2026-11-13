@@ -21,7 +21,7 @@ class ResumeRetirementTests(unittest.TestCase):
         from ops.resume_retirement import resume, native_paths
         self.assertEqual(native_paths({'containers':[
             {'role':'pyload','mounts':[{'Source':'/current/config','Destination':'/config'}]},
-            {'role':'retirement','mounts':[{'Source':'/current/reception','Destination':'/opt/booksys/downloads'}]}
+            {'role':'retirement','mounts':[{'Source':'/current/reception','Destination':'/data/booksys/downloads'}]}
         ]}),(Path('/current/reception'),Path('/current/config/scripts')))
         for fault in ('none', 'identity', 'file', 'active', 'hooks', 'old_restart',
                       'digest', 'repeat', 'pointer', 'lost_response'):

@@ -81,6 +81,12 @@
           "version": "1:3.10-4"
         },
         {
+          "id": "dpkg:dirmngr",
+          "source": "gnupg2",
+          "source_version": "2.4.7-21+deb13u1",
+          "version": "2.4.7-21+deb13u1+b5"
+        },
+        {
           "id": "dpkg:dpkg",
           "source": "dpkg",
           "source_version": "1.22.22",
@@ -93,10 +99,64 @@
           "version": "4.10.0-3"
         },
         {
+          "id": "dpkg:fontconfig",
+          "source": "fontconfig",
+          "source_version": "2.15.0-2.3",
+          "version": "2.15.0-2.3"
+        },
+        {
+          "id": "dpkg:fontconfig-config",
+          "source": "fontconfig",
+          "source_version": "2.15.0-2.3",
+          "version": "2.15.0-2.3"
+        },
+        {
+          "id": "dpkg:fonts-liberation",
+          "source": "fonts-liberation",
+          "source_version": "1:2.1.5-3",
+          "version": "1:2.1.5-3"
+        },
+        {
           "id": "dpkg:gcc-14-base:amd64",
           "source": "gcc-14",
           "source_version": "14.2.0-19",
           "version": "14.2.0-19"
+        },
+        {
+          "id": "dpkg:gnupg",
+          "source": "gnupg2",
+          "source_version": "2.4.7-21+deb13u1",
+          "version": "2.4.7-21+deb13u1"
+        },
+        {
+          "id": "dpkg:gnupg-l10n",
+          "source": "gnupg2",
+          "source_version": "2.4.7-21+deb13u1",
+          "version": "2.4.7-21+deb13u1"
+        },
+        {
+          "id": "dpkg:gpg",
+          "source": "gnupg2",
+          "source_version": "2.4.7-21+deb13u1",
+          "version": "2.4.7-21+deb13u1+b5"
+        },
+        {
+          "id": "dpkg:gpg-agent",
+          "source": "gnupg2",
+          "source_version": "2.4.7-21+deb13u1",
+          "version": "2.4.7-21+deb13u1+b5"
+        },
+        {
+          "id": "dpkg:gpgconf",
+          "source": "gnupg2",
+          "source_version": "2.4.7-21+deb13u1",
+          "version": "2.4.7-21+deb13u1+b5"
+        },
+        {
+          "id": "dpkg:gpgsm",
+          "source": "gnupg2",
+          "source_version": "2.4.7-21+deb13u1",
+          "version": "2.4.7-21+deb13u1+b5"
         },
         {
           "id": "dpkg:grep",
@@ -135,6 +195,12 @@
           "version": "3.0.4"
         },
         {
+          "id": "dpkg:libassuan9:amd64",
+          "source": "libassuan",
+          "source_version": "3.0.2-2",
+          "version": "3.0.2-2"
+        },
+        {
           "id": "dpkg:libattr1:amd64",
           "source": "attr",
           "source_version": "1:2.5.2-3",
@@ -157,6 +223,12 @@
           "source": "util-linux",
           "source_version": "2.41.5-0+deb13u1",
           "version": "2.41.5-0+deb13u1"
+        },
+        {
+          "id": "dpkg:libbrotli1:amd64",
+          "source": "brotli",
+          "source_version": "1.1.0-2+deb13u1",
+          "version": "1.1.0-2+deb13u1"
         },
         {
           "id": "dpkg:libbsd0:amd64",
@@ -183,6 +255,12 @@
           "version": "2.41-12+deb13u4"
         },
         {
+          "id": "dpkg:libcairo2:amd64",
+          "source": "cairo",
+          "source_version": "1.18.4-1",
+          "version": "1.18.4-1+b1"
+        },
+        {
           "id": "dpkg:libcap-ng0:amd64",
           "source": "libcap-ng",
           "source_version": "0.8.5-4",
@@ -207,6 +285,12 @@
           "version": "1:4.4.38-1"
         },
         {
+          "id": "dpkg:libcurl3t64-gnutls:amd64",
+          "source": "curl",
+          "source_version": "8.14.1-2+deb13u7",
+          "version": "8.14.1-2+deb13u7"
+        },
+        {
           "id": "dpkg:libdb5.3t64:amd64",
           "source": "db5.3",
           "source_version": "5.3.28+dfsg2-9",
@@ -219,16 +303,46 @@
           "version": "0.280"
         },
         {
+          "id": "dpkg:libdeflate0:amd64",
+          "source": "libdeflate",
+          "source_version": "1.23-2",
+          "version": "1.23-2"
+        },
+        {
+          "id": "dpkg:libexpat1:amd64",
+          "source": "expat",
+          "source_version": "2.9.0-1~deb13u1",
+          "version": "2.9.0-1~deb13u1"
+        },
+        {
           "id": "dpkg:libffi8:amd64",
           "source": "libffi",
           "source_version": "3.4.8-2",
           "version": "3.4.8-2"
         },
         {
+          "id": "dpkg:libfontconfig1:amd64",
+          "source": "fontconfig",
+          "source_version": "2.15.0-2.3",
+          "version": "2.15.0-2.3"
+        },
+        {
+          "id": "dpkg:libfreetype6:amd64",
+          "source": "freetype",
+          "source_version": "2.13.3+dfsg-1+deb13u1",
+          "version": "2.13.3+dfsg-1+deb13u1"
+        },
+        {
           "id": "dpkg:libgcc-s1:amd64",
           "source": "gcc-14",
           "source_version": "14.2.0-19",
           "version": "14.2.0-19"
+        },
+        {
+          "id": "dpkg:libgcrypt20:amd64",
+          "source": "libgcrypt20",
+          "source_version": "1.11.0-7+deb13u1",
+          "version": "1.11.0-7+deb13u1"
         },
         {
           "id": "dpkg:libgdbm6t64:amd64",
@@ -243,6 +357,30 @@
           "version": "2:6.3.0+dfsg-3"
         },
         {
+          "id": "dpkg:libgnutls30t64:amd64",
+          "source": "gnutls28",
+          "source_version": "3.8.9-3+deb13u4",
+          "version": "3.8.9-3+deb13u4"
+        },
+        {
+          "id": "dpkg:libgpg-error0:amd64",
+          "source": "libgpg-error",
+          "source_version": "1.51-4",
+          "version": "1.51-4"
+        },
+        {
+          "id": "dpkg:libgpgme11t64:amd64",
+          "source": "gpgme1.0",
+          "source_version": "1.24.2-3",
+          "version": "1.24.2-3"
+        },
+        {
+          "id": "dpkg:libgpgmepp6t64:amd64",
+          "source": "gpgme1.0",
+          "source_version": "1.24.2-3",
+          "version": "1.24.2-3"
+        },
+        {
           "id": "dpkg:libgssapi-krb5-2:amd64",
           "source": "krb5",
           "source_version": "1.21.3-5+deb13u1",
@@ -253,6 +391,24 @@
           "source": "nettle",
           "source_version": "3.10.1-1",
           "version": "3.10.1-1"
+        },
+        {
+          "id": "dpkg:libidn2-0:amd64",
+          "source": "libidn2",
+          "source_version": "2.3.8-2",
+          "version": "2.3.8-2"
+        },
+        {
+          "id": "dpkg:libjbig0:amd64",
+          "source": "jbigkit",
+          "source_version": "2.1-6.1",
+          "version": "2.1-6.1+b2"
+        },
+        {
+          "id": "dpkg:libjpeg62-turbo:amd64",
+          "source": "libjpeg-turbo",
+          "source_version": "1:2.1.5-4",
+          "version": "1:2.1.5-4"
         },
         {
           "id": "dpkg:libk5crypto3:amd64",
@@ -279,16 +435,34 @@
           "version": "1.21.3-5+deb13u1"
         },
         {
+          "id": "dpkg:libksba8:amd64",
+          "source": "libksba",
+          "source_version": "1.6.7-2",
+          "version": "1.6.7-2+b1"
+        },
+        {
           "id": "dpkg:liblastlog2-2:amd64",
           "source": "util-linux",
           "source_version": "2.41.5-0+deb13u1",
           "version": "2.41.5-0+deb13u1"
         },
         {
+          "id": "dpkg:liblcms2-2:amd64",
+          "source": "lcms2",
+          "source_version": "2.16-2+deb13u2",
+          "version": "2.16-2+deb13u2"
+        },
+        {
           "id": "dpkg:libldap2:amd64",
           "source": "openldap",
           "source_version": "2.6.10+dfsg-1",
           "version": "2.6.10+dfsg-1"
+        },
+        {
+          "id": "dpkg:liblerc4:amd64",
+          "source": "lerc",
+          "source_version": "4.0.0+ds-5",
+          "version": "4.0.0+ds-5"
         },
         {
           "id": "dpkg:liblz4-1:amd64",
@@ -327,6 +501,60 @@
           "version": "3.10.1-1"
         },
         {
+          "id": "dpkg:libnghttp2-14:amd64",
+          "source": "nghttp2",
+          "source_version": "1.64.0-1.1+deb13u1",
+          "version": "1.64.0-1.1+deb13u1"
+        },
+        {
+          "id": "dpkg:libnghttp3-9:amd64",
+          "source": "nghttp3",
+          "source_version": "1.8.0-1",
+          "version": "1.8.0-1"
+        },
+        {
+          "id": "dpkg:libngtcp2-16:amd64",
+          "source": "ngtcp2",
+          "source_version": "1.11.0-1+deb13u1",
+          "version": "1.11.0-1+deb13u1"
+        },
+        {
+          "id": "dpkg:libngtcp2-crypto-gnutls8:amd64",
+          "source": "ngtcp2",
+          "source_version": "1.11.0-1+deb13u1",
+          "version": "1.11.0-1+deb13u1"
+        },
+        {
+          "id": "dpkg:libnpth0t64:amd64",
+          "source": "npth",
+          "source_version": "1.8-3",
+          "version": "1.8-3"
+        },
+        {
+          "id": "dpkg:libnspr4:amd64",
+          "source": "nspr",
+          "source_version": "2:4.36-1",
+          "version": "2:4.36-1"
+        },
+        {
+          "id": "dpkg:libnss3:amd64",
+          "source": "nss",
+          "source_version": "2:3.110-1+deb13u5",
+          "version": "2:3.110-1+deb13u5"
+        },
+        {
+          "id": "dpkg:libopenjp2-7:amd64",
+          "source": "openjpeg2",
+          "source_version": "2.5.3-2.1~deb13u2",
+          "version": "2.5.3-2.1~deb13u2"
+        },
+        {
+          "id": "dpkg:libp11-kit0:amd64",
+          "source": "p11-kit",
+          "source_version": "0.25.5-3",
+          "version": "0.25.5-3"
+        },
+        {
           "id": "dpkg:libpam-modules-bin",
           "source": "pam",
           "source_version": "1.7.0-5",
@@ -357,16 +585,46 @@
           "version": "10.46-1~deb13u3"
         },
         {
+          "id": "dpkg:libpixman-1-0:amd64",
+          "source": "pixman",
+          "source_version": "0.44.0-3",
+          "version": "0.44.0-3"
+        },
+        {
+          "id": "dpkg:libpng16-16t64:amd64",
+          "source": "libpng1.6",
+          "source_version": "1.6.48-1+deb13u6",
+          "version": "1.6.48-1+deb13u6"
+        },
+        {
+          "id": "dpkg:libpoppler147:amd64",
+          "source": "poppler",
+          "source_version": "25.03.0-5+deb13u4",
+          "version": "25.03.0-5+deb13u4"
+        },
+        {
           "id": "dpkg:libpq5:amd64",
           "source": "postgresql-17",
           "source_version": "17.12-0+deb13u1",
           "version": "17.12-0+deb13u1"
         },
         {
+          "id": "dpkg:libpsl5t64:amd64",
+          "source": "libpsl",
+          "source_version": "0.21.2-1.1",
+          "version": "0.21.2-1.1+b1"
+        },
+        {
           "id": "dpkg:libreadline8t64:amd64",
           "source": "readline",
           "source_version": "8.2-6",
           "version": "8.2-6"
+        },
+        {
+          "id": "dpkg:librtmp1:amd64",
+          "source": "rtmpdump",
+          "source_version": "2.4+20151223.gitfa8646d.1-2",
+          "version": "2.4+20151223.gitfa8646d.1-2+b5"
         },
         {
           "id": "dpkg:libsasl2-2:amd64",
@@ -411,6 +669,12 @@
           "version": "3.8.1-1"
         },
         {
+          "id": "dpkg:libsharpyuv0:amd64",
+          "source": "libwebp",
+          "source_version": "1.5.0-0.1",
+          "version": "1.5.0-0.1"
+        },
+        {
           "id": "dpkg:libsmartcols1:amd64",
           "source": "util-linux",
           "source_version": "2.41.5-0+deb13u1",
@@ -421,6 +685,12 @@
           "source": "sqlite3",
           "source_version": "3.46.1-7+deb13u2",
           "version": "3.46.1-7+deb13u2"
+        },
+        {
+          "id": "dpkg:libssh2-1t64:amd64",
+          "source": "libssh2",
+          "source_version": "1.11.1-1+deb13u2",
+          "version": "1.11.1-1+deb13u2"
         },
         {
           "id": "dpkg:libssl3t64:amd64",
@@ -441,6 +711,18 @@
           "version": "257.13-1~deb13u1"
         },
         {
+          "id": "dpkg:libtasn1-6:amd64",
+          "source": "libtasn1-6",
+          "source_version": "4.20.0-2+deb13u1",
+          "version": "4.20.0-2+deb13u1"
+        },
+        {
+          "id": "dpkg:libtiff6:amd64",
+          "source": "tiff",
+          "source_version": "4.7.0-3+deb13u3",
+          "version": "4.7.0-3+deb13u3"
+        },
+        {
           "id": "dpkg:libtinfo6:amd64",
           "source": "ncurses",
           "source_version": "6.5+20250216-2",
@@ -453,10 +735,76 @@
           "version": "257.13-1~deb13u1"
         },
         {
+          "id": "dpkg:libunistring5:amd64",
+          "source": "libunistring",
+          "source_version": "1.3-2",
+          "version": "1.3-2"
+        },
+        {
           "id": "dpkg:libuuid1:amd64",
           "source": "util-linux",
           "source_version": "2.41.5-0+deb13u1",
           "version": "2.41.5-0+deb13u1"
+        },
+        {
+          "id": "dpkg:libwebp7:amd64",
+          "source": "libwebp",
+          "source_version": "1.5.0-0.1",
+          "version": "1.5.0-0.1"
+        },
+        {
+          "id": "dpkg:libx11-6:amd64",
+          "source": "libx11",
+          "source_version": "2:1.8.12-1",
+          "version": "2:1.8.12-1"
+        },
+        {
+          "id": "dpkg:libx11-data",
+          "source": "libx11",
+          "source_version": "2:1.8.12-1",
+          "version": "2:1.8.12-1"
+        },
+        {
+          "id": "dpkg:libxau6:amd64",
+          "source": "libxau",
+          "source_version": "1:1.0.11-1",
+          "version": "1:1.0.11-1"
+        },
+        {
+          "id": "dpkg:libxcb-render0:amd64",
+          "source": "libxcb",
+          "source_version": "1.17.0-2",
+          "version": "1.17.0-2+b1"
+        },
+        {
+          "id": "dpkg:libxcb-shm0:amd64",
+          "source": "libxcb",
+          "source_version": "1.17.0-2",
+          "version": "1.17.0-2+b1"
+        },
+        {
+          "id": "dpkg:libxcb1:amd64",
+          "source": "libxcb",
+          "source_version": "1.17.0-2",
+          "version": "1.17.0-2+b1"
+        },
+        {
+          "id": "dpkg:libxdmcp6:amd64",
+          "source": "libxdmcp",
+          "source_version": "1:1.1.5-1",
+          "version": "1:1.1.5-1"
+        },
+        {
+          "id": "dpkg:libxext6:amd64",
+          "source": "libxext",
+          "source_version": "2:1.3.4-1",
+          "version": "2:1.3.4-1+b3"
+        },
+        {
+          "id": "dpkg:libxrender1:amd64",
+          "source": "libxrender",
+          "source_version": "1:0.9.12-1",
+          "version": "1:0.9.12-1"
         },
         {
           "id": "dpkg:libxxhash0:amd64",
@@ -537,6 +885,18 @@
           "version": "5.40.1-6+deb13u1"
         },
         {
+          "id": "dpkg:pinentry-curses",
+          "source": "pinentry",
+          "source_version": "1.3.1-2",
+          "version": "1.3.1-2"
+        },
+        {
+          "id": "dpkg:poppler-utils",
+          "source": "poppler",
+          "source_version": "25.03.0-5+deb13u4",
+          "version": "25.03.0-5+deb13u4"
+        },
+        {
           "id": "dpkg:readline-common",
           "source": "readline",
           "source_version": "8.2-6",
@@ -571,6 +931,12 @@
           "source": "tzdata",
           "source_version": "2026f-0+deb13u1",
           "version": "2026f-0+deb13u1"
+        },
+        {
+          "id": "dpkg:unrar",
+          "source": "unrar-nonfree",
+          "source_version": "1:7.1.8-1",
+          "version": "1:7.1.8-1"
         },
         {
           "id": "dpkg:util-linux",
@@ -1543,6 +1909,494 @@
             "docker-cli-29.9.3"
           ],
           "rationale": "Dockerfile copies only /usr/local/bin/docker from exact docker29-cli index2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d; registry config identifies29.9.3. Retain complete exact cli source including vendor notices; do not infer shipped Buildx or Compose plugins. Exact source LICENSE/NOTICE retained. No Docker binary execution in this source review."
+        },
+        {
+          "id": "dpkg:dirmngr",
+          "license": "BSD-3-clause AND CC0-1.0 AND Expat AND GPL-2+ AND GPL-3+ AND GPL-3+ or BSD-3-clause AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND RFC-Reference AND TinySCHEME AND permissive",
+          "sources": [
+            "debian_gnupg2_2.4.7-21_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:fontconfig",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_fontconfig_2.15.0-2.3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:fontconfig-config",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_fontconfig_2.15.0-2.3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:fonts-liberation",
+          "license": "GPL-2+ AND SIL-OFL-1.1",
+          "sources": [
+            "debian_fonts-liberation_1_2.1.5-3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:gnupg",
+          "license": "BSD-3-clause AND CC0-1.0 AND Expat AND GPL-2+ AND GPL-3+ AND GPL-3+ or BSD-3-clause AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND RFC-Reference AND TinySCHEME AND permissive",
+          "sources": [
+            "debian_gnupg2_2.4.7-21_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:gnupg-l10n",
+          "license": "BSD-3-clause AND CC0-1.0 AND Expat AND GPL-2+ AND GPL-3+ AND GPL-3+ or BSD-3-clause AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND RFC-Reference AND TinySCHEME AND permissive",
+          "sources": [
+            "debian_gnupg2_2.4.7-21_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:gpg",
+          "license": "BSD-3-clause AND CC0-1.0 AND Expat AND GPL-2+ AND GPL-3+ AND GPL-3+ or BSD-3-clause AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND RFC-Reference AND TinySCHEME AND permissive",
+          "sources": [
+            "debian_gnupg2_2.4.7-21_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:gpg-agent",
+          "license": "BSD-3-clause AND CC0-1.0 AND Expat AND GPL-2+ AND GPL-3+ AND GPL-3+ or BSD-3-clause AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND RFC-Reference AND TinySCHEME AND permissive",
+          "sources": [
+            "debian_gnupg2_2.4.7-21_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:gpgconf",
+          "license": "BSD-3-clause AND CC0-1.0 AND Expat AND GPL-2+ AND GPL-3+ AND GPL-3+ or BSD-3-clause AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND RFC-Reference AND TinySCHEME AND permissive",
+          "sources": [
+            "debian_gnupg2_2.4.7-21_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:gpgsm",
+          "license": "BSD-3-clause AND CC0-1.0 AND Expat AND GPL-2+ AND GPL-3+ AND GPL-3+ or BSD-3-clause AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND RFC-Reference AND TinySCHEME AND permissive",
+          "sources": [
+            "debian_gnupg2_2.4.7-21_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libassuan9:amd64",
+          "license": "FSFULLR AND FSFULLRWD AND GPL-2+ with Autoconf-data exception AND GPL-2+ with Libtool exception AND GPL-2.with.nonstandard.Autoconf-data.exception AND GPL-3+ AND GPL-3+ with Autoconf-2.0~Archive exception AND GPL-3+ with Autoconf-data exception AND LGPL-2.1 AND LGPL-2.1+ AND LGPL-3+ AND X11",
+          "sources": [
+            "debian_libassuan_3.0.2-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libbrotli1:amd64",
+          "license": "MIT",
+          "sources": [
+            "debian_brotli_1.1.0-2_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libcairo2:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_cairo_1.18.4-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libcurl3t64-gnutls:amd64",
+          "license": "BSD-3-Clause AND BSD-3-clause AND BSD-4-Clause-UC AND FSFULLR AND GPL-2+ with Autoconf-data exception AND GPL-2+ with Libtool exception AND GPL-3+ with Autoconf-data exception AND ISC AND OLDAP-2.8 AND X11 AND curl AND curl and ISC",
+          "sources": [
+            "debian_curl_8.14.1-2_deb13u7"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libdeflate0:amd64",
+          "license": "Expat",
+          "sources": [
+            "debian_libdeflate_1.23-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libexpat1:amd64",
+          "license": "MIT",
+          "sources": [
+            "debian_expat_2.9.0-1_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libfontconfig1:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_fontconfig_2.15.0-2.3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libfreetype6:amd64",
+          "license": "BSD-3-Clause AND BSL-1.0 AND Expat AND FSFAP AND FTL AND FTL and Expat AND GPL-2+ AND GPL-3+ AND MIT-Modern-Variant AND MIT-SMC AND OpenGroup-MIT AND Public-Domain AND Zlib",
+          "sources": [
+            "debian_freetype_2.13.3_dfsg-1_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libgcrypt20:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libgcrypt20_1.11.0-7_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libgnutls30t64:amd64",
+          "license": "Apache-2.0 AND BSD-3-Clause AND CC0 license AND Expat AND FSFAP AND GPLv3+ AND LGPLv2.1+ AND LGPLv3+_or_GPLv2+ AND The main library is licensed under GNU Lesser",
+          "sources": [
+            "debian_gnutls28_3.8.9-3_deb13u4"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libgpg-error0:amd64",
+          "license": "BSD-3-clause AND GPL-3+ AND LGPL-2.1+ AND LGPL-2.1+ or BSD-3-clause AND g10-permissive",
+          "sources": [
+            "debian_libgpg-error_1.51-4"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libgpgme11t64:amd64",
+          "license": "GPL-2+ AND GPL-3+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+",
+          "sources": [
+            "debian_gpgme1.0_1.24.2-3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libgpgmepp6t64:amd64",
+          "license": "GPL-2+ AND GPL-3+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+",
+          "sources": [
+            "debian_gpgme1.0_1.24.2-3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libidn2-0:amd64",
+          "license": "Expat AND GPL-2+ AND GPL-3+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND Unicode",
+          "sources": [
+            "debian_libidn2_2.3.8-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libjbig0:amd64",
+          "license": "GPL-2+",
+          "sources": [
+            "debian_jbigkit_2.1-6.1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libjpeg62-turbo:amd64",
+          "license": "BSD-3-clause AND BSD-BY-LC-NE AND Expat AND NTP AND Zlib",
+          "sources": [
+            "debian_libjpeg-turbo_1_2.1.5-4"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libksba8:amd64",
+          "license": "FSFUL AND LGPL-2.1-or-later",
+          "sources": [
+            "debian_libksba_1.6.7-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:liblcms2-2:amd64",
+          "license": "GPL-2+ AND GPL-3 AND IJG AND MIT",
+          "sources": [
+            "debian_lcms2_2.16-2_deb13u2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:liblerc4:amd64",
+          "license": "Apache-2.0",
+          "sources": [
+            "debian_lerc_4.0.0_ds-5"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libnghttp2-14:amd64",
+          "license": "BSD-2-clause AND Expat AND GPL-3+ with autoconf exception AND MIT AND all-permissive",
+          "sources": [
+            "debian_nghttp2_1.64.0-1.1_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libnghttp3-9:amd64",
+          "license": "FSFAP AND FSFUL AND FSFULLR AND FSFULLR and MIT AND GPL-2+ with Autoconf generic exception AND GPL-2+ with Libtool Exception AND GPL-3+ AND GPL-3+ with Autoconf generic exception AND MIT",
+          "sources": [
+            "debian_nghttp3_1.8.0-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libngtcp2-16:amd64",
+          "license": "FSFAP AND FSFUL AND FSFULLR AND FSFULLR and MIT AND GPL-2+ with Autoconf generic exception AND GPL-2+ with Libtool Exception AND GPL-3+ AND GPL-3+ with Autoconf generic exception AND MIT",
+          "sources": [
+            "debian_ngtcp2_1.11.0-1_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libngtcp2-crypto-gnutls8:amd64",
+          "license": "FSFAP AND FSFUL AND FSFULLR AND FSFULLR and MIT AND GPL-2+ with Autoconf generic exception AND GPL-2+ with Libtool Exception AND GPL-3+ AND GPL-3+ with Autoconf generic exception AND MIT",
+          "sources": [
+            "debian_ngtcp2_1.11.0-1_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libnpth0t64:amd64",
+          "license": "LGPL-2.1+",
+          "sources": [
+            "debian_npth_1.8-3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libnspr4:amd64",
+          "license": "MPL-2.0",
+          "sources": [
+            "debian_nspr_2_4.36-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libnss3:amd64",
+          "license": "BSD-3 AND MPL-2.0 AND Zlib AND public-domain",
+          "sources": [
+            "debian_nss_2_3.110-1_deb13u5"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libopenjp2-7:amd64",
+          "license": "BSD-2 AND BSD-3 AND LIBPNG AND LIBTIFF AND LIBTIFF-GLARSON AND LIBTIFF-PIXAR AND MIT AND ZLIB",
+          "sources": [
+            "debian_openjpeg2_2.5.3-2.1_deb13u2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libp11-kit0:amd64",
+          "license": "Apache-2.0 AND BSD-3-clause AND FSFAP AND FSFULLR AND GPL-2+ with Autoconf-data exception AND GPL-3+ with Autoconf-data exception AND ISC AND LGPL-2.1+ AND X11 AND customFSFUL AND customFSFULLRWD",
+          "sources": [
+            "debian_p11-kit_0.25.5-3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libpixman-1-0:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_pixman_0.44.0-3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libpng16-16t64:amd64",
+          "license": "Apache-2.0 AND BSD-3-clause AND BSD-like-with-advertising-clause AND GPL-2+ AND GPL-2+ or BSD-like-with-advertising-clause AND expat AND libpng AND libpng OR Apache-2.0 OR BSD-3-clause",
+          "sources": [
+            "debian_libpng1.6_1.6.48-1_deb13u6"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libpoppler147:amd64",
+          "license": "Apache-2.0 AND GPL-2 AND GPL-2 or GPL-3 AND GPL-3",
+          "sources": [
+            "debian_poppler_25.03.0-5_deb13u4"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libpsl5t64:amd64",
+          "license": "Chromium AND MIT AND gnulib",
+          "sources": [
+            "debian_libpsl_0.21.2-1.1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:librtmp1:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_rtmpdump_2.4_20151223.gitfa8646d.1-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libsharpyuv0:amd64",
+          "license": "Apache-2.0 AND BSD-3-Clause",
+          "sources": [
+            "debian_libwebp_1.5.0-0.1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libssh2-1t64:amd64",
+          "license": "BSD3 AND ISC",
+          "sources": [
+            "debian_libssh2_1.11.1-1_deb13u2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libtasn1-6:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libtasn1-6_4.20.0-2_deb13u1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libtiff6:amd64",
+          "license": "Hylafax",
+          "sources": [
+            "debian_tiff_4.7.0-3_deb13u3"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libunistring5:amd64",
+          "license": "BSD-3-clause or LGPL-2.1+ AND BSD-3-clause or LGPL-3+ AND FreeSoftware AND GFDL-1.2+ or GPL-3+ or LGPL-3 AND GFDL-1.3+ AND GPL-2+ AND GPL-2+ with distribution exception AND GPL-2+ with distribution exception, Expat and GPL-2+ AND GPL-3+ AND ISC or LGPL-2.1+ AND LGPL-2+ AND LGPL-2+ or LGPL-3+ AND LGPL-2.1+ AND LGPL-3 AND LGPL-3+ AND Unicode-DFS-2016 AND X11 AND bsd-3-clause AND gfdl-1.2+ AND gfdl-1.3+ AND isc AND public-domain AND unicode-dfs-2016",
+          "sources": [
+            "debian_libunistring_1.3-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libwebp7:amd64",
+          "license": "Apache-2.0 AND BSD-3-Clause",
+          "sources": [
+            "debian_libwebp_1.5.0-0.1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libx11-6:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libx11_2_1.8.12-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libx11-data",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libx11_2_1.8.12-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libxau6:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libxau_1_1.0.11-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libxcb-render0:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libxcb_1.17.0-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libxcb-shm0:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libxcb_1.17.0-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libxcb1:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libxcb_1.17.0-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libxdmcp6:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libxdmcp_1_1.1.5-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libxext6:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libxext_2_1.3.4-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:libxrender1:amd64",
+          "license": "See exact installed copyright notice",
+          "sources": [
+            "debian_libxrender_1_0.9.12-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:pinentry-curses",
+          "license": "GPL-2 AND GPL-2+ AND LGPL-3+ AND LGPL-3+ or GPL-2+ AND X11",
+          "sources": [
+            "debian_pinentry_1.3.1-2"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:poppler-utils",
+          "license": "Apache-2.0 AND GPL-2 AND GPL-2 or GPL-3 AND GPL-3",
+          "sources": [
+            "debian_poppler_25.03.0-5_deb13u4"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
+        },
+        {
+          "id": "dpkg:unrar",
+          "license": "BSD-2-clause AND CC0-1.0 AND freeware AND public-domain AND public-domain or BSD-3-clause or GPL-2.0+",
+          "sources": [
+            "debian_unrar-nonfree_1_7.1.8-1"
+          ],
+          "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         }
       ],
       "reviewed_non_package_components": [

@@ -285,7 +285,7 @@ services:
     - *vol_library_identity
     - type: bind
       source: /mnt/booksys-host/comics-originals
-      target: /opt/booksys/comics-originals
+      target: /data/booksys/comics-originals
       read_only: true
       bind:
         create_host_path: false

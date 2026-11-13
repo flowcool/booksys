@@ -1,0 +1,137 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: unrar
+Source: https://www.rarlab.com/rar_add.htm
+Copyright: 1993-2023 Alexander L. Roshal
+Disclaimer: This software is non-free.
+ This software is non-free, therefore carefully read this license before
+ doing anything with it. In particular, this source code may not be used
+ for recreating the rar compression algorithm.
+License: freeware
+
+Files: *
+Copyright: 1993-2023 Alexander L. Roshal
+License: freeware
+   ******    *****   ******   UnRAR - free utility for RAR archives
+   **   **  **   **  **   **  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   ******   *******  ******    License for use and distribution of
+   **   **  **   **  **   **   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   **   **  **   **  **   **         FREE portable version
+                                     ~~~~~~~~~~~~~~~~~~~~~
+ .
+        The source code of UnRAR utility is freeware. This means:
+ .
+     1. All copyrights to RAR and the utility UnRAR are exclusively
+        owned by the author - Alexander Roshal.
+ .
+     2. UnRAR source code may be used in any software to handle
+        RAR archives without limitations free of charge, but cannot be
+        used to develop RAR (WinRAR) compatible archiver and to
+        re-create RAR compression algorithm, which is proprietary.
+        Distribution of modified UnRAR source code in separate form
+        or as a part of other software is permitted, provided that
+        full text of this paragraph, starting from "UnRAR source code"
+        words, is included in license, or in documentation if license
+        is not available, and in source code comments of resulting package.
+ .
+     3. The UnRAR utility may be freely distributed. It is allowed
+        to distribute UnRAR inside of other software packages.
+ .
+     4. THE RAR ARCHIVER AND THE UnRAR UTILITY ARE DISTRIBUTED "AS IS".
+        NO WARRANTY OF ANY KIND IS EXPRESSED OR IMPLIED.  YOU USE AT
+        YOUR OWN RISK. THE AUTHOR WILL NOT BE LIABLE FOR DATA LOSS,
+        DAMAGES, LOSS OF PROFITS OR ANY OTHER KIND OF LOSS WHILE USING
+        OR MISUSING THIS SOFTWARE.
+ .
+     5. Installing and using the UnRAR utility signifies acceptance of
+        these terms and conditions of the license.
+ .
+     6. If you don't agree with terms of the license you must remove
+        UnRAR files from your storage devices and cease to use the
+        utility.
+ .
+        Thank you for your interest in RAR and UnRAR.
+ .
+ .
+                                              Alexander L. Roshal
+
+Files: blake2sp.cpp
+Copyright: Written in 2012 by Samuel Neves <sneves@dei.uc.pt>
+License: CC0-1.0
+     BLAKE2 reference source code package - reference C implementations
+ .
+     Written in 2012 by Samuel Neves <sneves@dei.uc.pt>
+ .
+     To the extent possible under law, the author(s) have dedicated all copyright
+     and related and neighboring rights to this software to the public domain
+     worldwide. This software is distributed without any warranty.
+ .
+     You should have received a copy of the CC0 Public Domain Dedication along with
+     this software. If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
+ .
+ The text of CC0-1.0 license can be found on Debian systems in:
+ /usr/share/common-licenses/CC0-1.0
+
+Files: crc.cpp
+Copyright: Copyright (c) 2004-2006 Intel Corporation - All Rights Reserved
+License: BSD-2-clause
+    Original Intel Slicing-by-8 code is available here:
+ .
+      https://sourceforge.net/projects/slicing-by-8/
+ .
+    Original Intel Slicing-by-8 code is licensed under BSD License
+    available at http://www.opensource.org/licenses/bsd-license.html
+ .
+      Copyright (c) 2004-2006 Intel Corporation.
+      All Rights Reserved
+ .
+      Redistribution and use in source and binary forms, with or without
+      modification, are permitted provided that the following conditions
+      are met:
+ .
+      Redistributions of source code must retain the above copyright notice,
+      this list of conditions and the following disclaimer.
+ .
+      Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer
+      in the documentation and/or other materials provided with
+      the distribution.
+ .
+      THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+      "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+      LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+      FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+      HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+      SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+      LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+      DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+      ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+      OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+      OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+      SUCH DAMAGE.
+
+Files: rijndael.cpp rijndael.hpp
+Copyright: Szymon Stefanek
+License: public-domain
+  This code is based on Szymon Stefanek public domain AES implementation
+
+Files: sha1.cpp
+Copyright: By Steve Reid <steve@edmweb.com>
+License: public-domain
+  SHA-1 in C
+  By Steve Reid <steve@edmweb.com>
+  100% Public Domain
+
+Files: debian/*
+Copyright:
+ 2000-2004 Petr Cech <cech@debian.org>
+ 2004 Robert Millan <rmh@debian.org>
+ 2004 Chris Anderson <chris@nullcode.org>
+ 2005 Jeroen van Wolffelaar <jeroen@wolffelaar.nl>
+ 2006 Christoph Berg <myon@debian.org>
+ 2006-2017 Martin Meredith <mez@ubuntu.com>
+ 2018-2020 Norbert Preining <norbert@preining.info>
+ 2020-2021 YOKOTA Hiroshi <yokota.hgml@gmail.com>
+License: public-domain or BSD-3-clause or GPL-2.0+
+ No copyright statement in old versions up to 2020. Put under
+ public domain or BSD 3 Clause or GPL 2.0+ in 2020. Feel free to
+ do whatever you want with it.

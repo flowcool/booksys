@@ -16,7 +16,7 @@ from library.readers import inspect_file, fingerprint, sha256, READER_POLICY
 
 from library.reception import reception_path as reception_path
 
-EXTERNAL_ROOT = Path('/opt/booksys/comics-originals')
+EXTERNAL_ROOT = Path(os.environ.get('BOOKSYS_ORIGINALS_ROOT', '/data/booksys/comics-originals'))
 
 
 def external_origins(root: Path) -> Iterator[tuple[str, dict[str, Any]]]:

@@ -21,13 +21,13 @@ from library.stage_execution import effect_scopes, record_scopes
 from retirement_history import read_history, package_identity
 from ops.retire_packages import PacedPyload
 
-OP=Path('/opt/booksys/postgresql-prfpw-20261111')
+OP=Path('/data/booksys/postgresql-prfpw-20261111')
 
 
 def native_paths(runtime: dict[str,Any]) -> tuple[Path,Path]:
     roles={r['role']:r for r in runtime['containers']}
     reception=Path(next(m['Source'] for m in roles['retirement']['mounts']
-                        if m['Destination']=='/opt/booksys/downloads'))
+                        if m['Destination']=='/data/booksys/downloads'))
     config=Path(next(m['Source'] for m in roles['pyload']['mounts'] if m['Destination']=='/config'))
     return reception,config/'scripts'
 
@@ -106,11 +106,11 @@ def main() -> None:
             or not actual['State']['Running']):
         raise LibraryError('Exact restarted pyLoad identity differs')
     restarted=datetime.fromisoformat(actual['State']['StartedAt'].replace('Z','+00:00')).timestamp()
-    os.environ['BOOKSYS_ADMISSION_STATE']='/opt/booksys/library-lab/state'
-    client=PacedPyload('http://127.0.0.1:8000',json.loads(Path('/opt/booksys/secrets/pyload.json').read_text())['api_key'],1.5)
+    os.environ['BOOKSYS_ADMISSION_STATE']='/data/booksys/library-lab/state'
+    client=PacedPyload('http://127.0.0.1:8000',json.loads(Path('/data/booksys/secrets/pyload.json').read_text())['api_key'],1.5)
     reception,scripts=native_paths(runtime)
-    service=Retirement(client,Catalog(Path('/opt/booksys/library-lab/state')),reception,
-        Path('/opt/booksys/state/monitor.yaml'),Path('/opt/booksys/state/state.yaml'),
+    service=Retirement(client,Catalog(Path('/data/booksys/library-lab/state')),reception,
+        Path('/data/booksys/state/monitor.yaml'),Path('/data/booksys/state/state.yaml'),
         scripts=scripts,concurrent=True)
     result=resume(service,args.source,args.evidence_digest,restarted,hashlib.sha256(args.restart_receipt.read_bytes()).hexdigest())
     print(json.dumps(result))

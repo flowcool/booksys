@@ -1,0 +1,589 @@
+{
+  "inventory_sha256": "cb26c69495b10aa461a5bb76e9b3ae64d3b801a7300e26cd090208dd5375beaf",
+  "notices_archive_sha256": "f79e89d1cda420a70d3cbfbf0d170756def629799303924fd4475d14becbddb8",
+  "components": {
+    "dpkg:dirmngr": {
+      "version": "2.4.7-21+deb13u1+b5",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1",
+      "notice": "worker-dirmngr-copyright.txt"
+    },
+    "dpkg:fontconfig": {
+      "version": "2.15.0-2.3",
+      "source": "debian_fontconfig_2.15.0-2.3",
+      "notice": "worker-fontconfig-copyright.txt"
+    },
+    "dpkg:fontconfig-config": {
+      "version": "2.15.0-2.3",
+      "source": "debian_fontconfig_2.15.0-2.3",
+      "notice": "worker-fontconfig-copyright.txt"
+    },
+    "dpkg:fonts-liberation": {
+      "version": "1:2.1.5-3",
+      "source": "debian_fonts-liberation_1_2.1.5-3",
+      "notice": "worker-fonts-liberation-copyright.txt"
+    },
+    "dpkg:gnupg": {
+      "version": "2.4.7-21+deb13u1",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1",
+      "notice": "worker-dirmngr-copyright.txt"
+    },
+    "dpkg:gnupg-l10n": {
+      "version": "2.4.7-21+deb13u1",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1",
+      "notice": "worker-dirmngr-copyright.txt"
+    },
+    "dpkg:gpg": {
+      "version": "2.4.7-21+deb13u1+b5",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1",
+      "notice": "worker-dirmngr-copyright.txt"
+    },
+    "dpkg:gpg-agent": {
+      "version": "2.4.7-21+deb13u1+b5",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1",
+      "notice": "worker-dirmngr-copyright.txt"
+    },
+    "dpkg:gpgconf": {
+      "version": "2.4.7-21+deb13u1+b5",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1",
+      "notice": "worker-dirmngr-copyright.txt"
+    },
+    "dpkg:gpgsm": {
+      "version": "2.4.7-21+deb13u1+b5",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1",
+      "notice": "worker-dirmngr-copyright.txt"
+    },
+    "dpkg:libassuan9:amd64": {
+      "version": "3.0.2-2",
+      "source": "debian_libassuan_3.0.2-2",
+      "notice": "worker-libassuan9-copyright.txt"
+    },
+    "dpkg:libbrotli1:amd64": {
+      "version": "1.1.0-2+deb13u1",
+      "source": "debian_brotli_1.1.0-2_deb13u1",
+      "notice": "worker-libbrotli1-copyright.txt"
+    },
+    "dpkg:libcairo2:amd64": {
+      "version": "1.18.4-1+b1",
+      "source": "debian_cairo_1.18.4-1",
+      "notice": "worker-libcairo2-copyright.txt"
+    },
+    "dpkg:libcurl3t64-gnutls:amd64": {
+      "version": "8.14.1-2+deb13u7",
+      "source": "debian_curl_8.14.1-2_deb13u7",
+      "notice": "worker-libcurl3t64-gnutls-copyright.txt"
+    },
+    "dpkg:libdeflate0:amd64": {
+      "version": "1.23-2",
+      "source": "debian_libdeflate_1.23-2",
+      "notice": "worker-libdeflate0-copyright.txt"
+    },
+    "dpkg:libexpat1:amd64": {
+      "version": "2.9.0-1~deb13u1",
+      "source": "debian_expat_2.9.0-1_deb13u1",
+      "notice": "worker-libexpat1-copyright.txt"
+    },
+    "dpkg:libfontconfig1:amd64": {
+      "version": "2.15.0-2.3",
+      "source": "debian_fontconfig_2.15.0-2.3",
+      "notice": "worker-fontconfig-copyright.txt"
+    },
+    "dpkg:libfreetype6:amd64": {
+      "version": "2.13.3+dfsg-1+deb13u1",
+      "source": "debian_freetype_2.13.3_dfsg-1_deb13u1",
+      "notice": "worker-libfreetype6-copyright.txt"
+    },
+    "dpkg:libgcrypt20:amd64": {
+      "version": "1.11.0-7+deb13u1",
+      "source": "debian_libgcrypt20_1.11.0-7_deb13u1",
+      "notice": "worker-libgcrypt20-copyright.txt"
+    },
+    "dpkg:libgnutls30t64:amd64": {
+      "version": "3.8.9-3+deb13u4",
+      "source": "debian_gnutls28_3.8.9-3_deb13u4",
+      "notice": "worker-libgnutls30t64-copyright.txt"
+    },
+    "dpkg:libgpg-error0:amd64": {
+      "version": "1.51-4",
+      "source": "debian_libgpg-error_1.51-4",
+      "notice": "worker-libgpg-error0-copyright.txt"
+    },
+    "dpkg:libgpgme11t64:amd64": {
+      "version": "1.24.2-3",
+      "source": "debian_gpgme1.0_1.24.2-3",
+      "notice": "worker-libgpgme11t64-copyright.txt"
+    },
+    "dpkg:libgpgmepp6t64:amd64": {
+      "version": "1.24.2-3",
+      "source": "debian_gpgme1.0_1.24.2-3",
+      "notice": "worker-libgpgme11t64-copyright.txt"
+    },
+    "dpkg:libidn2-0:amd64": {
+      "version": "2.3.8-2",
+      "source": "debian_libidn2_2.3.8-2",
+      "notice": "worker-libidn2-0-copyright.txt"
+    },
+    "dpkg:libjbig0:amd64": {
+      "version": "2.1-6.1+b2",
+      "source": "debian_jbigkit_2.1-6.1",
+      "notice": "worker-libjbig0-copyright.txt"
+    },
+    "dpkg:libjpeg62-turbo:amd64": {
+      "version": "1:2.1.5-4",
+      "source": "debian_libjpeg-turbo_1_2.1.5-4",
+      "notice": "worker-libjpeg62-turbo-copyright.txt"
+    },
+    "dpkg:libksba8:amd64": {
+      "version": "1.6.7-2+b1",
+      "source": "debian_libksba_1.6.7-2",
+      "notice": "worker-libksba8-copyright.txt"
+    },
+    "dpkg:liblcms2-2:amd64": {
+      "version": "2.16-2+deb13u2",
+      "source": "debian_lcms2_2.16-2_deb13u2",
+      "notice": "worker-liblcms2-2-copyright.txt"
+    },
+    "dpkg:liblerc4:amd64": {
+      "version": "4.0.0+ds-5",
+      "source": "debian_lerc_4.0.0_ds-5",
+      "notice": "worker-liblerc4-copyright.txt"
+    },
+    "dpkg:libnghttp2-14:amd64": {
+      "version": "1.64.0-1.1+deb13u1",
+      "source": "debian_nghttp2_1.64.0-1.1_deb13u1",
+      "notice": "worker-libnghttp2-14-copyright.txt"
+    },
+    "dpkg:libnghttp3-9:amd64": {
+      "version": "1.8.0-1",
+      "source": "debian_nghttp3_1.8.0-1",
+      "notice": "worker-libnghttp3-9-copyright.txt"
+    },
+    "dpkg:libngtcp2-16:amd64": {
+      "version": "1.11.0-1+deb13u1",
+      "source": "debian_ngtcp2_1.11.0-1_deb13u1",
+      "notice": "worker-libngtcp2-16-copyright.txt"
+    },
+    "dpkg:libngtcp2-crypto-gnutls8:amd64": {
+      "version": "1.11.0-1+deb13u1",
+      "source": "debian_ngtcp2_1.11.0-1_deb13u1",
+      "notice": "worker-libngtcp2-16-copyright.txt"
+    },
+    "dpkg:libnpth0t64:amd64": {
+      "version": "1.8-3",
+      "source": "debian_npth_1.8-3",
+      "notice": "worker-libnpth0t64-copyright.txt"
+    },
+    "dpkg:libnspr4:amd64": {
+      "version": "2:4.36-1",
+      "source": "debian_nspr_2_4.36-1",
+      "notice": "worker-libnspr4-copyright.txt"
+    },
+    "dpkg:libnss3:amd64": {
+      "version": "2:3.110-1+deb13u5",
+      "source": "debian_nss_2_3.110-1_deb13u5",
+      "notice": "worker-libnss3-copyright.txt"
+    },
+    "dpkg:libopenjp2-7:amd64": {
+      "version": "2.5.3-2.1~deb13u2",
+      "source": "debian_openjpeg2_2.5.3-2.1_deb13u2",
+      "notice": "worker-libopenjp2-7-copyright.txt"
+    },
+    "dpkg:libp11-kit0:amd64": {
+      "version": "0.25.5-3",
+      "source": "debian_p11-kit_0.25.5-3",
+      "notice": "worker-libp11-kit0-copyright.txt"
+    },
+    "dpkg:libpixman-1-0:amd64": {
+      "version": "0.44.0-3",
+      "source": "debian_pixman_0.44.0-3",
+      "notice": "worker-libpixman-1-0-copyright.txt"
+    },
+    "dpkg:libpng16-16t64:amd64": {
+      "version": "1.6.48-1+deb13u6",
+      "source": "debian_libpng1.6_1.6.48-1_deb13u6",
+      "notice": "worker-libpng16-16t64-copyright.txt"
+    },
+    "dpkg:libpoppler147:amd64": {
+      "version": "25.03.0-5+deb13u4",
+      "source": "debian_poppler_25.03.0-5_deb13u4",
+      "notice": "worker-libpoppler147-copyright.txt"
+    },
+    "dpkg:libpsl5t64:amd64": {
+      "version": "0.21.2-1.1+b1",
+      "source": "debian_libpsl_0.21.2-1.1",
+      "notice": "worker-libpsl5t64-copyright.txt"
+    },
+    "dpkg:librtmp1:amd64": {
+      "version": "2.4+20151223.gitfa8646d.1-2+b5",
+      "source": "debian_rtmpdump_2.4_20151223.gitfa8646d.1-2",
+      "notice": "worker-librtmp1-copyright.txt"
+    },
+    "dpkg:libsharpyuv0:amd64": {
+      "version": "1.5.0-0.1",
+      "source": "debian_libwebp_1.5.0-0.1",
+      "notice": "worker-libsharpyuv0-copyright.txt"
+    },
+    "dpkg:libssh2-1t64:amd64": {
+      "version": "1.11.1-1+deb13u2",
+      "source": "debian_libssh2_1.11.1-1_deb13u2",
+      "notice": "worker-libssh2-1t64-copyright.txt"
+    },
+    "dpkg:libtasn1-6:amd64": {
+      "version": "4.20.0-2+deb13u1",
+      "source": "debian_libtasn1-6_4.20.0-2_deb13u1",
+      "notice": "worker-libtasn1-6-copyright.txt"
+    },
+    "dpkg:libtiff6:amd64": {
+      "version": "4.7.0-3+deb13u3",
+      "source": "debian_tiff_4.7.0-3_deb13u3",
+      "notice": "worker-libtiff6-copyright.txt"
+    },
+    "dpkg:libunistring5:amd64": {
+      "version": "1.3-2",
+      "source": "debian_libunistring_1.3-2",
+      "notice": "worker-libunistring5-copyright.txt"
+    },
+    "dpkg:libwebp7:amd64": {
+      "version": "1.5.0-0.1",
+      "source": "debian_libwebp_1.5.0-0.1",
+      "notice": "worker-libsharpyuv0-copyright.txt"
+    },
+    "dpkg:libx11-6:amd64": {
+      "version": "2:1.8.12-1",
+      "source": "debian_libx11_2_1.8.12-1",
+      "notice": "worker-libx11-6-copyright.txt"
+    },
+    "dpkg:libx11-data": {
+      "version": "2:1.8.12-1",
+      "source": "debian_libx11_2_1.8.12-1",
+      "notice": "worker-libx11-6-copyright.txt"
+    },
+    "dpkg:libxau6:amd64": {
+      "version": "1:1.0.11-1",
+      "source": "debian_libxau_1_1.0.11-1",
+      "notice": "worker-libxau6-copyright.txt"
+    },
+    "dpkg:libxcb-render0:amd64": {
+      "version": "1.17.0-2+b1",
+      "source": "debian_libxcb_1.17.0-2",
+      "notice": "worker-libxcb-render0-copyright.txt"
+    },
+    "dpkg:libxcb-shm0:amd64": {
+      "version": "1.17.0-2+b1",
+      "source": "debian_libxcb_1.17.0-2",
+      "notice": "worker-libxcb-render0-copyright.txt"
+    },
+    "dpkg:libxcb1:amd64": {
+      "version": "1.17.0-2+b1",
+      "source": "debian_libxcb_1.17.0-2",
+      "notice": "worker-libxcb-render0-copyright.txt"
+    },
+    "dpkg:libxdmcp6:amd64": {
+      "version": "1:1.1.5-1",
+      "source": "debian_libxdmcp_1_1.1.5-1",
+      "notice": "worker-libxdmcp6-copyright.txt"
+    },
+    "dpkg:libxext6:amd64": {
+      "version": "2:1.3.4-1+b3",
+      "source": "debian_libxext_2_1.3.4-1",
+      "notice": "worker-libxext6-copyright.txt"
+    },
+    "dpkg:libxrender1:amd64": {
+      "version": "1:0.9.12-1",
+      "source": "debian_libxrender_1_0.9.12-1",
+      "notice": "worker-libxrender1-copyright.txt"
+    },
+    "dpkg:pinentry-curses": {
+      "version": "1.3.1-2",
+      "source": "debian_pinentry_1.3.1-2",
+      "notice": "worker-pinentry-curses-copyright.txt"
+    },
+    "dpkg:poppler-utils": {
+      "version": "25.03.0-5+deb13u4",
+      "source": "debian_poppler_25.03.0-5_deb13u4",
+      "notice": "worker-libpoppler147-copyright.txt"
+    },
+    "dpkg:unrar": {
+      "version": "1:7.1.8-1",
+      "source": "debian_unrar-nonfree_1_7.1.8-1",
+      "notice": "worker-unrar-copyright.txt"
+    }
+  },
+  "files": {
+    "worker-dirmngr-copyright.txt": {
+      "sha256": "c19276de1952e4d3926c293ac598065e2abcb5b9543600cf941d53fb3c6e41a8",
+      "bytes": 13143,
+      "installed_path": "usr/share/doc/dirmngr/copyright",
+      "source": "debian_gnupg2_2.4.7-21_deb13u1"
+    },
+    "worker-fontconfig-copyright.txt": {
+      "sha256": "b215a61cdd3e62b5b17cc28b1852c78acb3dd38be0fb30706f7efc050dba91db",
+      "bytes": 1301,
+      "installed_path": "usr/share/doc/fontconfig/copyright",
+      "source": "debian_fontconfig_2.15.0-2.3"
+    },
+    "worker-fonts-liberation-copyright.txt": {
+      "sha256": "f32df582a2aab128c07b2f7e36e7b928dc5f6bd82657b905c04f91459f9e5cf9",
+      "bytes": 5756,
+      "installed_path": "usr/share/doc/fonts-liberation/copyright",
+      "source": "debian_fonts-liberation_1_2.1.5-3"
+    },
+    "worker-libassuan9-copyright.txt": {
+      "sha256": "77098ae4bd20a17039c27a742aaec873c0317793a2867332b3083509c16cfb9a",
+      "bytes": 12055,
+      "installed_path": "usr/share/doc/libassuan9/copyright",
+      "source": "debian_libassuan_3.0.2-2"
+    },
+    "worker-libbrotli1-copyright.txt": {
+      "sha256": "24a64e5bb83d0960d1835696a1e23c0896ad6055b0ca47c66ab0eb9a766324b1",
+      "bytes": 1354,
+      "installed_path": "usr/share/doc/libbrotli1/copyright",
+      "source": "debian_brotli_1.1.0-2_deb13u1"
+    },
+    "worker-libcairo2-copyright.txt": {
+      "sha256": "408fb9e704e875cd42d432e7c9b3b378f568e3c89db2b5c5ef3d11c025319574",
+      "bytes": 28461,
+      "installed_path": "usr/share/doc/libcairo2/copyright",
+      "source": "debian_cairo_1.18.4-1"
+    },
+    "worker-libcurl3t64-gnutls-copyright.txt": {
+      "sha256": "e1b7678c8443b4f8ac69350e1eefd6132339b010cc3b870675fec0c0c29779a5",
+      "bytes": 22132,
+      "installed_path": "usr/share/doc/libcurl3t64-gnutls/copyright",
+      "source": "debian_curl_8.14.1-2_deb13u7"
+    },
+    "worker-libdeflate0-copyright.txt": {
+      "sha256": "b08d3438a0eadaee3103fba087a3e0f639506388ed71e7e2dfbb3e3484e9742c",
+      "bytes": 1666,
+      "installed_path": "usr/share/doc/libdeflate0/copyright",
+      "source": "debian_libdeflate_1.23-2"
+    },
+    "worker-libexpat1-copyright.txt": {
+      "sha256": "60919fe1a156395ff14511bb6ff79756c50ade2fff59ac60c9bae1d8a7fe6292",
+      "bytes": 1756,
+      "installed_path": "usr/share/doc/libexpat1/copyright",
+      "source": "debian_expat_2.9.0-1_deb13u1"
+    },
+    "worker-libfreetype6-copyright.txt": {
+      "sha256": "acdab1506824347784d2cc0a634cfa17dbf525c0d5b4902b4ac9d0d4e1fed6c7",
+      "bytes": 31206,
+      "installed_path": "usr/share/doc/libfreetype6/copyright",
+      "source": "debian_freetype_2.13.3_dfsg-1_deb13u1"
+    },
+    "worker-libgcrypt20-copyright.txt": {
+      "sha256": "4feae258cab1ad4743fb569a77e0b2a5b7a0199520bdbc0a613916291b9aa8a8",
+      "bytes": 26983,
+      "installed_path": "usr/share/doc/libgcrypt20/copyright",
+      "source": "debian_libgcrypt20_1.11.0-7_deb13u1"
+    },
+    "worker-libgnutls30t64-copyright.txt": {
+      "sha256": "a07e99815cf1998f1dabbc21fe199460bfa09b85ead0d56b49a32cac3d1791b5",
+      "bytes": 57443,
+      "installed_path": "usr/share/doc/libgnutls30t64/copyright",
+      "source": "debian_gnutls28_3.8.9-3_deb13u4"
+    },
+    "worker-libgpg-error0-copyright.txt": {
+      "sha256": "1edb3be55cf9371e8e7a71e53fadc2a3d33b44d7d7f15c78a7669c92ce0fade2",
+      "bytes": 5301,
+      "installed_path": "usr/share/doc/libgpg-error0/copyright",
+      "source": "debian_libgpg-error_1.51-4"
+    },
+    "worker-libgpgme11t64-copyright.txt": {
+      "sha256": "634b667cb8c01f73d9d59ce522faee9f6c7e910f431b084e247d5e07634cbb03",
+      "bytes": 3964,
+      "installed_path": "usr/share/doc/libgpgme11t64/copyright",
+      "source": "debian_gpgme1.0_1.24.2-3"
+    },
+    "worker-libidn2-0-copyright.txt": {
+      "sha256": "32df8170a3c5e55c553f684576a2911e6a0611320ccd7fd65f7dceae26be61ee",
+      "bytes": 6566,
+      "installed_path": "usr/share/doc/libidn2-0/copyright",
+      "source": "debian_libidn2_2.3.8-2"
+    },
+    "worker-libjbig0-copyright.txt": {
+      "sha256": "89ab20c324a191652e94598f2144a65442faed4f14f77bbd10516130ee20f05a",
+      "bytes": 1849,
+      "installed_path": "usr/share/doc/libjbig0/copyright",
+      "source": "debian_jbigkit_2.1-6.1"
+    },
+    "worker-libjpeg62-turbo-copyright.txt": {
+      "sha256": "3821184e23385bf2cdc01f56bd999b34036fc3aa03d5135d41680374eb81bf8a",
+      "bytes": 38846,
+      "installed_path": "usr/share/doc/libjpeg62-turbo/copyright",
+      "source": "debian_libjpeg-turbo_1_2.1.5-4"
+    },
+    "worker-libksba8-copyright.txt": {
+      "sha256": "62f4bbaeb37f9e2c0795dd3ea7b1bfcf34fc9fef7a680bd863ee50fae0b4cf12",
+      "bytes": 4718,
+      "installed_path": "usr/share/doc/libksba8/copyright",
+      "source": "debian_libksba_1.6.7-2"
+    },
+    "worker-liblcms2-2-copyright.txt": {
+      "sha256": "420fd2c72204652c08a48548a0d1002edab3d9b180d3c416578c61f74092f460",
+      "bytes": 5362,
+      "installed_path": "usr/share/doc/liblcms2-2/copyright",
+      "source": "debian_lcms2_2.16-2_deb13u2"
+    },
+    "worker-liblerc4-copyright.txt": {
+      "sha256": "6e694f6e6063e7b1ffb5f723ce4e696aa015944cf1b4d15e8f3ea7e90417a71d",
+      "bytes": 1242,
+      "installed_path": "usr/share/doc/liblerc4/copyright",
+      "source": "debian_lerc_4.0.0_ds-5"
+    },
+    "worker-libnghttp2-14-copyright.txt": {
+      "sha256": "a34ae32a5eba61e535835a8de7c398f47e420247d339bc400a3b9c618ba29a3d",
+      "bytes": 6535,
+      "installed_path": "usr/share/doc/libnghttp2-14/copyright",
+      "source": "debian_nghttp2_1.64.0-1.1_deb13u1"
+    },
+    "worker-libnghttp3-9-copyright.txt": {
+      "sha256": "e66d68610e086493b2dcf19539793786017922591dee5d0795b57e4219e5cc91",
+      "bytes": 8614,
+      "installed_path": "usr/share/doc/libnghttp3-9/copyright",
+      "source": "debian_nghttp3_1.8.0-1"
+    },
+    "worker-libngtcp2-16-copyright.txt": {
+      "sha256": "e192f8ca275520fbd3f2f75251483cbf208ef6bd8759d6b736b8fc0b59f8fb55",
+      "bytes": 9543,
+      "installed_path": "usr/share/doc/libngtcp2-16/copyright",
+      "source": "debian_ngtcp2_1.11.0-1_deb13u1"
+    },
+    "worker-libnpth0t64-copyright.txt": {
+      "sha256": "df6909abb38f4e84d237d8617e948bdbb391b2004ecf573863011d54a88ccf22",
+      "bytes": 1164,
+      "installed_path": "usr/share/doc/libnpth0t64/copyright",
+      "source": "debian_npth_1.8-3"
+    },
+    "worker-libnspr4-copyright.txt": {
+      "sha256": "3c4fcc131809b2b6993513bfe4cf6f1ede391ec84f1d5ceca78fb75537b22452",
+      "bytes": 331,
+      "installed_path": "usr/share/doc/libnspr4/copyright",
+      "source": "debian_nspr_2_4.36-1"
+    },
+    "worker-libnss3-copyright.txt": {
+      "sha256": "3f450f9453233852b3a469a36a897cc68fb87be3e8b3a5ba64f63a7904528408",
+      "bytes": 4058,
+      "installed_path": "usr/share/doc/libnss3/copyright",
+      "source": "debian_nss_2_3.110-1_deb13u5"
+    },
+    "worker-libopenjp2-7-copyright.txt": {
+      "sha256": "ba3ae385ad2337d6cfc862e280a9f155bb421b43f6ee47e77ebcaaf24e992151",
+      "bytes": 34923,
+      "installed_path": "usr/share/doc/libopenjp2-7/copyright",
+      "source": "debian_openjpeg2_2.5.3-2.1_deb13u2"
+    },
+    "worker-libp11-kit0-copyright.txt": {
+      "sha256": "008107de203c9f89a6c71b625fb47e10074c6b7ccb0e310694014d4551f67b2b",
+      "bytes": 15605,
+      "installed_path": "usr/share/doc/libp11-kit0/copyright",
+      "source": "debian_p11-kit_0.25.5-3"
+    },
+    "worker-libpixman-1-0-copyright.txt": {
+      "sha256": "1b3fb5690861e15ca4fd6640fd4def4b2576617942eec04b6fcb7d8bc6c4c9da",
+      "bytes": 2247,
+      "installed_path": "usr/share/doc/libpixman-1-0/copyright",
+      "source": "debian_pixman_0.44.0-3"
+    },
+    "worker-libpng16-16t64-copyright.txt": {
+      "sha256": "7e729164c60950b2b57f1712d82a051c9ba54f421c9b69815d9e4686ddc5709b",
+      "bytes": 13217,
+      "installed_path": "usr/share/doc/libpng16-16t64/copyright",
+      "source": "debian_libpng1.6_1.6.48-1_deb13u6"
+    },
+    "worker-libpoppler147-copyright.txt": {
+      "sha256": "484de4197d7d27f12f5b18df19e557808fa0bbbd060004bd56385c5f7cbfd880",
+      "bytes": 12730,
+      "installed_path": "usr/share/doc/libpoppler147/copyright",
+      "source": "debian_poppler_25.03.0-5_deb13u4"
+    },
+    "worker-libpsl5t64-copyright.txt": {
+      "sha256": "bbafb0cf52d34465fc69f5ffd22d724224f6a2f28402c88b045c69d88af06aaf",
+      "bytes": 3310,
+      "installed_path": "usr/share/doc/libpsl5t64/copyright",
+      "source": "debian_libpsl_0.21.2-1.1"
+    },
+    "worker-librtmp1-copyright.txt": {
+      "sha256": "4302abcc1ea1b6cbe8d19c79b892acf78878030220210707c19006828866207c",
+      "bytes": 2726,
+      "installed_path": "usr/share/doc/librtmp1/copyright",
+      "source": "debian_rtmpdump_2.4_20151223.gitfa8646d.1-2"
+    },
+    "worker-libsharpyuv0-copyright.txt": {
+      "sha256": "725344c9200f6e6dad88d1ea88add2d673cdf1d8fbc3961bcd2693ab0c26d30d",
+      "bytes": 6490,
+      "installed_path": "usr/share/doc/libsharpyuv0/copyright",
+      "source": "debian_libwebp_1.5.0-0.1"
+    },
+    "worker-libssh2-1t64-copyright.txt": {
+      "sha256": "fb5d6b7a53710b6ba04e412a016d222a3e56b9d6e1a2572a8ffc2eae05e6acfb",
+      "bytes": 2975,
+      "installed_path": "usr/share/doc/libssh2-1t64/copyright",
+      "source": "debian_libssh2_1.11.1-1_deb13u2"
+    },
+    "worker-libtasn1-6-copyright.txt": {
+      "sha256": "5f9f7b538d221104bdb561ae80fd794ec5f813eb8fd04650293bddcc0f856e7d",
+      "bytes": 3359,
+      "installed_path": "usr/share/doc/libtasn1-6/copyright",
+      "source": "debian_libtasn1-6_4.20.0-2_deb13u1"
+    },
+    "worker-libtiff6-copyright.txt": {
+      "sha256": "d73e31b03a0d7a515851601c19fee5792c7db03a312efacae146ddf9c91f86f1",
+      "bytes": 1935,
+      "installed_path": "usr/share/doc/libtiff6/copyright",
+      "source": "debian_tiff_4.7.0-3_deb13u3"
+    },
+    "worker-libunistring5-copyright.txt": {
+      "sha256": "a585cd2cc2a5fcb8e58f12c7a710a35e06e5b897c59cd5ae4a7d835f0b49eae3",
+      "bytes": 103761,
+      "installed_path": "usr/share/doc/libunistring5/copyright",
+      "source": "debian_libunistring_1.3-2"
+    },
+    "worker-libx11-6-copyright.txt": {
+      "sha256": "0b380a7fd5b2228f26e9585e56f14812efd3350f3df307507d2bc055dfd8de3e",
+      "bytes": 47102,
+      "installed_path": "usr/share/doc/libx11-6/copyright",
+      "source": "debian_libx11_2_1.8.12-1"
+    },
+    "worker-libxau6-copyright.txt": {
+      "sha256": "118dd263a7b91c8f21c489f949bf13281dff9e766deea92b829dac4dce66601a",
+      "bytes": 1224,
+      "installed_path": "usr/share/doc/libxau6/copyright",
+      "source": "debian_libxau_1_1.0.11-1"
+    },
+    "worker-libxcb-render0-copyright.txt": {
+      "sha256": "4f7cb9db6bf6542f5417e3d674c780d3a5fd12291a54d63054fb576ee0cfae80",
+      "bytes": 1781,
+      "installed_path": "usr/share/doc/libxcb-render0/copyright",
+      "source": "debian_libxcb_1.17.0-2"
+    },
+    "worker-libxdmcp6-copyright.txt": {
+      "sha256": "1bcbb50f8603fe8b86d330bfa460b772ea04fbd3c70e4499f0768b5340b9fd6e",
+      "bytes": 1265,
+      "installed_path": "usr/share/doc/libxdmcp6/copyright",
+      "source": "debian_libxdmcp_1_1.1.5-1"
+    },
+    "worker-libxext6-copyright.txt": {
+      "sha256": "bc57e445ca1d9fe082c8d54189dd411ff26caa8552c9c63d44ea06a982f32124",
+      "bytes": 10421,
+      "installed_path": "usr/share/doc/libxext6/copyright",
+      "source": "debian_libxext_2_1.3.4-1"
+    },
+    "worker-libxrender1-copyright.txt": {
+      "sha256": "ed2a78123a5076b4f11da38cb1ffb85b5cb9fdc26b5746c517b1d7e7a9029704",
+      "bytes": 2252,
+      "installed_path": "usr/share/doc/libxrender1/copyright",
+      "source": "debian_libxrender_1_0.9.12-1"
+    },
+    "worker-pinentry-curses-copyright.txt": {
+      "sha256": "21126014091396a9a25b5095466b609de0e6502969a416018405946e40cc9d79",
+      "bytes": 6437,
+      "installed_path": "usr/share/doc/pinentry-curses/copyright",
+      "source": "debian_pinentry_1.3.1-2"
+    },
+    "worker-unrar-copyright.txt": {
+      "sha256": "e8f719101359de59b9c153415b0b8e120da57bbd93b96262918bb12057668363",
+      "bytes": 6001,
+      "installed_path": "usr/share/doc/unrar/copyright",
+      "source": "debian_unrar-nonfree_1_7.1.8-1"
+    }
+  }
+}
