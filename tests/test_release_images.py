@@ -10,10 +10,11 @@ import hashlib
 import io
 import shutil
 import tarfile
+from contextlib import redirect_stdout
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ops"))
-from release_images import publish, release_event, reconcile, registry_manifest
-from release_sources import oci_graph, prepare, assemble
+from release_images import publish, release_event, reconcile, registry_manifest, recovery_report
+from release_sources import oci_graph, prepare, assemble, main as source_main, verify_plan
 from image_validation import identity
 
 
@@ -178,14 +179,18 @@ class ReleasePublicationTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_source_assets_are_verified_before_images(self):
-        path = self.directory / "corresponding-source.tar.gz"
-        path.write_bytes(b"retained synthetic source")
-        self.plan["source_assets"] = [str(path)]
-        self.plan["asset_digests"] = {str(path): "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
+        names = [f"corresponding-source.tar.gz.part-{index:03d}" for index in range(3)] + ["manifest.json"]
+        for name in names:
+            path = self.directory / name
+            path.write_bytes(b"retained synthetic source")
+            self.plan["source_assets"].append(str(path))
+            self.plan["asset_digests"][str(path)] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
         publish(self.plan, self.directory / "journal.json")
-        upload = next(i for i, command in enumerate(self.calls) if command[:3] == ("gh", "release", "upload"))
+        uploads = [i for i, command in enumerate(self.calls) if command[:3] == ("gh", "release", "upload")]
         copy = next(i for i, command in enumerate(self.calls) if command[:2] == ("skopeo", "copy"))
-        self.assertLess(upload, copy)
+        self.assertEqual([self.calls[index][4] for index in uploads], self.plan["source_assets"])
+        self.assertLess(max(uploads), copy)
+        self.assertEqual(recovery_report(self.plan)["source_assets"], dict.fromkeys(names, "match"))
 
     def test_approved_recovery_fills_only_absent_versions(self):
         self.remote[self.plan["images"]["worker"]["reference"]] = self.raw
@@ -222,6 +227,57 @@ class ArtifactQualificationTests(unittest.TestCase):
                 (directory / (report + ".json")).write_text(json.dumps({"Metadata": {"ImageID": config}, "Results": []}))
             manifest["images"][image] = {"index_digest": oci_graph(path)["index_digest"]}
         (self.sources / "manifest.json").write_text(json.dumps(manifest))
+
+    def relocate_source(self, content):
+        (self.directory / "corresponding-source.tar.gz").write_bytes(content)
+        plan = prepare(self.release, self.directory, self.sources)
+        (self.directory / "plan.json").write_text(json.dumps(plan))
+        release = self.directory / "release.json"
+        release.write_text(json.dumps(self.release))
+        artifacts = self.directory / "artifacts"
+        artifacts.mkdir()
+        for image in ("worker", "library", "byparr"):
+            shutil.move(str(self.directory / image), artifacts / image)
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["release_sources.py", "relocate", str(self.directory), str(release)]), redirect_stdout(output):
+            source_main()
+        return json.loads(output.getvalue())
+
+    def test_relocate_splits_source_and_binds_original_bytes(self):
+        content = b"a" * (2 * 1024**2) + b"b" * (2 * 1024**2) + b"c" * 1024**2
+        original_manifest = (self.sources / "manifest.json").read_bytes()
+        with patch("release_sources.SOURCE_PART_SIZE", 2 * 1024**2), patch("release_sources.SOURCE_SPLIT_THRESHOLD", 4 * 1024**2):
+            plan = self.relocate_source(content)
+        paths = [Path(path) for path in plan["source_assets"]]
+        self.assertEqual([path.name for path in paths], [
+            "corresponding-source.tar.gz.part-000", "corresponding-source.tar.gz.part-001",
+            "corresponding-source.tar.gz.part-002", "manifest.json"])
+        self.assertNotEqual(paths[-1], self.sources / "manifest.json")
+        self.assertEqual((self.sources / "manifest.json").read_bytes(), original_manifest)
+        manifest = json.loads(paths[-1].read_text())
+        self.assertEqual({key: value for key, value in manifest.items() if key != "source_archive"}, json.loads(original_manifest))
+        archive = manifest["source_archive"]
+        self.assertEqual(archive["name"], "corresponding-source.tar.gz")
+        self.assertEqual(archive["size"], len(content))
+        self.assertEqual(archive["sha256"], "sha256:" + hashlib.sha256(content).hexdigest())
+        self.assertEqual(b"".join(path.read_bytes() for path in paths[:-1]), content)
+        self.assertEqual([part["size"] for part in archive["parts"]], [2 * 1024**2, 2 * 1024**2, 1024**2])
+        for part, path in zip(archive["parts"], paths[:-1]):
+            self.assertEqual(part["sha256"], "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertEqual(part["url"], f"https://github.com/flowcool/booksys/releases/download/{plan['tag']}/{path.name}")
+        self.assertEqual(archive["reassemble"], "cat " + " ".join(path.name for path in paths[:-1]) + " > corresponding-source.tar.gz")
+        self.assertEqual(plan["asset_digests"], {str(path): "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest() for path in paths})
+        verify_plan(plan)
+        paths[0].write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "corresponding source changed"):
+            verify_plan(plan)
+
+    def test_relocate_keeps_small_source_as_one_archive(self):
+        plan = self.relocate_source(b"small synthetic archive")
+        self.assertEqual([Path(path).name for path in plan["source_assets"]], ["corresponding-source.tar.gz", "manifest.json"])
+        self.assertNotIn("source_archive", json.loads((self.sources / "manifest.json").read_text()))
+        self.assertEqual(list(self.directory.glob("*.part-*")), [])
+        verify_plan(plan)
 
     def test_exact_scanned_attested_set_qualifies_and_fixable_severe_blocks(self):
         self.assertEqual(set(prepare(self.release, self.directory, self.sources)["images"]), {"worker", "library", "byparr"})

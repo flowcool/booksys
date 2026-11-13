@@ -108,15 +108,17 @@ def main() -> None:
             if manifest["revision"] != args.revision or set(manifest["images"]) != {"worker", "library", "byparr"}:
                 raise ValueError("Unexpected corresponding-source manifest")
             (args.output / name).write_bytes(content)
-    if not args.manifest_only:
+    if not args.manifest_only and "source_archive" in manifest:
         archive = manifest["source_archive"]
-        if archive["sha256"] != args.source_sha256 or len(archive["parts"]) != 2:
+        if archive["sha256"] != args.source_sha256 or len(archive["parts"]) < 2:
             raise ValueError("Unexpected whole source binding")
         whole = hashlib.sha256()
         total = 0
         for index, part in enumerate(archive["parts"]):
             name = f"corresponding-source.tar.gz.part-{index:03d}"
-            if part["name"] != name or not 0 < part["size"] < 2 * 1024**3 or assets[name].get("digest") != part["sha256"]:
+            if (part["name"] != name or not 0 < part["size"] < 2 * 1024**3
+                    or assets[name].get("digest") != part["sha256"]
+                    or part["url"] != assets[name]["browser_download_url"]):
                 raise ValueError("Unexpected source part binding")
             _, size = download(assets[name]["browser_download_url"], part["sha256"], whole=whole)
             if size != part["size"]:
@@ -126,6 +128,16 @@ def main() -> None:
         if "sha256:" + whole.hexdigest() != args.source_sha256 or total != archive["size"]:
             raise ValueError("Anonymous reassembled source differs from the original qualified archive")
         proof["whole_archive"] = {"sha256": args.source_sha256, "size": total}
+    elif not args.manifest_only:
+        name = "corresponding-source.tar.gz"
+        asset = assets[name]
+        if asset.get("digest") != args.source_sha256:
+            raise ValueError("Release asset digest differs from the qualified plan")
+        _, size = download(asset["browser_download_url"], args.source_sha256)
+        if size != asset["size"] or not 0 < size < 2 * 1024**3:
+            raise ValueError("Unexpected source archive size")
+        proof["assets"][name] = {"url": asset["browser_download_url"], "sha256": args.source_sha256, "size": size}
+        proof["whole_archive"] = {"sha256": args.source_sha256, "size": size}
     (args.output / "anonymous-source-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
 
 
