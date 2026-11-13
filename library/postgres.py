@@ -25,6 +25,13 @@ from psycopg import pq, sql
 from library.locking import acquisition_deadline
 from library.primitives import LibraryError
 
+try:
+    DB_DEADLINE = int(os.environ.get('BOOKSYS_DB_DEADLINE', '30'))
+    if DB_DEADLINE <= 0:
+        raise ValueError
+except ValueError:
+    raise ValueError('BOOKSYS_DB_DEADLINE must be a positive integer') from None
+
 
 class CommitUnknown(LibraryError):
     """Resolve the same logical commit key before any dependent action."""
@@ -107,7 +114,7 @@ class Database:
 
     @contextmanager
     # Connection, lock, query and commit waits share one remaining total database deadline.
-    def connection(self, *, write: bool = False, seconds: float = 10, lock_cap_ms: int | None = None) -> Iterator[DeadlineConnection]:
+    def connection(self, *, write: bool = False, seconds: float = DB_DEADLINE, lock_cap_ms: int | None = None) -> Iterator[DeadlineConnection]:
         """One transaction. The backend connection is kept for the next call of this thread when the transaction ended
         cleanly: opening one costs a server process, a password check and two statements (15 ms; about 250 a second
         were opened on the lab). Any error closes it. A kept connection that died while idle is replaced once."""

@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from html.parser import HTMLParser
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -19,6 +20,12 @@ import uuid
 from booksys_core.browser_outcomes import retry_after
 from booksys_core.diagnostics import opaque, emit, install_logging
 
+try:
+    BYPARR_BUDGET = int(os.environ.get('BOOKSYS_BYPARR_BUDGET', '120'))
+    if BYPARR_BUDGET <= 0:
+        raise ValueError
+except ValueError:
+    raise ValueError('BOOKSYS_BYPARR_BUDGET must be a positive integer') from None
 
 ORIGIN = "https://www7.bookys-ebooks.com"
 # Native teardown closes Playwright and reaps the process tree (up to 5s).
@@ -114,8 +121,8 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
     async def perform(request: LinkRequest, request_id: str) -> LinkResponse:
         nonlocal generator, browser, count, opened, last_used, generation
         if (not same_origin(request.url) or request.cmd != "request.get"
-                or request.return_only_cookies or not 1 <= request.max_timeout <= 60):
-            raise HTTPException(422, "Expected a Bookys HTML request with a 1-60 second budget")
+                or request.return_only_cookies or not 1 <= request.max_timeout <= BYPARR_BUDGET):
+            raise HTTPException(422, f"Expected a Bookys HTML request with a 1-{BYPARR_BUDGET} second budget")
         page: Any = None
         request_ids: set[int] = set()
         responses: list[Any] = []
@@ -224,6 +231,8 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
     @app.post("/v1")
     async def fetch(request: LinkRequest, http: Request) -> LinkResponse:
         nonlocal active_request_id
+        if 'max_timeout' not in request.model_fields_set:
+            request = request.model_copy(update={'max_timeout': BYPARR_BUDGET})
         request_id = http.state.request_id
         if broken:
             raise HTTPException(503, detail('cleanup_failed', 'local', request_id))
@@ -236,7 +245,7 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
             try:
                 # Include browser startup in the caller's budget. Upstream also
                 # passes this limit to navigation and Cloudflare solving.
-                return await asyncio.wait_for(perform(request, request_id), timeout=min(60, max(1, request.max_timeout)))
+                return await asyncio.wait_for(perform(request, request_id), timeout=min(BYPARR_BUDGET, max(1, request.max_timeout)))
             except TimeoutError as exc:
                 raise HTTPException(408, detail('browser_timeout', 'local', request_id)) from exc
             except HTTPException:

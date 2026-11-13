@@ -2,6 +2,7 @@
 from __future__ import annotations
 from http.cookies import CookieError, SimpleCookie
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -16,8 +17,15 @@ from booksys_core.parsing import document, site_url
 from booksys_core.browser_outcomes import BrowserOutcome, Outcome, retry_after
 from booksys_core.diagnostics import REASONS
 
+try:
+    BYPARR_BUDGET = int(os.environ.get('BOOKSYS_BYPARR_BUDGET', '120'))
+    if BYPARR_BUDGET <= 0:
+        raise ValueError
+except ValueError:
+    raise ValueError('BOOKSYS_BYPARR_BUDGET must be a positive integer') from None
+
 class Byparr:
-    def __init__(self, endpoint: str, delay: float = 2, timeout: int = 60):
+    def __init__(self, endpoint: str, delay: float = 2, timeout: int = BYPARR_BUDGET):
         address = urlsplit(endpoint)
         if (address.scheme != "http" or address.hostname not in {"localhost", "127.0.0.1", "::1", "byparr"}
                 or address.username or address.password):
