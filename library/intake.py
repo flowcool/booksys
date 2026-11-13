@@ -131,13 +131,13 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
         package = packages.get(pid)
         if package is None:
             for origin in state['origins'].values():
-                if origin['pid'] == pid and origin['source'] == source:
+                if origin['pid'] == pid and origin['source'] == source and origin.get('availability') != 'validated':
                     origin['availability'] = 'package_missing'
             continue
         if package['name'] != submission['name']:
             # pyLoad gave the id of a released package to a new one: ours is gone. One such package must not stop the sweep.
             for origin in state['origins'].values():
-                if origin['pid'] == pid and origin['source'] == source:
+                if origin['pid'] == pid and origin['source'] == source and origin.get('availability') != 'validated':
                     origin['availability'] = 'package_missing'
             continue
         from library.multipart import is_multipart, receive_parts

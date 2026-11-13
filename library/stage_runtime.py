@@ -137,6 +137,9 @@ class StageRuntime:
             if not eligible(current, task.entity):
                 return 'domain_prerequisites'
             if task.stage == 'copies':
+                if not any(current['origins'][oid].get('availability') == 'validated' and
+                           current['origins'][oid].get('sha256') == task.entity for oid in current['assets'][task.entity]['origins']):
+                    return 'intake_pending'
                 from library.admission import projection
                 if projection(current, task.entity)['signature'] != task.input_revision:
                     return 'inputs_changed'
