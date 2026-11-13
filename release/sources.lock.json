@@ -359,8 +359,8 @@
         {
           "id": "dpkg:libpq5:amd64",
           "source": "postgresql-17",
-          "source_version": "17.11-0+deb13u1",
-          "version": "17.11-0+deb13u1"
+          "source_version": "17.12-0+deb13u1",
+          "version": "17.12-0+deb13u1"
         },
         {
           "id": "dpkg:libreadline8t64:amd64",
@@ -1484,7 +1484,7 @@
           "id": "dpkg:libpq5:amd64",
           "license": "PostgreSQL AND retained Debian copyright terms",
           "sources": [
-            "debian_postgresql-17_17.11-0_deb13u1"
+            "debian_postgresql-17_17.12-0_deb13u1"
           ],
           "rationale": "Exact installed library-image inventory and full notices reviewed. Retain complete matching source; no System Library or permissive-source exclusion claimed. Psycopg C extension is built from pinned source and links distribution libpq5; no psycopg-binary wheel is installed."
         },
@@ -2255,8 +2255,8 @@
         {
           "id": "dpkg:libpq5:amd64",
           "source": "postgresql-17",
-          "source_version": "17.11-0+deb13u1",
-          "version": "17.11-0+deb13u1"
+          "source_version": "17.12-0+deb13u1",
+          "version": "17.12-0+deb13u1"
         },
         {
           "id": "dpkg:libpsl5t64:amd64",
@@ -4242,7 +4242,7 @@
           "id": "dpkg:libpq5:amd64",
           "license": "PostgreSQL AND retained Debian copyright terms",
           "sources": [
-            "debian_postgresql-17_17.11-0_deb13u1"
+            "debian_postgresql-17_17.12-0_deb13u1"
           ],
           "rationale": "Exact installed library-image inventory and full notices reviewed. Retain complete matching source; no System Library or permissive-source exclusion claimed. Psycopg C extension is built from pinned source and links distribution libpq5; no psycopg-binary wheel is installed."
         },
@@ -11613,11 +11613,11 @@
       "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1.tar.xz",
       "sha256": "4f5379796280cdaeb0c2f358fd04b6a16cc4fb7dfa83b5a8c91a9d963b435231"
     },
-    "debian_postgresql-17_17.11-0_deb13u1": {
-      "url": "https://security.debian.org/debian-security/pool/updates/main/p/postgresql-17/postgresql-17_17.11-0+deb13u1.dsc",
-      "sha256": "bf148ae423a982707c3f60672c3a072ef62b701bd9f5df847d9f4b8c9b3e3b18",
+    "debian_postgresql-17_17.12-0_deb13u1": {
+      "url": "https://security.debian.org/debian-security/pool/updates/main/p/postgresql-17/postgresql-17_17.12-0+deb13u1.dsc",
+      "sha256": "e406fdcde8e58a616e65b84237ca1f1d92605ad4c3fc5a5264815439b8fc1611",
       "package": "postgresql-17",
-      "version": "17.11-0+deb13u1"
+      "version": "17.12-0+deb13u1"
     },
     "python-psycopg-3.3.8": {
       "url": "https://files.pythonhosted.org/packages/11/c8/3bd7e09770a5829eb26667df5e49f084d78bd106d5949ade9447288a8e18/psycopg-3.3.8.tar.gz",

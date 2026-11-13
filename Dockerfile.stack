@@ -5,7 +5,7 @@ COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 # Compile only in the disposable dependency stage against distro libpq.
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libpq-dev=17.11-0+deb13u1 \
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libpq-dev=17.12-0+deb13u1 \
     && rm -rf /var/lib/apt/lists/* \
     && test -f /opt/python/include/python3.14/Python.h \
     && pip install --no-cache-dir uv==0.9.9 \
@@ -17,7 +17,7 @@ LABEL org.opencontainers.image.revision=$BOOKSYS_REVISION
 WORKDIR /app
 COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu /opt/python
 COPY --from=dependencies /app/.venv /app/.venv
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5=17.11-0+deb13u1 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5=17.12-0+deb13u1 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
     && rm -rf /var/lib/apt/lists/*
 RUN /opt/python/bin/python3.14 -m pip uninstall --break-system-packages -y pip && python -m pip uninstall -y pip
 RUN /app/.venv/bin/python -c 'import psycopg,sys; from psycopg import pq; assert pq.__impl__ == "c" and sys.version_info[:2] == (3,14) and psycopg.__version__ == "3.3.8"'
