@@ -2,6 +2,9 @@
 
 import importlib.util
 import asyncio
+import os
+import runpy
+import sys
 import threading
 import unittest
 from pathlib import Path
@@ -74,6 +77,40 @@ class Context:
 
 @unittest.skipUnless(AVAILABLE, "Run in the pinned Byparr image with /app on PYTHONPATH")
 class SessionApiTests(unittest.TestCase):
+    def test_environment_budget_sets_default_maximum_and_total_timeout(self):
+        adapter = sys.modules[create_app.__module__].__file__
+        observed, navigation = [], []
+        wait_for = asyncio.wait_for
+
+        async def timed(awaitable, timeout):
+            observed.append(timeout)
+            return await wait_for(awaitable, timeout)
+
+        class TimedPage(Page):
+            async def goto(self, url, **kwargs):
+                navigation.append(kwargs['timeout'])
+                return await super().goto(url, **kwargs)
+
+        async def browser():
+            yield SimpleNamespace(page=TimedPage(), context=Context())
+
+        with patch.dict(os.environ, {'BOOKSYS_BYPARR_BUDGET': '180'}):
+            factory = runpy.run_path(adapter)['create_app']
+        with patch('src.endpoints.challenge_present', new=AsyncMock(return_value=False)), \
+                patch('asyncio.wait_for', side_effect=timed):
+            with TestClient(factory(browser)) as client:
+                for fields in ({}, {'maxTimeout': 180000}, {'maxTimeout': 5000}):
+                    self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok', **fields}).status_code, 200)
+                self.assertEqual(client.post('/v1', json={'url': ORIGIN + '/ok', 'maxTimeout': 181000}).status_code, 422)
+        self.assertEqual([timeout for timeout in observed if timeout != 20], [180, 180, 5, 180])
+        for actual, expected in zip(navigation, (180000, 180000, 5000), strict=True):
+            self.assertGreater(actual, expected - 1000)
+            self.assertLessEqual(actual, expected)
+        for invalid in ('0', '-1', 'invalid', '1.5'):
+            with patch.dict(os.environ, {'BOOKSYS_BYPARR_BUDGET': invalid}):
+                with self.assertRaisesRegex(ValueError, 'BOOKSYS_BYPARR_BUDGET must be a positive integer'):
+                    runpy.run_path(adapter)
+
     def test_listener_transport_failure_still_closes_browser_and_allows_reuse(self):
         closed = []
 

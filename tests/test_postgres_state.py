@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,6 +21,26 @@ from library.primitives import empty
 
 @unittest.skipUnless(os.environ.get('BOOKSYS_TEST_PG_DSN_FILE'), 'isolated PostgreSQL required')
 class PostgreSQLStateTests(unittest.TestCase):
+    def test_environment_deadline_sets_default_and_preserves_explicit_budget(self) -> None:
+        script = '''
+import sys, time
+from library.postgres import Database
+database = Database(sys.argv[1], sys.argv[2])
+for options, budget in (({}, 37), ({'seconds': 2}, 2)):
+    with database.connection(**options) as connection:
+        assert connection.execute('SELECT 1').fetchone() == (1,)
+        remaining = connection.deadline - time.monotonic()
+        assert budget - 1 < remaining <= budget, remaining
+'''
+        result = subprocess.run([sys.executable, '-c', script, self.dsn, self.schema],
+            env={**os.environ, 'BOOKSYS_DB_DEADLINE': '37'}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for invalid in ('0', '-1', 'invalid', '1.5'):
+            result = subprocess.run([sys.executable, '-c', 'import library.postgres'],
+                env={**os.environ, 'BOOKSYS_DB_DEADLINE': invalid}, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('BOOKSYS_DB_DEADLINE must be a positive integer', result.stderr)
+
     def setUp(self) -> None:
         from library.postgres import Database
         from library.store import Store

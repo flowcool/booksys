@@ -64,6 +64,18 @@ Préparer les éléments suivants avant le démarrage :
    Fournir les autres variables obligatoires indiquées dans le fichier Compose.
 
 Conserver ces valeurs et les secrets hors de Git.
+Deux délais acceptent des secondes entières strictement positives :
+
+| Variable | Défaut | Usage |
+| --- | --- | --- |
+| `BOOKSYS_BYPARR_BUDGET` | 120 s | Budget de résolution, démarrage du navigateur inclus. Augmenter si une résolution valide dépasse le délai sur un hôte lent. Définir la même valeur sur le client de collecte et Byparr. Le timeout HTTP ajoute 20 s pour le nettoyage. |
+| `BOOKSYS_DB_DEADLINE` | 30 s | Délai total par transaction PostgreSQL. Augmenter si des transactions valides atteignent `storage_busy`, après contrôle de la contention. Les délais explicites des appelants et les délais englobants plus courts restent prioritaires. |
+
+Définir ces variables dans `environment` des services concernés du fichier stack.
+Une valeur invalide bloque le démarrage avec une erreur qui nomme la variable.
+Recréer les services concernés pour appliquer la valeur. Aucune construction
+d'image n'est requise. Voir les [détails d'exploitation](docs/operations.md).
+
 Les commandes suivantes supposent un fichier local `.env` préparé et validé :
 
 ```bash

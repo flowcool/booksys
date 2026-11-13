@@ -1,9 +1,12 @@
 """Exercise public collection boundaries with captured HTML and a local API."""
 
 import json
+import os
+import runpy
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock, patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -199,13 +202,23 @@ class ByparrTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            client = Byparr(f"http://127.0.0.1:{server.server_port}/v1", delay=0)
-            self.assertIn("bys-items-container", client(DEFAULT_CATEGORY))
+            with patch.dict(os.environ, {'BOOKSYS_BYPARR_BUDGET': '180'}):
+                browser = runpy.run_path(str(Path(__file__).parents[1] / 'booksys_core/browser.py'))['Byparr']
+            client = browser(f"http://127.0.0.1:{server.server_port}/v1", delay=0)
+            transport = client._fetch_byparr.__globals__
+            opener = Mock(wraps=transport['urlopen'])
+            with patch.dict(transport, {'urlopen': opener}):
+                self.assertIn("bys-items-container", client(DEFAULT_CATEGORY))
+            self.assertEqual(opener.call_args.kwargs['timeout'], 200)
             for _ in range(2):
                 with self.assertRaises(CollectionError):
                     client(DEFAULT_CATEGORY)
             self.assertEqual(received[0], {"cmd": "request.get", "url": DEFAULT_CATEGORY,
-                                            "maxTimeout": 60000, "blockMedia": False})
+                                            "maxTimeout": 180000, "blockMedia": False})
+            for invalid in ('0', '-1', 'invalid', '1.5'):
+                with patch.dict(os.environ, {'BOOKSYS_BYPARR_BUDGET': invalid}):
+                    with self.assertRaisesRegex(ValueError, 'BOOKSYS_BYPARR_BUDGET must be a positive integer'):
+                        runpy.run_path(str(Path(__file__).parents[1] / 'booksys_core/browser.py'))
         finally:
             server.shutdown()
             server.server_close()
