@@ -125,13 +125,24 @@ with tempfile.TemporaryDirectory() as directory:
     broken = root / 'broken.cbr'
     broken.write_bytes(cbr.read_bytes().replace(png, b'x' * len(png)))
     assert worker(broken, 'validate', root / 'broken-validate')['status'] == 'rejected'
-    active = root / 'active.pdf'
-    with pikepdf.open(pdf) as document:
-        document.Root.OpenAction = pikepdf.Dictionary(S=pikepdf.Name.JavaScript, JS='alert(1)')
-        document.save(active)
-    active_result = worker(active, 'validate', root / 'active-validate')
-    assert active_result['status'] == 'rejected', active_result
+    for source, case in ((pdf, '.pdf'), (embedded_pdf, 'embedded.pdf')):
+        active = root / ('active-' + source.name)
+        with pikepdf.open(source) as document:
+            document.Root.OpenAction = pikepdf.Dictionary(S=pikepdf.Name.JavaScript, JS='alert(1)')
+            document.save(active)
+        # Validation only counts pages with pikepdf. Poppler extracts images or
+        # rasterizes page content; neither conversion path executes OpenAction.
+        # The CBZ retains only page images and ComicInfo, never PDF actions.
+        active_result = worker(active, 'validate', root / (case + '-active-validate'))
+        assert active_result['status'] == 'validated' and active_result['pages'] == 1, active_result
+        workdir = root / (case + '-active-transform')
+        active_transform = worker(active, 'transform', workdir, request={'comicinfo': xml})
+        assert active_transform['status'] == 'validated', active_transform
+        assert active_transform['page_manifest'] == transforms[case]['page_manifest'], active_transform
+        with zipfile.ZipFile(workdir / 'book.cbz') as archive:
+            assert set(archive.namelist()) == {active_transform['page_manifest'][0]['name'], 'ComicInfo.xml'}
     print(json.dumps({'boundary': 'Docker reader; no nested namespaces', 'native_versions': versions,
                       'inspections': inspections, 'transforms': transforms,
                       'confinement': 'uid1001; no capabilities; no new privileges; no network route; readonly root; no installation mounts',
-                      'negative_cases': ['corrupt RAR', 'active PDF']}, indent=2))
+                      'negative_cases': ['corrupt RAR'],
+                      'inert_actions': 'active PDFs validate and yield the same page images; actions are omitted'}, indent=2))
