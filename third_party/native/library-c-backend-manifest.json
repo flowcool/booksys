@@ -1,12 +1,12 @@
 {
-  "inventory_sha256": "3e6bd29417d030317a696222558a53af822d0abae600640c28a07de33ebc9bf5",
-  "notices_archive_sha256": "e46581e6bde904465f52cb865c9d4d400a5fb4a8e2a82da240869bcc108a954f",
+  "inventory_sha256": "043bb728ff69553807f4f2e03e3e3218236b53b1427988f5cbf466834014f17b",
+  "notices_archive_sha256": "608af921f4b000777b33672cebc34a4585c13acbedd1fa6d39ae2d66f200d37b",
   "files": {
-    "libpq5-17.11-copyright.txt": {
+    "libpq5-17.12-copyright.txt": {
       "sha256": "afcc052a946b4117667527211b4ca303f07044f5585222f4c8f577e0764b2123",
       "bytes": 12934,
       "installed_path": "usr/share/doc/libpq5/copyright",
-      "source": "debian_postgresql-17_17.11-0_deb13u1"
+      "source": "debian_postgresql-17_17.12-0_deb13u1"
     },
     "psycopg-3.3.8-LICENSE.txt": {
       "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
