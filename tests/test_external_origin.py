@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from library.business_stages import BusinessStages
 from library.intake import external_origins
+import library.native_stages as native_stages
 from library.native_stages import NativeStages
 from library.origins import resolve_asset_origin
 from library.stage_model import Task
@@ -41,6 +42,7 @@ class ExternalOriginTests(unittest.TestCase):
                 observation.return_value.queue.return_value = ([], 0)
                 cursor.return_value.discovery.return_value = ''
                 for _ in range(2):
+                    native_stages._EXTERNAL_SCAN_AT = 0.0   # the scan runs once a day: open the gate for each pass
                     self.assertEqual(adapter.discover_intake(tasks, now=at), 1)
                     obligation = tasks.discover.call_args.args[0]
                     task = Task(obligation.key, obligation.stage, obligation.entity,
