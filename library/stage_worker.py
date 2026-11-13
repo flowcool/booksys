@@ -36,15 +36,27 @@ def verify_activation(root: Path) -> dict[str, Any]:
             or not value.get('qualification_receipt')):
         raise LibraryError('Independent queue activation does not bind this qualified candidate')
     pool = Path(value['cgroup_pool'])
-    own = next(line.split(':', 2)[2] for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::'))
+    lines = Path('/proc/self/cgroup').read_text().splitlines()
+    unified = next((line.split(':', 2)[2] for line in lines if line.startswith('0::')), None)
+    if unified is not None:
+        own, root = unified, Path('/sys/fs/cgroup')
+        memory_file = 'memory.max'
+    else:
+        # cgroup v1 (kernels without cgroup v2): one hierarchy per controller and no CPU quota exists.
+        own = next(line.split(':', 2)[2] for line in lines if ':memory:' in line)
+        root = Path('/sys/fs/cgroup/memory')
+        memory_file = 'memory.limit_in_bytes'
     if (not pool.is_relative_to('/sys/fs/cgroup') or pool.is_symlink()
-            or not (Path('/sys/fs/cgroup')/own.lstrip('/')).is_relative_to(pool)):
+            or not (root/own.lstrip('/')).is_relative_to(pool)):
         raise LibraryError('Actor is outside the qualified shared cgroup')
-    memory = int((pool/'memory.max').read_text())
-    quota, period = map(int, (pool/'cpu.max').read_text().split())
-    # Refuse application workers outside the qualified aggregate memory and CPU envelope.
-    if not 0 < memory <= 4608*1024**2 or not 0 < quota <= 2*period:
+    memory = int((pool/memory_file).read_text())
+    # Refuse application workers outside the qualified aggregate memory (and, on cgroup v2, CPU) envelope.
+    if not 0 < memory <= 4608*1024**2:
         raise LibraryError('Shared cgroup envelope is not enforced')
+    if unified is not None:
+        quota, period = map(int, (pool/'cpu.max').read_text().split())
+        if not 0 < quota <= 2*period:
+            raise LibraryError('Shared cgroup envelope is not enforced')
     if not value.get('io_device'):
         raise LibraryError('I/O qualification is missing')
     return dict(value)
