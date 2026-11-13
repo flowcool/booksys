@@ -178,5 +178,6 @@ Check these before creating the GitHub release; each one has already cost a fail
 - The corresponding-source bundle may exceed the 2 GiB release-asset limit: the workflow now splits it into numbered parts, and the verifier accepts any number of parts.
 - Debian packages are pinned to exact versions in the Dockerfiles and in `release/sources.lock.json`; a security update removes the old version from the archive. Rebuild one image locally the same day and refresh the pins, the lock entry (URL and sha256 of the `.dsc`) and `third_party/native` notices if apt cannot find a pinned version.
 - Run the image validation locally (`ops/validate_image.sh`) for the three images; probes must follow the current runtime.
+- Image probes must decode a synthetic RAR and a PDF through the worker decoder.
 - Check that the `ghcr.io/flowcool/booksys-*` packages are readable by the hosts that pull them.
 - Create the release as stable (not a prerelease) only when `latest` should move.
