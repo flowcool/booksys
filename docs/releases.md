@@ -171,3 +171,12 @@ workflow changes does not retract already public source or images.
 - [Pinned BuildKit SLSA options](https://github.com/moby/buildkit/blob/v0.34.2/docs/attestations/slsa-provenance.md)
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
 - [GitHub package access and visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
+
+## Before publishing a release
+
+Check these before creating the GitHub release; each one has already cost a failed publication.
+- The corresponding-source bundle may exceed the 2 GiB release-asset limit: the workflow now splits it into numbered parts, and the verifier accepts any number of parts.
+- Debian packages are pinned to exact versions in the Dockerfiles and in `release/sources.lock.json`; a security update removes the old version from the archive. Rebuild one image locally the same day and refresh the pins, the lock entry (URL and sha256 of the `.dsc`) and `third_party/native` notices if apt cannot find a pinned version.
+- Run the image validation locally (`ops/validate_image.sh`) for the three images; probes must follow the current runtime.
+- Check that the `ghcr.io/flowcool/booksys-*` packages are readable by the hosts that pull them.
+- Create the release as stable (not a prerelease) only when `latest` should move.
