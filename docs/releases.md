@@ -89,7 +89,10 @@ its installed build metadata, Python against its actual distribution, and native
 wheel libraries against exact vendored versions. Version labels or upstream URLs
 alone cannot prove that source correspondence. See [redistribution](redistribution.md).
 
-Publish `corresponding-source.tar.gz` and `manifest.json` beside the binaries.
+Publish `corresponding-source.tar.gz` and `manifest.json` beside the binaries;
+above 2 GiB minus 1 MiB, the normal workflow publishes numbered parts of at most
+1792 MiB and a manifest copy with each part's URL, size and SHA256, the whole
+archive's size and SHA256, and the ordered reassembly command.
 GitHub limits each release asset to less than 2 GiB. For the initial v0.1.0, the
 retained archive exceeds that limit. `release-recovery.yml` reuses the original
 qualified run 43171690522 and its three exact OCI archives. It splits the same

@@ -15,10 +15,40 @@ from urllib.request import urlopen
 from image_validation import identity, security_findings
 from release_images import IMAGES, digest
 
+SOURCE_PART_SIZE = 1792 * 1024 * 1024
+SOURCE_SPLIT_THRESHOLD = 2 * 1024**3 - 1024**2
+
 
 def file_digest(path: Path) -> str:
     with path.open("rb") as stream:
         return "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def split_source(archive: Path, expected: str, tag: str) -> dict[str, Any]:
+    whole = hashlib.sha256()
+    parts: list[dict[str, Any]] = []
+    with archive.open("rb") as source:
+        index = 0
+        while chunk := source.read(min(SOURCE_PART_SIZE, 1024 * 1024)):
+            name = archive.name + f".part-{index:03d}"
+            checksum = hashlib.sha256()
+            size = 0
+            with (archive.parent / name).open("xb") as output:
+                while chunk:
+                    whole.update(chunk)
+                    checksum.update(chunk)
+                    output.write(chunk)
+                    size += len(chunk)
+                    if size == SOURCE_PART_SIZE:
+                        break
+                    chunk = source.read(min(SOURCE_PART_SIZE - size, 1024 * 1024))
+            parts.append({"name": name, "size": size, "sha256": "sha256:" + checksum.hexdigest(),
+                          "url": f"https://github.com/flowcool/booksys/releases/download/{tag}/{name}"})
+            index += 1
+    if "sha256:" + whole.hexdigest() != expected:
+        raise ValueError("Retained whole source archive differs; keep failed parts for inspection")
+    return {"name": archive.name, "size": archive.stat().st_size, "sha256": expected, "parts": parts,
+            "reassemble": "cat " + " ".join(part["name"] for part in parts) + " > " + archive.name}
 
 
 def oci_graph(path: Path) -> dict[str, Any]:
@@ -262,6 +292,18 @@ def main() -> None:
         plan["source_assets"] = assets
         plan["asset_digests"] = checksums
         verify_plan(plan)
+        archive = (args.directory / "corresponding-source.tar.gz").resolve()
+        if archive.stat().st_size > SOURCE_SPLIT_THRESHOLD:
+            source_archive = split_source(archive, checksums[str(archive)], plan["tag"])
+            manifest = json.loads((args.directory / "sources/manifest.json").read_text())
+            manifest["source_archive"] = source_archive
+            destination = args.directory / "release-assets"
+            destination.mkdir(exist_ok=True)
+            manifest_path = (destination / "manifest.json").resolve()
+            with manifest_path.open("x") as output:
+                output.write(json.dumps(manifest, indent=2) + "\n")
+            plan["source_assets"] = [str(archive.parent / part["name"]) for part in source_archive["parts"]] + [str(manifest_path)]
+            plan["asset_digests"] = {path: file_digest(Path(path)) for path in plan["source_assets"]}
         print(json.dumps(plan, indent=2))
     else:
         release = json.loads(args.release.read_text())
