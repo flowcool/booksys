@@ -520,18 +520,23 @@ class Store:
             db.execute('SET CONSTRAINTS ALL IMMEDIATE')
             # Materialize one repeatable-read snapshot within the DB budget.
             # Local decoding, attachment I/O and validation must not hold it open.
-            rows = {kind: db.execute(f'SELECT id,payload FROM {kind} ORDER BY id').fetchall()
-                    for kind in TABLES}
+            rows: dict[str, list[tuple[str, str]]] = {}
+            for kind in TABLES:
+                # Bound the driver's result buffer, without decoding inside the snapshot.
+                with db.cursor(name='startup_audit') as cursor:
+                    cursor.itersize = 128
+                    cursor.execute(f'SELECT id,payload FROM {kind} ORDER BY id')
+                    rows[kind] = list(cursor)
             relations: dict[str, dict[str, set[str]]] = {}
             for name in RELATIONS:
                 members: dict[str, set[str]] = {}
                 for source, target in db.execute(f'SELECT source,target FROM {name}'):
                     members.setdefault(source, set()).add(target)
                 relations[name] = members
-        linked = {kind: {ident: self.restore(payload, media=False) for ident, payload in rows[kind]}
-                  for kind in ('origins',)}
+        # Retain raw parent payloads only; most origins need no parent lookup.
+        linked = {'origins': dict(rows['origins'])}
         for kind in TABLES:
-            for ident, payload in rows[kind]:
+            for ident, payload in rows.pop(kind):
                 record = self.restore(payload)
                 self._validate_record(kind, ident, record)
                 self._validate_links(None, kind, ident, record, linked=linked)
@@ -723,10 +728,11 @@ class Store:
             raise LibraryError('Stale or inactive task result')
 
     def _validate_links(self, db: DeadlineConnection | None, kind: str, ident: str, record: dict[str, Any], *,
-                        linked: dict[str, dict[str, dict[str, Any]]] | None = None) -> None:
+                        linked: dict[str, dict[str, str]] | None = None) -> None:
         def get(table: str, key: str) -> dict[str, Any] | None:
             if linked is not None:
-                return linked[table].get(key)
+                payload = linked[table].get(key)
+                return self.restore(payload, media=False) if payload is not None else None
             assert db is not None, 'Uncached link validation requires a connection'
             row = db.execute(f'SELECT payload FROM {table} WHERE id=%s', (key,)).fetchone()
             return self.restore(row[0], media=False) if row else None
