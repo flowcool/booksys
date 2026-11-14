@@ -5588,20 +5588,20 @@
         {
           "id": "dpkg:libc-bin",
           "source": "glibc",
-          "source_version": "2.43-2ubuntu2.4",
-          "version": "2.43-2ubuntu2.4"
+          "source_version": "2.43-2ubuntu2.7",
+          "version": "2.43-2ubuntu2.7"
         },
         {
           "id": "dpkg:libc-gconv-modules-extra:amd64",
           "source": "glibc",
-          "source_version": "2.43-2ubuntu2.4",
-          "version": "2.43-2ubuntu2.4"
+          "source_version": "2.43-2ubuntu2.7",
+          "version": "2.43-2ubuntu2.7"
         },
         {
           "id": "dpkg:libc6:amd64",
           "source": "glibc",
-          "source_version": "2.43-2ubuntu2.4",
-          "version": "2.43-2ubuntu2.4"
+          "source_version": "2.43-2ubuntu2.7",
+          "version": "2.43-2ubuntu2.7"
         },
         {
           "id": "dpkg:libcairo-gobject2:amd64",
@@ -7945,7 +7945,7 @@
           "id": "dpkg:libc-bin",
           "license": "BSD-2-clause AND BSD-2-clause or GPL-2 AND BSD-3-clause-Berkeley AND BSD-3-clause-Berkeley and BSD-3-clause-WIDE AND BSD-3-clause-Berkeley and DEC AND BSD-3-clause-Berkeley and DEC and IBM and ISC AND BSD-3-clause-Berkeley and DEC and ISC AND BSD-3-clause-Berkeley and DEC and ISC and LGPL-2.1+ AND BSD-3-clause-Berkeley and DEC and LGPL-2.1+ AND BSD-3-clause-Berkeley and ISC AND BSD-3-clause-Berkeley and LGPL-2.1+ AND BSD-3-clause-Berkeley and LGPL-2.1+ and Univ-Coimbra AND BSD-3-clause-Carnegie AND BSD-3-clause-Oracle AND BSD-3-clause-WIDE AND BSD-like-Spencer AND BSL-1.0 AND CORE-MATH AND Carnegie AND Carnegie and LGPL-2.1+ AND DEC AND FSFAP AND GFDL-1.3 AND GPL-2 AND GPL-2+ AND GPL-2+-with-link-exception AND GPL-3+ AND IBM AND IBM and ISC AND ISC AND ISC and LGPL-2.1+ AND Inner-Net AND Inner-Net and LGPL-2.1+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-2.1+ and GPL-2 AND LGPL-2.1+ and SunPro AND LGPL-2.1+-with-link-exception AND LGPL-3+ AND MIT-like-Lord AND PCRE AND SunPro AND Unicode-DFS-2016 AND Univ-Coimbra AND public-domain",
           "sources": [
-            "ubuntu_glibc_2.43-2ubuntu2.4"
+            "ubuntu_glibc_2.43-2ubuntu2.7"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -7953,7 +7953,7 @@
           "id": "dpkg:libc-gconv-modules-extra:amd64",
           "license": "BSD-2-clause AND BSD-2-clause or GPL-2 AND BSD-3-clause-Berkeley AND BSD-3-clause-Berkeley and BSD-3-clause-WIDE AND BSD-3-clause-Berkeley and DEC AND BSD-3-clause-Berkeley and DEC and IBM and ISC AND BSD-3-clause-Berkeley and DEC and ISC AND BSD-3-clause-Berkeley and DEC and ISC and LGPL-2.1+ AND BSD-3-clause-Berkeley and DEC and LGPL-2.1+ AND BSD-3-clause-Berkeley and ISC AND BSD-3-clause-Berkeley and LGPL-2.1+ AND BSD-3-clause-Berkeley and LGPL-2.1+ and Univ-Coimbra AND BSD-3-clause-Carnegie AND BSD-3-clause-Oracle AND BSD-3-clause-WIDE AND BSD-like-Spencer AND BSL-1.0 AND CORE-MATH AND Carnegie AND Carnegie and LGPL-2.1+ AND DEC AND FSFAP AND GFDL-1.3 AND GPL-2 AND GPL-2+ AND GPL-2+-with-link-exception AND GPL-3+ AND IBM AND IBM and ISC AND ISC AND ISC and LGPL-2.1+ AND Inner-Net AND Inner-Net and LGPL-2.1+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-2.1+ and GPL-2 AND LGPL-2.1+ and SunPro AND LGPL-2.1+-with-link-exception AND LGPL-3+ AND MIT-like-Lord AND PCRE AND SunPro AND Unicode-DFS-2016 AND Univ-Coimbra AND public-domain",
           "sources": [
-            "ubuntu_glibc_2.43-2ubuntu2.4"
+            "ubuntu_glibc_2.43-2ubuntu2.7"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -7961,7 +7961,7 @@
           "id": "dpkg:libc6:amd64",
           "license": "BSD-2-clause AND BSD-2-clause or GPL-2 AND BSD-3-clause-Berkeley AND BSD-3-clause-Berkeley and BSD-3-clause-WIDE AND BSD-3-clause-Berkeley and DEC AND BSD-3-clause-Berkeley and DEC and IBM and ISC AND BSD-3-clause-Berkeley and DEC and ISC AND BSD-3-clause-Berkeley and DEC and ISC and LGPL-2.1+ AND BSD-3-clause-Berkeley and DEC and LGPL-2.1+ AND BSD-3-clause-Berkeley and ISC AND BSD-3-clause-Berkeley and LGPL-2.1+ AND BSD-3-clause-Berkeley and LGPL-2.1+ and Univ-Coimbra AND BSD-3-clause-Carnegie AND BSD-3-clause-Oracle AND BSD-3-clause-WIDE AND BSD-like-Spencer AND BSL-1.0 AND CORE-MATH AND Carnegie AND Carnegie and LGPL-2.1+ AND DEC AND FSFAP AND GFDL-1.3 AND GPL-2 AND GPL-2+ AND GPL-2+-with-link-exception AND GPL-3+ AND IBM AND IBM and ISC AND ISC AND ISC and LGPL-2.1+ AND Inner-Net AND Inner-Net and LGPL-2.1+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-2.1+ and GPL-2 AND LGPL-2.1+ and SunPro AND LGPL-2.1+-with-link-exception AND LGPL-3+ AND MIT-like-Lord AND PCRE AND SunPro AND Unicode-DFS-2016 AND Univ-Coimbra AND public-domain",
           "sources": [
-            "ubuntu_glibc_2.43-2ubuntu2.4"
+            "ubuntu_glibc_2.43-2ubuntu2.7"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -10763,11 +10763,11 @@
       "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/bzip2/bzip2_1.0.8-6ubuntu0.1.dsc",
       "sha256": "d894b5cb07c6d0fa559fbd474f140e876f7f99e5084a1bc657278ba0404b9c37"
     },
-    "ubuntu_glibc_2.43-2ubuntu2.4": {
+    "ubuntu_glibc_2.43-2ubuntu2.7": {
       "package": "glibc",
-      "version": "2.43-2ubuntu2.4",
-      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/glibc_2.43-2ubuntu2.4.dsc",
-      "sha256": "da10d551ca51076bf7bf663de38369d04e267386b8211c283c2814e68e482ed3"
+      "version": "2.43-2ubuntu2.7",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/glibc_2.43-2ubuntu2.7.dsc",
+      "sha256": "f2ef1d49c67efaf54870b87f858ec8b7a97fa1d3be31ce1b91314697b3f080d5"
     },
     "ubuntu_cairo_1.18.4-3": {
       "package": "cairo",
