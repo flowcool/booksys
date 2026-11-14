@@ -82,6 +82,7 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
     opened = last_used = 0.0
     lock = asyncio.Lock()
     broken = False
+    shutting_down = False
     generation = 0
     active_request_id: str | None = None
 
@@ -97,15 +98,20 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
                 await asyncio.wait_for(generator.aclose(), timeout=CLEANUP_TIMEOUT)
                 generator = None
             except BaseException:
-                broken = True
+                if not broken:
+                    broken = True
+                    if not shutting_down:
+                        asyncio.get_running_loop().call_later(2, os._exit, 1)
                 emit(service='byparr', stage='byparr', code='blocked', reason='cleanup_failed')
                 raise HTTPException(503, detail('cleanup_failed', 'local', active_request_id or 'shutdown')) from None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        nonlocal shutting_down
         try:
             yield
         finally:
+            shutting_down = True
             await close()
 
     app = FastAPI(lifespan=lifespan)
