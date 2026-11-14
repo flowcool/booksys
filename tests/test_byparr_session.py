@@ -337,17 +337,30 @@ class SessionApiTests(unittest.TestCase):
             self.assertEqual(len(closed), 2)
 
     def test_failed_cleanup_requires_restart_without_opening_more_browsers(self):
-        async def browser():
-            try:
-                yield SimpleNamespace(page=Page(), context=Context())
-            finally:
-                raise RuntimeError("fixture cleanup failed")
+        generator = SimpleNamespace(
+            __anext__=AsyncMock(return_value=SimpleNamespace(page=Page(), context=Context())),
+            aclose=AsyncMock(side_effect=[RuntimeError("cleanup"), RuntimeError("cleanup"), None]))
 
-        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
-            with TestClient(create_app(browser), raise_server_exceptions=False) as client:
-                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/bad-html"}).status_code, 503)
+        class BrowserGenerator:
+            async def __anext__(self):
+                return await generator.__anext__()
+
+            async def aclose(self):
+                await generator.aclose()
+
+        original = asyncio.BaseEventLoop.call_later
+        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)), \
+                patch("ops.byparr.session_api.os._exit") as exit_hook, \
+                patch.object(asyncio.BaseEventLoop, "call_later", autospec=True,
+                             side_effect=original) as scheduled:
+            with TestClient(create_app(BrowserGenerator), raise_server_exceptions=False) as client:
+                self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 503)
                 self.assertEqual(client.get("/health").status_code, 503)
                 self.assertEqual(client.post("/v1", json={"url": ORIGIN + "/ok"}).status_code, 503)
+            exits = [call for call in scheduled.call_args_list if call.args[2] is exit_hook]
+            self.assertEqual(len(exits), 1)
+            self.assertEqual(exits[0].args[1:], (2, exit_hook, 1))
+            generator.__anext__.assert_awaited_once()
 
     def test_expired_age_and_repeated_media_routes_do_not_accumulate(self):
         now = [0.0]
@@ -365,7 +378,11 @@ class SessionApiTests(unittest.TestCase):
             finally:
                 closed.append(page)
 
-        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)):
+        original = asyncio.BaseEventLoop.call_later
+        with patch("src.endpoints.challenge_present", new=AsyncMock(return_value=False)), \
+                patch("ops.byparr.session_api.os._exit") as exit_hook, \
+                patch.object(asyncio.BaseEventLoop, "call_later", autospec=True,
+                             side_effect=original) as scheduled:
             with TestClient(create_app(browser, clock=lambda: now[0])) as client:
                 for index in range(1, 5):
                     response = client.post("/v1", json={"url": ORIGIN + "/ok", "blockMedia": True})
@@ -380,6 +397,8 @@ class SessionApiTests(unittest.TestCase):
                 self.assertEqual(closed, pages)
                 self.assertEqual(len({id(page) for page in pages}), 5)
                 self.assertTrue(all(not callbacks for page in pages for callbacks in page.listeners.values()))
+
+            self.assertFalse(any(call.args[2] is exit_hook for call in scheduled.call_args_list))
 
     def test_memory_pressure_releases_browser_before_the_next_request(self):
         async def browser():
