@@ -112,6 +112,11 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.revision }}
           persist-credentials: false
+      - name: Restore verified source downloads from protected main
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/source-cache
+          key: release-sources-v1-${{ hashFiles('release/sources.lock.json') }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: release-*
@@ -123,14 +128,14 @@ jobs:
           bash ops/release_preflight.sh "$RUNNER_TEMP/preflight"
           mkdir "$RUNNER_TEMP/artifacts"
           for image in worker library byparr; do mv "$RUNNER_TEMP/download/release-$image" "$RUNNER_TEMP/artifacts/$image"; done
-          python3 ops/release_sources.py assemble "$RUNNER_TEMP/preflight/release.json" "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/sources" release/sources.lock.json > "$RUNNER_TEMP/source-bundle.json"
+          python3 ops/release_sources.py assemble "$RUNNER_TEMP/preflight/release.json" "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/sources" release/sources.lock.json --cache "$RUNNER_TEMP/source-cache" --workers 4 > "$RUNNER_TEMP/source-bundle.json"
           python3 ops/release_sources.py prepare "$RUNNER_TEMP/preflight/release.json" "$RUNNER_TEMP/artifacts" "$RUNNER_TEMP/sources" > "$RUNNER_TEMP/plan.json"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: qualified-release
           path: |
             ${{ runner.temp }}/artifacts/
-            ${{ runner.temp }}/sources/
+            ${{ runner.temp }}/sources/manifest.json
             ${{ runner.temp }}/corresponding-source.tar.gz
             ${{ runner.temp }}/plan.json
           compression-level: 0

@@ -14,7 +14,7 @@ from contextlib import redirect_stdout
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ops"))
 from release_images import publish, release_event, reconcile, registry_manifest, recovery_report
-from release_sources import oci_graph, prepare, assemble, main as source_main, verify_plan
+from release_sources import oci_graph, prepare, assemble, fetch, download_sources, main as source_main, verify_plan
 from image_validation import identity
 
 
@@ -312,6 +312,95 @@ class ArtifactQualificationTests(unittest.TestCase):
         with patch("release_sources.urlopen") as download, self.assertRaisesRegex(ValueError, "inventory"):
             assemble(lock, self.directory, self.directory / "assembled", self.release)
         download.assert_not_called()
+
+
+class SourceReuseTests(unittest.TestCase):
+    def test_parallel_assembly_retains_sources_notices_and_exact_git_revision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sources = {"demo": {"url": "https://example.test/demo.tar.xz",
+                                "sha256": hashlib.sha256(b"source bytes").hexdigest()}}
+            images = {}
+            for image in ("worker", "library", "byparr"):
+                target = root / "artifacts" / image
+                target.mkdir(parents=True)
+                artifact(target / "image.oci.tar")
+                (target / "inventory.json").write_text("[]")
+                (target / "notices.tar").write_bytes((image + " notices").encode())
+                images[image] = {"inventory": [], "reviewed_non_package_components": ["demo"],
+                                 "components": [{"id": "demo", "sources": ["demo"]}]}
+            revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+            def response(url, timeout):
+                result = io.BytesIO(b"source bytes")
+                result.url = url
+                return result
+            with patch("release_sources.urlopen", side_effect=response):
+                result = assemble({"images": images, "sources": sources}, root / "artifacts", root / "sources",
+                                  {"revision": revision}, cache=root / "cache", workers=4)
+            with tarfile.open(result["file"]) as archive:
+                self.assertEqual(archive.extractfile("corresponding-source/source/demo/demo.tar.xz").read(), b"source bytes")
+                manifest = json.load(archive.extractfile("corresponding-source/manifest.json"))
+                self.assertEqual(manifest["revision"], revision)
+                self.assertEqual(manifest["sources"][0]["files"][0]["sha256"], sources["demo"]["sha256"])
+                for image in images:
+                    self.assertEqual(archive.extractfile("corresponding-source/" + image + "-notices.tar").read(),
+                                     (image + " notices").encode())
+                snapshot = io.BytesIO(archive.extractfile("corresponding-source/booksys-source.tar").read())
+                with tarfile.open(fileobj=snapshot) as git_archive:
+                    self.assertEqual(git_archive.extractfile("README.md").read(),
+                                     subprocess.check_output(["git", "show", revision + ":README.md"], cwd=ROOT))
+            self.assertEqual(result["sha256"], "sha256:" + hashlib.sha256(Path(result["file"]).read_bytes()).hexdigest())
+
+    def test_parallel_downloads_preserve_lock_order_and_verify_dsc_archives(self):
+        from threading import Barrier
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            data = b"source bytes"
+            checksum = hashlib.sha256(data).hexdigest()
+            control = ("Source: demo\nVersion: 1\nChecksums-Sha256:\n " + checksum + " 12 demo.tar.xz\n").encode()
+            contents = {"demo.dsc": control, "demo.tar.xz": data, "other.tar.xz": b"other"}
+            lock = {"sources": {
+                "demo": {"url": "https://example.test/demo.dsc", "sha256": hashlib.sha256(control).hexdigest(),
+                         "package": "demo", "version": "1"},
+                "other": {"url": "https://example.test/other.tar.xz", "sha256": hashlib.sha256(b"other").hexdigest()}}}
+            started = Barrier(2)
+            def response(url, timeout):
+                if url.endswith(("demo.dsc", "other.tar.xz")):
+                    started.wait(timeout=5)
+                result = io.BytesIO(contents[url.rsplit("/", 1)[1]])
+                result.url = url
+                return result
+            with patch("release_sources.urlopen", side_effect=response):
+                records = download_sources(lock, root / "cold", cache=root / "cache", workers=2)
+            self.assertEqual([item["id"] for item in records], ["demo", "other"])
+            self.assertEqual((root / "cold/demo/demo.tar.xz").read_bytes(), data)
+            with patch("release_sources.urlopen", side_effect=AssertionError("network forbidden")):
+                warmed = download_sources(lock, root / "warm", cache=root / "cache", workers=2)
+            self.assertEqual(records, warmed)
+            self.assertEqual((root / "warm/demo/demo.tar.xz").read_bytes(), data)
+            with self.assertRaisesRegex(ValueError, "workers"):
+                download_sources(lock, root / "invalid", workers=0)
+
+    def test_cached_sources_are_reverified_without_network_and_tampering_is_preserved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            content = b"reviewed source archive"
+            expected = hashlib.sha256(content).hexdigest()
+            cache = root / "cache"
+            response = io.BytesIO(content)
+            response.url = "https://example.test/source.tar.xz"
+            with patch("release_sources.urlopen", return_value=response) as network:
+                first = fetch(response.url, expected, root / "first", cache=cache)
+                self.assertEqual(network.call_count, 1)
+            with patch("release_sources.urlopen", side_effect=AssertionError("network forbidden")):
+                second = fetch(response.url, expected, root / "second", cache=cache)
+                self.assertEqual((root / "second").read_bytes(), content)
+                self.assertEqual(first["sha256"], second["sha256"])
+                (cache / expected).write_bytes(b"tampered")
+                with self.assertRaisesRegex(ValueError, "cache.*differs"):
+                    fetch(response.url, expected, root / "third", cache=cache)
+            self.assertFalse((root / "third").exists())
+            self.assertEqual((cache / expected).read_bytes(), b"tampered")
 
 
 if __name__ == "__main__":

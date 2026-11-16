@@ -1,0 +1,32 @@
+name: Cache verified release sources
+
+on:
+  push:
+    branches: [main]
+    paths: [release/sources.lock.json]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-source-cache
+  cancel-in-progress: false
+
+jobs:
+  sources:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Restore and retain downloads keyed by the reviewed source lock
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/source-cache
+          key: release-sources-v1-${{ hashFiles('release/sources.lock.json') }}
+      - name: Download or reverify every source without building or publishing images
+        run: |
+          python3 ops/release_sources.py download release/sources.lock.json "$RUNNER_TEMP/verified-sources" --cache "$RUNNER_TEMP/source-cache" --workers 4
