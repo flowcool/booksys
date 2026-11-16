@@ -19,6 +19,7 @@ if AVAILABLE:
 ORIGIN = "https://www7.bookys-ebooks.com"
 
 
+PAGE_SOURCE = r'''
 class Page:
     def __init__(self):
         self.url = "about:blank"
@@ -73,6 +74,8 @@ class Page:
 class Context:
     async def cookies(self, urls):
         return []
+'''
+exec(PAGE_SOURCE)
 
 
 @unittest.skipUnless(AVAILABLE, "Run in the pinned Byparr image with /app on PYTHONPATH")
@@ -433,6 +436,9 @@ class SessionApiTests(unittest.TestCase):
 
 # The host suite has no Byparr image. Replace only its third-party interfaces
 # inside these cases; execute the real adapter, lifespan, asyncio and watchdog.
+ADAPTER_PATH = (sys.modules['session_api'].__file__ if 'session_api' in sys.modules
+                else Path(__file__).parents[1] / 'ops/byparr/session_api.py')
+OFFLINE_SOURCE = r'''
 def offline_adapter():
     from contextlib import ExitStack
     from types import ModuleType
@@ -480,7 +486,7 @@ def offline_adapter():
     with ExitStack() as stack:
         stack.enter_context(patch.dict(sys.modules, modules))
         stack.enter_context(patch('booksys_core.diagnostics.install_logging'))
-        return runpy.run_path(str(Path(__file__).parents[1] / 'ops/byparr/session_api.py'))
+        return runpy.run_path(str(ADAPTER_PATH))
 
 
 async def offline_fetch(app):
@@ -552,13 +558,23 @@ def watchdog_process_case(case):
                 time.sleep(10)
 
     asyncio.run(run())
+'''
+exec(OFFLINE_SOURCE)
+
+# Send the same helpers to children; the image has no tests or ops package.
+WATCHDOG_PROCESS_SOURCE = (
+    'import asyncio, os, runpy, sys\n'
+    'from types import SimpleNamespace\n'
+    'from unittest.mock import patch\n'
+    f'ORIGIN = {ORIGIN!r}\nADAPTER_PATH = {str(ADAPTER_PATH)!r}\n'
+    + PAGE_SOURCE + OFFLINE_SOURCE)
 
 
 class OfflineWatchdogTests(unittest.TestCase):
     def test_cancellation_resistant_browser_exits_at_hard_deadline(self):
         import subprocess
         result = subprocess.run([sys.executable, '-c',
-            'from tests.test_byparr_session import watchdog_process_case; '
+            WATCHDOG_PROCESS_SOURCE +
             'watchdog_process_case("resistant")'], capture_output=True, text=True, timeout=4)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('cancel resisted', result.stdout)
@@ -579,7 +595,7 @@ class OfflineWatchdogTests(unittest.TestCase):
     def assert_process_exit(self, case, marker, *, timeout):
         import subprocess
         result = subprocess.run([sys.executable, '-c',
-            'from tests.test_byparr_session import watchdog_process_case; '
+            WATCHDOG_PROCESS_SOURCE +
             f'watchdog_process_case({case!r})'], capture_output=True, text=True, timeout=timeout)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(marker, result.stdout)
@@ -660,7 +676,7 @@ class OfflineWatchdogTests(unittest.TestCase):
     def test_planned_shutdown_is_bounded_and_exits_cleanly_after_cleanup_stall(self):
         import subprocess
         result = subprocess.run([sys.executable, '-c',
-            'from tests.test_byparr_session import watchdog_process_case; '
+            WATCHDOG_PROCESS_SOURCE +
             'watchdog_process_case("shutdown")'], capture_output=True, text=True, timeout=7)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('cleanup resisted', result.stdout)
