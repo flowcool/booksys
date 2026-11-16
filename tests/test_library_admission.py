@@ -32,8 +32,7 @@ class AdmissionTests(unittest.TestCase):
                 operations.for_asset('a'*64, publisher.operation_applies)
 
     def test_scoped_recovery_refuses_inconsistent_unrelated_journals(self):
-        from unittest.mock import MagicMock
-        from library.codec import encode
+        from unittest.mock import MagicMock, patch
         from library.operational_state import CopyOperations
         from library.primitives import LibraryError
         publisher = object.__new__(AdmissionPublisher)
@@ -43,9 +42,9 @@ class AdmissionTests(unittest.TestCase):
         for scope, reason in (({'asset': 'unknown'}, 'conflict scope'),
                               ({'asset': 'b'*64, 'kind': 'admission', 'target': 'bad'}, 'destination scope')):
             with self.subTest(reason=reason):
-                db.execute.return_value = [(encode(scope),)]
-                with self.assertRaisesRegex(LibraryError, reason):
-                    operations.for_asset('a'*64, publisher.operation_applies)
+                with patch('library.operational_state.operational_records',return_value=[('admission','retained',scope)]):
+                    with self.assertRaisesRegex(LibraryError, reason):
+                        operations.for_asset('a'*64, publisher.operation_applies)
 
     def test_scoped_recovery_loads_only_selected_or_invalid_journals(self):
         from unittest.mock import Mock

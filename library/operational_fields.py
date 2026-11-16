@@ -88,6 +88,10 @@ def values(table: str, record: dict[str, Any]) -> tuple[Any, ...]:
     result: list[Any] = []
     for column, path, kind in FIELDS[table]:
         value = at(record, path)
+        # Legacy malformed ownership is retained proof and a global blocker.
+        # NULL is the unusable typed key, never a repair of the raw asset value.
+        if table=='copy_operations' and column=='asset' and value is not None and type(value) is not str:
+            value=None
         # These policy/readiness values are structured in some accepted writers.
         # Keep their full document and a typed equality digest, never stringify.
         if table == 'origins' and column.endswith(('policy', 'readiness')) and isinstance(value, (dict, list)):
@@ -239,7 +243,7 @@ def compose(table: str, record: dict[str,Any], scalars: tuple[Any,...]) -> dict[
             parent=parent[part]
         else:
             leaf=parts[-1]
-            if leaf in parent and kind!=Z and path!='remote_deadline' and not (table=='source_registry' and column=='last_scan_order'):
+            if leaf in parent and kind!=Z and path!='remote_deadline' and not (table=='copy_operations' and column=='asset' and type(parent[leaf]) is not str) and not (table=='source_registry' and column=='last_scan_order'):
                 original=parent[leaf]
                 if original is None or type(original) in (str,bool,int,float):
                     # SQL float does not erase an original integer's codec type.

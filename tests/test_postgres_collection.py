@@ -11,12 +11,12 @@ class CollectionStateTests(unittest.TestCase):
         from library.operational_state import CollectorState
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);create_store(self,root,empty());state=CollectorState(root)
-            stale=state.monitor();state.patch_monitor(schedule={'not_before':42})
+            stale=state.monitor();state.patch_monitor(schedule={'not_before':'2026-11-16T12:00:00+00:00'})
             stale['submissions']['a']={'status':'creating','operation_id':'exact'}
             state.submission('a',stale['submissions']['a'])
             state.submission('b',{'status':'queued','package_id':9})
             again=CollectorState(root).monitor()
-            self.assertEqual(again['schedule'],{'not_before':42})
+            self.assertEqual(again['schedule'],{'not_before':'2026-11-16T12:00:00+00:00'})
             self.assertEqual(set(again['submissions']),{'a','b'})
 
     def test_unrelated_source_capture_does_not_overwrite_stale_other_record(self):
