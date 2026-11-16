@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from library.primitives import LibraryError, TABLES, empty, sync_dir, validate
 from library.codec import decode, encode
 from library.postgres import Database, DeadlineConnection, guards
+from library.operational_fields import entity_columns, entity_record
 
 
 from library.stage_model import Change as Change, PreparedResult as PreparedResult, SourceProgress as SourceProgress
@@ -161,7 +162,7 @@ class Store:
         with database.connection(write=True) as db:
             db.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(database.schema)))
             schema(db)
-            db.execute('INSERT INTO meta VALUES (1,%s,1,%s,%s,%s,%s,%s,%s,%s,%s)',
+            db.execute('INSERT INTO meta VALUES (1,%s,2,%s,%s,%s,%s,%s,%s,%s,%s)',
                        (authority,state['revision'],source_digest,encode(state['ledger']),
                         import_identity['source_meta']['case_scope_revision'] if import_identity else 0,
                         int(import_identity is None),semantic,'postgresql>=18.6',datetime.now().isoformat()))
@@ -174,26 +175,32 @@ class Store:
                        'progress TEXT COLLATE \"C\",binding TEXT COLLATE \"C\",PRIMARY KEY(source,entity))')
             from library.operational_state import schema as operational_schema
             operational_schema(db)
+            from library.operational_fields import schema as fields_schema
+            fields_schema(db)
             for kind in TABLES:
                 for ident,payload,attachments,query in prepared[kind]:
                     for aid, length in attachments.items():
                         db.execute('INSERT INTO attachments VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING',
                                    (aid, 'utf8-legacy-cover', length, 'payloads/'+aid))
-                    db.execute(f'INSERT INTO {kind} VALUES (' + ','.join(['%s']*(3+len(QUERY_COLUMNS))) + ')',
+                    db.execute(f'INSERT INTO {kind}(id,revision,payload,' + ','.join(QUERY_COLUMNS) + ') VALUES (' + ','.join(['%s']*(3+len(QUERY_COLUMNS))) + ')',
                                (ident, state['revision'], payload, *query))
             for kind in TABLES:
                 for ident, record in state[kind].items():
+                    from library.operational_fields import sync
+                    sync(db,kind,(ident,),record)
                     store._relations(db, kind, ident, record)
                     store._validate_links(db, kind, ident, record)
             store._refresh_rows(db, {kind: set(state[kind]) for kind in TABLES})
         from library.stage_tasks import StageTasks
         StageTasks.upgrade(store, importing=import_identity is not None)
+        from library.versioned import install
+        install(database)
         return store
 
     def verify(self, db: DeadlineConnection, *, importing: bool = False) -> tuple[int, list[str]]:
         """Authority, schema and ledger head. Returns (global_revision, ledger)."""
         row = db.execute('SELECT authority_id,schema_version,global_revision,ledger,ready,required_runtime FROM meta WHERE singleton=1').fetchone()
-        if (not row or row[0] != self.authority or row[1] != 1 or row[4] not in ((0,1) if importing else (1,))
+        if (not row or row[0] != self.authority or row[1] != 2 or row[4] not in ((0,1) if importing else (1,))
                 or row[5] != 'postgresql>=18.6'):
             raise LibraryError('Catalogue authority or schema mismatch')
         ledger = decode(row[3])
@@ -259,9 +266,11 @@ class Store:
             return encode({'record': payload, 'cover': ident}), attachments
         return encode({'record': payload}), attachments
 
-    def restore(self, payload: str, *, media: bool = True) -> dict[str, Any]:
+    def restore(self, payload: str, *, media: bool = True, typed: tuple[str,tuple[Any,...]] | None = None) -> dict[str, Any]:
         value = decode(payload)
         record: dict[str, Any] = value['record']
+        if typed is not None:
+            entity_record(typed[0],record,typed[1])
         if 'cover' in value and media:
             ident = value['cover']
             if not isinstance(ident, str) or len(ident) != 64 or any(c not in '0123456789abcdef' for c in ident):
@@ -279,8 +288,8 @@ class Store:
         self._kind(kind)
         with self._database.connection() as db:
             self.verify(db)
-            row = db.execute(f'SELECT payload FROM {kind} WHERE id=%s', (ident,)).fetchone()
-            return self.restore(row[0], media=media) if row else None
+            row = db.execute(f'SELECT {entity_columns(kind)} FROM {kind} WHERE id=%s', (ident,)).fetchone()
+            return self.restore(row[0], media=media,typed=(kind,row[1:])) if row else None
 
     def ids(self, kind: str) -> list[str]:
         self._kind(kind)
@@ -313,10 +322,10 @@ class Store:
             if token is not None and token['revision'] != freshness:
                 raise LibraryError('Stale catalogue cursor')
             conditions = ['id>%s'] + [column + (' IS NULL' if filters[column] is None else '=%s') for column in sorted(filters)]
-            rows = db.execute(f'SELECT id,payload FROM {kind} WHERE ' + ' AND '.join(conditions)
+            rows = db.execute(f'SELECT id,{entity_columns(kind)} FROM {kind} WHERE ' + ' AND '.join(conditions)
                               + ' ORDER BY id LIMIT %s',
                               (after, *(filters[key] for key in sorted(filters) if filters[key] is not None), limit + 1)).fetchall()
-            items = [{'id': ident, 'record': self.restore(payload, media=media)} for ident, payload in rows[:limit]]
+            items = [{'id': row[0], 'record': self.restore(row[1], media=media,typed=(kind,row[2:]))} for row in rows[:limit]]
             next_cursor = base64.urlsafe_b64encode(json.dumps({'revision': freshness, 'shape': shape,
                 'after': items[-1]['id']}).encode()).decode() if len(rows) > limit else None
             return {'revision': revision, 'items': items, 'cursor': next_cursor}
@@ -342,9 +351,9 @@ class Store:
         conditions = ['id>%s'] + [column + (' IS NULL' if filters[column] is None else '=%s') for column in sorted(filters)]
         with self._database.connection() as db:
             self.verify(db)
-            rows = db.execute(f'SELECT id,payload FROM {kind} WHERE ' + ' AND '.join(conditions)
+            rows = db.execute(f'SELECT id,{entity_columns(kind)} FROM {kind} WHERE ' + ' AND '.join(conditions)
                 + ' ORDER BY id LIMIT %s', (after, *(filters[key] for key in sorted(filters) if filters[key] is not None), limit)).fetchall()
-            return [(ident, self.restore(payload, media=False)) for ident, payload in rows]
+            return [(row[0], self.restore(row[1],media=False,typed=(kind,row[2:]))) for row in rows]
 
     def _refresh_rows(self, db: DeadlineConnection, changed: dict[str, set[str]]) -> None:
         from library.projection import operator_row
@@ -462,16 +471,16 @@ class Store:
                 if (kind, ident) in visited:
                     continue
                 visited.add((kind, ident))
-                row = db.execute(f'SELECT payload FROM {kind} WHERE id=%s', (ident,)).fetchone()
+                row = db.execute(f'SELECT {entity_columns(kind)} FROM {kind} WHERE id=%s', (ident,)).fetchone()
                 if row is None:
                     continue  # Named new IDs are legal; mutation validates mandatory edges.
                 if _payloads is not None and not media:
                     # Conflict snapshots reuse this exact envelope and raw payload.
                     envelope = decode(row[0])
                     _payloads.setdefault(kind, {})[ident] = (row[0], envelope)
-                    record = envelope['record']
+                    record = entity_record(kind,envelope['record'],row[1:])
                 else:
-                    record = self.restore(row[0], media=media)
+                    record = self.restore(row[0], media=media,typed=(kind,row[1:]))
                 state[kind][ident] = record
                 for name, (source, target) in RELATIONS.items():
                     if source == kind:
@@ -671,7 +680,9 @@ class Store:
                             for aid, length in attachments.items():
                                 db.execute('INSERT INTO attachments VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING', (aid,'utf8-legacy-cover',length,'payloads/'+aid))
                             columns = ('revision','payload',*QUERY_COLUMNS)
-                            db.execute(f'INSERT INTO {kind} VALUES (' + ','.join(['%s']*(3+len(QUERY_COLUMNS))) + ') ON CONFLICT(id) DO UPDATE SET ' + ','.join(c+'=excluded.'+c for c in columns), (ident,revision+1,payload,*query_values(kind,record)))
+                            db.execute(f'INSERT INTO {kind}(id,revision,payload,' + ','.join(QUERY_COLUMNS) + ') VALUES (' + ','.join(['%s']*(3+len(QUERY_COLUMNS))) + ') ON CONFLICT(id) DO UPDATE SET ' + ','.join(c+'=excluded.'+c for c in columns), (ident,revision+1,payload,*query_values(kind,record)))
+                            from library.operational_fields import sync
+                            sync(db,kind,(ident,),record)
                         for kind, ids in change.deletes.items():
                             for ident in ids:
                                 self._relations(db,kind,ident,{})

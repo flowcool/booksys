@@ -48,10 +48,11 @@ def snapshot(store: Store, db: DeadlineConnection, action: str, refs: dict[str, 
             value = key.removeprefix('destination:')
             memberships[key] = []
             for kind in TABLES:
-                # PostgreSQL maintains this expression index for all entity writes,
-                # including COPY imports. Only matching payloads enter the token.
-                rows = db.execute(f'SELECT id,payload FROM {kind} WHERE '
-                    'destination_memberships_v1(payload) @> ARRAY[%s]::text[] ORDER BY id',(value,))
+                # The owner transaction maintains destination relations and raw payloads.
+                # Only matching entities enter the retained conflict-token shape.
+                owner = 'asset' if kind=='assets' else 'origin'
+                rows = db.execute(f'SELECT id,payload FROM {kind} e WHERE EXISTS '
+                    f'(SELECT 1 FROM {owner}_destinations d WHERE d.{owner}=e.id AND d.target=%s) ORDER BY id',(value,))
                 memberships[key].extend([kind,*row] for row in rows)
     token = {'schema': 1, 'authority': store.authority, 'media': False, 'action': action, 'refs': refs, 'claims': claims,
              'covers': covers,
