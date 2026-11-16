@@ -48,7 +48,9 @@ def run(operation: str, source: Path, payload: dict[str, Any] | None = None,
         if fingerprint(source) != before:
             raise LibraryError('Reader source changed during execution')
         if process.returncode:
-            raise LibraryError('Decoder failed')
+            detail = (f'signal {-process.returncode}' if process.returncode < 0
+                      else f'exit code {process.returncode}')
+            raise LibraryError(f'Decoder failed ({detail})')
         outcome = json.loads(stdout)
         if not isinstance(outcome, dict):
             raise LibraryError('Decoder returned an invalid result')

@@ -125,7 +125,17 @@ class AdmissionPublisher(Publisher):
                 continue
             if not target.exists() and op['phase'] in ('prepared', 'verified'):
                 if op.get('conflict'):
-                    self.store.verify_result(op['conflict'])
+                    from library.conflicts import ResultInputsChanged
+                    try:
+                        self.store.verify_result(op['conflict'])
+                    except ResultInputsChanged:
+                        # Nothing was exposed. Preserve the old token and bytes;
+                        # a fresh operation must regenerate from current inputs.
+                        verify(self.staging / op['id'], op['manifest'])
+                        if target.exists():
+                            raise LibraryError('Admission target appeared during recovery')
+                        self.transition(op, 'interrupted')
+                        continue
                 stage = self.staging / op['id']
                 verify(stage, op['manifest'])
                 self.prepare_parent(target)

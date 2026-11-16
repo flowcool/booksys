@@ -144,6 +144,8 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             # Bind the canonical read to the expanded snapshot, including absent keys.
             store.verify_result(state.conflict)
         except (LibraryError, OSError) as exc:
+            from booksys_core.diagnostics import emit, exception_details
+            emit(service='library', stage='local', code='failed', **exception_details(exc))
             # Same boundary as save(): a transient conflict retries the step, it never rejects the file.
             raise RuntimeError('Intake asset load failed') from exc
         if existing is not None:
