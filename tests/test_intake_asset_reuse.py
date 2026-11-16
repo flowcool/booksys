@@ -201,9 +201,16 @@ class IntakeAssetReuseTests(unittest.TestCase):
         content = comic()
         key = hashlib.sha256(content).hexdigest()
         _, original = self.ingest(1, content)
-        with patch.object(Catalog, 'extend_result', side_effect=LibraryError('Result conflict: relevant inputs changed')):
+        with patch.object(Catalog, 'extend_result', side_effect=LibraryError('Result conflict: relevant inputs changed')), \
+                patch('booksys_core.diagnostics.emit') as diagnostic:
             with self.assertRaisesRegex(RuntimeError, 'Intake asset load failed'):
                 self.ingest_multipart(content)
+        diagnostic.assert_called_once()
+        event = diagnostic.call_args.kwargs
+        self.assertEqual(event['exception_type'], 'LibraryError')
+        self.assertEqual((event['service'], event['stage'], event['code']), ('library', 'local', 'failed'))
+        self.assertIn('load_asset', [frame['function'] for frame in event['stack']])
+        self.assertNotIn('relevant inputs changed', str(event))
         self.assertEqual(self.catalog.get('assets', key)['origins'], [original])  # type: ignore[index]
         source = 'https://www.bookys-ebooks.com/2-multipart'
         self.assertFalse(any(origin.get('availability') == 'rejected'

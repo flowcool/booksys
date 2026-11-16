@@ -8,6 +8,10 @@ if TYPE_CHECKING:
     from library.store import Store, Change
 
 
+class ResultInputsChanged(LibraryError):
+    """A prepared result no longer describes the current relevant inputs."""
+
+
 def snapshot(store: Store, db: DeadlineConnection, action: str, refs: dict[str, list[str]],
              claims: dict[str, list[str]], *, media: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
     loaded: dict[str, dict[str, tuple[str, dict[str, Any]]]] = {}
@@ -67,7 +71,7 @@ def verify(store: Store, db: DeadlineConnection, token: dict[str, Any], change: 
         raise LibraryError('Unknown result conflict token')
     state, current = snapshot(store, db, token['action'], token['refs'], token['claims'], media=token['media'])
     if current != token:
-        raise LibraryError('Result conflict: relevant inputs changed')
+        raise ResultInputsChanged('Result conflict: relevant inputs changed')
     if change is None:
         return
     for kind in TABLES:
