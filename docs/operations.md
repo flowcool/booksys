@@ -26,3 +26,20 @@ Direct HTML and cover requests reuse them. A process restart loses them.
 The session API closes its browser after each solve. It does not persist cookies.
 
 See the [limit audit](audit-limits.md) for the relevant resource guards.
+
+## Copy-journal lookup index
+
+Before activating the indexed copy-journal reader on an existing authority,
+stop the application roles and run from the candidate image with the migration
+credential: `python -m library.copy_operation_index --dsn-file <private-migration-dsn> --schema booksys`.
+This explicit, repeatable operation creates `copy_operation_asset_v1(text)` and
+`copy_operations_asset_v1`. It reads existing journals to build the index. It
+does not rewrite journal payloads or change task outcomes. Fresh isolated stores
+install the same index at creation. The function body is versioned and must not
+be replaced under an existing index.
+
+The reader selects only the requested asset and malformed ownership scopes.
+Malformed unrelated journals still stop recovery through the existing checks.
+If the install fails, its transaction rolls back; do not activate the new reader.
+For application rollback, restore the preceding image through normal activation
+and retain this additive function/index. No historical conversion is required.

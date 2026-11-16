@@ -43,28 +43,69 @@ class AdmissionTests(unittest.TestCase):
         for scope, reason in (({'asset': 'unknown'}, 'conflict scope'),
                               ({'asset': 'b'*64, 'kind': 'admission', 'target': 'bad'}, 'destination scope')):
             with self.subTest(reason=reason):
-                db.execute.return_value = [(encode(scope), None)]
+                db.execute.return_value = [(encode(scope),)]
                 with self.assertRaisesRegex(LibraryError, reason):
                     operations.for_asset('a'*64, publisher.operation_applies)
 
-    def test_scoped_recovery_loads_full_payloads_only_for_selected_asset(self):
-        from unittest.mock import MagicMock, patch
-        from library.codec import encode, decode
+    def test_scoped_recovery_loads_only_selected_or_invalid_journals(self):
+        from unittest.mock import Mock
         from library.operational_state import CopyOperations
+        from library.primitives import empty, LibraryError
+        from postgres_fixture import create_store
         publisher = object.__new__(AdmissionPublisher)
-        database = MagicMock()
-        db = database.connection.return_value.__enter__.return_value
-        scope = lambda key: {'asset': key, 'kind': 'admission', 'target': 'holding/x--'+key+'--'+'c'*12}
-        selected = {**scope('a'*64), 'id': 'selected', 'manifest': {'book.cbz': 'proof'}}
-        db.execute.return_value = [(encode(scope('b'*64)), None), (encode(scope('a'*64)), encode(selected))]
-        with patch('library.operational_state.decode', wraps=decode) as loaded:
-            self.assertEqual(CopyOperations(database, 'admission').for_asset('a'*64, publisher.operation_applies), [selected])
-        self.assertEqual([call.args[0] for call in loaded.call_args_list],
-                         [encode(scope('b'*64)), encode(scope('a'*64)), encode(selected)])
-        query, params = db.execute.call_args.args
-        self.assertIn('CASE WHEN', query)
-        self.assertIn("->>'asset'=%s THEN payload END", query)
-        self.assertEqual(params, ('a'*64, 'admission'))
+        with tempfile.TemporaryDirectory() as folder:
+            store = create_store(self, Path(folder), empty())
+            operations = CopyOperations(store._database, 'admission')
+            selected = {'id': 'selected', 'asset': 'a'*64, 'kind': 'admission',
+                        'target': 'holding/x--'+'a'*64+'--'+'c'*12, 'manifest': {'book.cbz': 'proof'}}
+            operations.phase(selected)
+            for index in range(40):
+                operations.phase({**selected, 'id': str(index), 'asset': 'b'*64,
+                                  'target': 'holding/y--'+'b'*64+'--'+'c'*12,
+                                  'manifest': {'retained': 'x'*65536}})
+            applies = Mock(wraps=publisher.operation_applies)
+            self.assertEqual(operations.for_asset('a'*64, applies), [selected])
+            self.assertEqual(applies.call_count, 1)
+            operations.phase({**selected, 'id': 'invalid', 'asset': 'b'*64, 'target': 'bad'})
+            with self.assertRaisesRegex(LibraryError, 'destination scope'):
+                operations.for_asset('a'*64, publisher.operation_applies)
+
+    def test_copy_scope_index_matches_existing_ownership_checks_and_preserves_history(self):
+        import re
+        from library.copy_operation_index import schema
+        from library.operational_state import CopyOperations
+        from library.primitives import empty, LibraryError
+        from postgres_fixture import create_store
+        publisher = object.__new__(AdmissionPublisher)
+        with tempfile.TemporaryDirectory() as folder:
+            store = create_store(self, Path(folder), empty())
+            operations = CopyOperations(store._database, 'admission')
+            original = {'id': 'retained', 'asset': 'b'*64, 'kind': 'admission',
+                        'target': 'holding/y--'+'b'*64+'--'+'c'*12,
+                        'phase': 'prepared', 'manifest': {'book.cbz': 'immutable proof'}}
+            operations.phase(original)
+            with store._database.connection(write=True) as db:
+                db.execute('DROP INDEX copy_operations_asset_v1')
+                db.execute('DROP FUNCTION copy_operation_asset_v1(text)')
+                schema(db)
+                schema(db)
+            self.assertEqual(operations.get('retained'), original)
+            cases = [original, {**original, 'target': original['target']+'\n'},
+                     {**original, 'kind': 'other', 'target': 'legacy'},
+                     {**original, 'asset': 'unknown'}, {**original, 'asset': 'b'*64+'\n'},
+                     {**original, 'target': 'bad'}, {**original, 'target': None},
+                     {**original, 'asset': 123}, {**original, 'asset': int('1'*64)},
+                     {**original, 'asset': 1e63}, {**original, 'asset': None}]
+            for record in cases:
+                with self.subTest(record=record):
+                    operations.phase(record)
+                    try:
+                        publisher.operation_applies(record, 'a'*64)
+                    except (LibraryError, TypeError) as expected:
+                        with self.assertRaisesRegex(type(expected), re.escape(str(expected))):
+                            operations.for_asset('a'*64, publisher.operation_applies)
+                    else:
+                        self.assertEqual(operations.for_asset('a'*64, publisher.operation_applies), [])
 
     def test_unsupported_flags_preserve_existing_publication_and_refuse_exchange(self):
         import ctypes
