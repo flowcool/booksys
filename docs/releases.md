@@ -82,6 +82,26 @@ python3 ops/release_sources.py assemble release.json artifacts sources release/s
 python3 ops/release_sources.py prepare release.json artifacts sources > plan.json
 ```
 
+Source downloads use four workers (configurable from one to eight). Components
+remain in lock order. SHA256 and DSC package/version/size checks still apply to
+every source, including cached bytes. A mismatched cache entry fails closed and
+is retained; it is never silently replaced. OCI graph and inventory checks stay
+bound to the current candidate.
+
+`release-source-cache.yml` warms the download cache on protected `main` only
+when the source lock changes or through an explicit manual run. It has read-only
+repository permissions and cannot publish images. Run it once after installing
+this workflow. Tags restore the default-branch cache using the exact lock hash;
+a tag-created cache would not be shared with the next release tag. Cache misses
+or eviction use ordinary verified downloads. No cache entry contains credentials.
+
+The assembler logs separate source-download and bundle timings and byte counts
+to stderr. Cache restore/save and artifact transfers have their own Actions step
+timings. The qualification artifact retains the source manifest and complete
+source archive, without uploading the expanded source tree a second time.
+Reverting this workflow/code commit restores the earlier process; source hashes,
+image checks and already published release data do not change.
+
 The bundle also contains the exact Booksys Git revision, Dockerfiles, lockfiles,
 adapters and build instructions, image notice archives and an image-to-source
 manifest. Keep upstream license files intact. Review the browser source against

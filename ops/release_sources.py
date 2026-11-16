@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
 import json
 from pathlib import Path
 import re
 import subprocess
 import tarfile
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import urljoin, urlparse
 from urllib.request import urlopen
@@ -101,9 +105,16 @@ def oci_graph(path: Path) -> dict[str, Any]:
     return {"index_digest": root["digest"], "blobs": blobs, "statements": statements}
 
 
-def fetch(url: str, expected: str, destination: Path) -> dict[str, str]:
+def fetch(url: str, expected: str, destination: Path, *, cache: Path | None = None) -> dict[str, str]:
     if urlparse(url).scheme != "https" or not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ValueError("Source needs HTTPS and an independently reviewed SHA256")
+    retained = cache / expected if cache is not None else None
+    if retained is not None and retained.exists():
+        if file_digest(retained) != "sha256:" + expected:
+            raise ValueError("Source cache differs; preserved for investigation")
+        if not destination.exists():
+            with retained.open("rb") as source, destination.open("xb") as output:
+                shutil.copyfileobj(source, output)
     if destination.exists():
         if file_digest(destination) != "sha256:" + expected:
             raise ValueError("Preserved download differs; never overwrite it")
@@ -115,15 +126,19 @@ def fetch(url: str, expected: str, destination: Path) -> dict[str, str]:
                 output.write(chunk)
         if file_digest(destination) != "sha256:" + expected:
             raise ValueError("Source checksum mismatch; preserved for investigation")
+    if retained is not None and not retained.exists():
+        retained.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("rb") as source, retained.open("xb") as output:
+            shutil.copyfileobj(source, output)
     return {"file": destination.name, "url": url, "sha256": expected}
 
 
-def fetch_dsc(url: str, expected: str, destination: Path) -> list[dict[str, str]]:
+def fetch_dsc(url: str, expected: str, destination: Path, *, cache: Path | None = None) -> list[dict[str, str]]:
     destination.mkdir(parents=True, exist_ok=True)
     name = Path(urlparse(url).path).name
     if not name.endswith(".dsc"):
         raise ValueError("Expected Debian/Ubuntu source control file")
-    files = [fetch(url, expected, destination / name)]
+    files = [fetch(url, expected, destination / name, cache=cache)]
     content = (destination / name).read_text()
     match = re.search(r"^Checksums-Sha256:\n((?: [^\n]+\n)+)", content, re.M)
     if match is None:
@@ -132,13 +147,51 @@ def fetch_dsc(url: str, expected: str, destination: Path) -> list[dict[str, str]
         checksum, size, filename = line.split()
         if Path(filename).name != filename:
             raise ValueError("Unsafe source filename")
-        files.append(fetch(urljoin(url, filename), checksum, destination / filename))
+        files.append(fetch(urljoin(url, filename), checksum, destination / filename, cache=cache))
         if (destination / filename).stat().st_size != int(size):
             raise ValueError("Source archive size mismatch")
     return files
 
 
-def assemble(lock: dict[str, Any], artifacts: Path, destination: Path, release: dict[str, Any]) -> dict[str, Any]:
+def download_sources(lock: dict[str, Any], destination: Path, *, cache: Path | None = None,
+                     workers: int = 4) -> list[dict[str, Any]]:
+    """Download independently locked components; preserve deterministic manifest order."""
+    if not 1 <= workers <= 8:
+        raise ValueError("Source download workers must be between 1 and 8")
+    for name in lock["sources"]:
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", name) or name in (".", ".."):
+            raise ValueError("Invalid source identifier")
+    destination.mkdir(parents=True, exist_ok=False)
+
+    def component(entry: tuple[str, Any]) -> dict[str, Any]:
+        name, source = entry
+        target = destination / name
+        target.mkdir()
+        retained = cache / name if cache is not None else None
+        if source["url"].endswith(".dsc"):
+            files = fetch_dsc(source["url"], source["sha256"], target, cache=retained)
+            control = (target / files[0]["file"]).read_text()
+            for field, key in (("Source", "package"), ("Version", "version")):
+                match = re.search(r"^" + field + r": (.+)$", control, re.M)
+                if match is None or match[1] != source.get(key):
+                    raise ValueError("DSC source package/version differs from the reviewed source ledger")
+        else:
+            files = [fetch(source["url"], source["sha256"], target / Path(urlparse(source["url"]).path).name,
+                           cache=retained)]
+        return {"id": name, **source, "files": files}
+
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        records = list(executor.map(component, lock["sources"].items()))
+    print(json.dumps({"phase": "sources", "seconds": round(time.monotonic() - started, 3),
+                      "components": len(records), "workers": workers,
+                      "bytes": sum(path.stat().st_size for path in destination.rglob("*") if path.is_file())}),
+          file=sys.stderr, flush=True)
+    return records
+
+
+def assemble(lock: dict[str, Any], artifacts: Path, destination: Path, release: dict[str, Any], *,
+             cache: Path | None = None, workers: int = 4) -> dict[str, Any]:
     """No inferred licenses. Exact complete inventories must match a reviewed lock."""
     destination.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {"revision": release["revision"], "images": {}, "sources": []}
@@ -166,29 +219,18 @@ def assemble(lock: dict[str, Any], artifacts: Path, destination: Path, release: 
             raise ValueError("Retained image license/notice files missing")
         (destination / (image + "-notices.tar")).write_bytes(notices.read_bytes())
     source_dir = destination / "source"
-    source_dir.mkdir()
-    for name, source in lock["sources"].items():
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-            raise ValueError("Invalid source identifier")
-        target = source_dir / name
-        target.mkdir()
-        if source["url"].endswith(".dsc"):
-            files = fetch_dsc(source["url"], source["sha256"], target)
-            control = (target / files[0]["file"]).read_text()
-            for field, key in (("Source", "package"), ("Version", "version")):
-                match = re.search(r"^" + field + r": (.+)$", control, re.M)
-                if match is None or match[1] != source.get(key):
-                    raise ValueError("DSC source package/version differs from the reviewed source ledger")
-        else:
-            files = [fetch(source["url"], source["sha256"], target / Path(urlparse(source["url"]).path).name)]
-        manifest["sources"].append({"id": name, **source, "files": files})
+    manifest["sources"] = download_sources(lock, source_dir, cache=cache, workers=workers)
     # Include the complete exact public revision: Dockerfiles, adapters, locks and build instructions.
     subprocess.run(["git", "archive", "--format=tar", "-o", str(destination / "booksys-source.tar"), release["revision"]], check=True)
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     bundle = destination.parent / "corresponding-source.tar.gz"
+    started = time.monotonic()
     with tarfile.open(bundle, "x:gz") as archive:
         archive.add(destination, arcname="corresponding-source")
-    return {"file": str(bundle), "sha256": file_digest(bundle)}
+    result = {"file": str(bundle), "sha256": file_digest(bundle)}
+    print(json.dumps({"phase": "bundle", "seconds": round(time.monotonic() - started, 3),
+                      "bytes": bundle.stat().st_size}), file=sys.stderr, flush=True)
+    return result
 
 
 def prepare(release: dict[str, Any], artifacts: Path, sources: Path) -> dict[str, Any]:
@@ -270,12 +312,21 @@ def main() -> None:
         command.add_argument("sources", type=Path)
         if name == "assemble":
             command.add_argument("lock", type=Path)
+    download = commands.add_parser("download")
+    download.add_argument("lock", type=Path)
+    download.add_argument("destination", type=Path)
+    for command in (download, commands.choices["assemble"]):
+        command.add_argument("--cache", type=Path)
+        command.add_argument("--workers", type=int, default=4)
     relocate = commands.add_parser("relocate")
     relocate.add_argument("directory", type=Path)
     relocate.add_argument("release", type=Path)
     args = parser.parse_args()
     if args.command == "fetch-dsc":
         print(json.dumps(fetch_dsc(args.url, args.sha256, args.destination), indent=2))
+    elif args.command == "download":
+        print(json.dumps(download_sources(json.loads(args.lock.read_text()), args.destination,
+                                          cache=args.cache, workers=args.workers), indent=2))
     elif args.command == "relocate":
         plan = json.loads((args.directory / "plan.json").read_text())
         current = json.loads(args.release.read_text())
@@ -307,7 +358,7 @@ def main() -> None:
         print(json.dumps(plan, indent=2))
     else:
         release = json.loads(args.release.read_text())
-        result = assemble(json.loads(args.lock.read_text()), args.artifacts, args.sources, release) if args.command == "assemble" else prepare(release, args.artifacts, args.sources)
+        result = assemble(json.loads(args.lock.read_text()), args.artifacts, args.sources, release, cache=args.cache, workers=args.workers) if args.command == "assemble" else prepare(release, args.artifacts, args.sources)
         print(json.dumps(result, indent=2))
 
 
