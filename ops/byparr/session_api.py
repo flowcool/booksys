@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 import os
 from pathlib import Path
 import time
+import threading
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -20,17 +21,102 @@ import uuid
 from booksys_core.browser_outcomes import retry_after
 from booksys_core.diagnostics import opaque, emit, install_logging
 
-try:
-    BYPARR_BUDGET = int(os.environ.get('BOOKSYS_BYPARR_BUDGET', '120'))
-    if BYPARR_BUDGET <= 0:
-        raise ValueError
-except ValueError:
-    raise ValueError('BOOKSYS_BYPARR_BUDGET must be a positive integer') from None
 
+def positive_env(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+        if value <= 0:
+            raise ValueError
+        return value
+    except ValueError:
+        raise ValueError(f'{name} must be a positive integer') from None
+
+
+BYPARR_BUDGET = positive_env('BOOKSYS_BYPARR_BUDGET', 120)
 ORIGIN = "https://www7.bookys-ebooks.com"
 # Native teardown closes Playwright and reaps the process tree (up to 5s).
 # Leave room for both steps, within the runtime's 30s shutdown grace period.
 CLEANUP_TIMEOUT = 20
+HARD_DEADLINE = positive_env('BOOKSYS_BYPARR_HARD_DEADLINE', BYPARR_BUDGET + CLEANUP_TIMEOUT + 5)
+LOOP_SILENCE = positive_env('BOOKSYS_BYPARR_LOOP_SILENCE', HARD_DEADLINE)
+if HARD_DEADLINE < BYPARR_BUDGET + CLEANUP_TIMEOUT:
+    raise ValueError('BOOKSYS_BYPARR_HARD_DEADLINE must be at least BOOKSYS_BYPARR_BUDGET + 20')
+
+
+class Watchdog:
+    """Independent hard stops. The private condition never covers browser work."""
+
+    def __init__(self, clock: Callable[[], float], hard_deadline: float, loop_silence: float):
+        self.clock = clock
+        self.hard_deadline, self.loop_silence = hard_deadline, loop_silence
+        self.condition = threading.Condition()
+        self.heartbeat = clock()
+        self.generation = 0
+        self.request: tuple[int, float] | None = None
+        self.cleanup_deadline: float | None = None
+        self.shutdown_deadline: float | None = None
+        self.stopped = False
+        self.thread = threading.Thread(target=self._run, name='byparr-watchdog', daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def beat(self) -> None:
+        with self.condition:
+            self.heartbeat = self.clock()
+
+    def admit(self) -> int:
+        with self.condition:
+            self.generation += 1
+            self.request = (self.generation, self.clock() + self.hard_deadline)
+            self.condition.notify()
+            return self.generation
+
+    def finish(self, generation: int) -> None:
+        with self.condition:
+            if self.request is not None and self.request[0] == generation:
+                if self.clock() >= self.request[1]:
+                    os._exit(1)
+                self.request = None
+
+    def cleanup_failed(self) -> None:
+        with self.condition:
+            if self.cleanup_deadline is None and self.shutdown_deadline is None:
+                self.cleanup_deadline = self.clock() + 2
+                self.condition.notify()
+
+    def shutdown(self) -> None:
+        with self.condition:
+            # Planned shutdown supersedes failure exits, but remains bounded
+            # even when aclose suppresses cancellation or blocks the loop.
+            self.shutdown_deadline = self.clock() + CLEANUP_TIMEOUT + 5
+            self.condition.notify()
+
+    def stop(self) -> None:
+        with self.condition:
+            self.stopped = True
+            self.condition.notify()
+        self.thread.join(timeout=0.5)
+
+    def _run(self) -> None:
+        with self.condition:
+            while not self.stopped:
+                if self.shutdown_deadline is not None:
+                    deadline, status = self.shutdown_deadline, 0
+                else:
+                    deadlines = [self.heartbeat + self.loop_silence]
+                    if self.request is not None:
+                        deadlines.append(self.request[1])
+                    if self.cleanup_deadline is not None:
+                        deadlines.append(self.cleanup_deadline)
+                    deadline, status = min(deadlines), 1
+                remaining = deadline - self.clock()
+                if remaining <= 0:
+                    # Decision and exit share the condition: a stale request
+                    # observation cannot exit after a newer admission.
+                    os._exit(status)
+                    return
+                self.condition.wait(timeout=min(0.1, remaining))
 
 
 class PageShape(HTMLParser):
@@ -74,6 +160,7 @@ def memory_pressure() -> bool:
 
 def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_requests: int = 256,
                clock: Callable[[], float] = time.monotonic,
+               watchdog_clock: Callable[[], float] = time.monotonic,
                memory_pressure: Callable[[], bool] = memory_pressure) -> FastAPI:
     install_logging('byparr')
     generator: Any = None
@@ -82,7 +169,7 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
     opened = last_used = 0.0
     lock = asyncio.Lock()
     broken = False
-    shutting_down = False
+    watchdog = Watchdog(watchdog_clock, HARD_DEADLINE, LOOP_SILENCE)
     generation = 0
     active_request_id: str | None = None
 
@@ -100,19 +187,35 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
             except BaseException:
                 if not broken:
                     broken = True
-                    if not shutting_down:
-                        asyncio.get_running_loop().call_later(2, os._exit, 1)
+                    watchdog.cleanup_failed()
                 emit(service='byparr', stage='byparr', code='blocked', reason='cleanup_failed')
                 raise HTTPException(503, detail('cleanup_failed', 'local', active_request_id or 'shutdown')) from None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        nonlocal shutting_down
+        async def heartbeat() -> None:
+            while True:
+                watchdog.beat()
+                await asyncio.sleep(min(1.0, LOOP_SILENCE / 4))
+
+        watchdog.beat()
+        watchdog.start()
+        pulse = asyncio.create_task(heartbeat())
         try:
             yield
         finally:
-            shutting_down = True
-            await close()
+            watchdog.shutdown()
+            try:
+                await close()
+            except HTTPException:
+                pass  # The process is already exiting; do not latch a restart.
+            finally:
+                pulse.cancel()
+                try:
+                    await pulse
+                except asyncio.CancelledError:
+                    pass
+                watchdog.stop()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -246,6 +349,7 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
             raise HTTPException(429, detail('browser_busy', 'local', request_id,
                 **({'active_request_id': active_request_id} if active_request_id else {})))
         async with lock:
+            request_generation = watchdog.admit()
             active_request_id = request_id
             started = clock()
             try:
@@ -260,8 +364,11 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
                 raise HTTPException(502, detail('unknown_browser_failure', 'unknown', request_id)) from None
             finally:
                 active_request_id = None
-                emit(service='byparr', stage='byparr', code='completed', request_id=request_id,
-                     duration_ms=max(0, int((clock() - started) * 1000)))
+                try:
+                    emit(service='byparr', stage='byparr', code='completed', request_id=request_id,
+                         duration_ms=max(0, int((clock() - started) * 1000)))
+                finally:
+                    watchdog.finish(request_generation)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:

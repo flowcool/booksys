@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +45,12 @@ class NativeStages:
             package = next((p for p in queue if p['pid'] == entry.get('package_id')), None)
             if entry.get('status') != 'queued' or package is None:
                 continue
-            if not package.get('retirement') and not any(item.get('status') == 0 for item in package.get('links', [])):
+            packages = [package] + [p for p in queue if p.get('mirror_source') == source
+                                    and p.get('mirror_original_pid') == entry.get('package_id')]
+            if not any(p.get('retirement') or any(item.get('status') == 0 for item in p.get('links', [])) for p in packages):
                 continue
-            state = self.catalog.working_set('retire', origin_refs(self.catalog, source), media=False)
-            revision = digest({'package': {key: package.get(key) for key in ('pid', 'name', 'folder', 'retirement')},
-                'files': [{key: item.get(key) for key in ('fid', 'name', 'status', 'size', 'input_folder')} for item in package.get('links', [])],
-                'origins': {oid: {key: row.get(key) for key in ('sha256', 'fingerprint', 'availability', 'reason', 'intake_attempts', 'bundle_attempts')}
-                            for oid, row in state['origins'].items()}})
+            from library.intake import intake_signature
+            revision = digest([intake_signature(self.reception, p) for p in sorted(packages, key=lambda p: p['pid'])])
             tasks.discover(Obligation('intake', 'source-' + digest(source), revision, METHODS['intake']), now=now)
             count += 1
         # Discover at most one hundred source obligations per pass and save the continuation cursor.
@@ -134,7 +133,7 @@ class NativeStages:
         if task.stage == 'intake':
             if self.snapshots is None:
                 raise LibraryError('Intake snapshot authority missing')
-            from library.intake import receive
+            from library.intake import receive, retry_at
             captured = CollectorState(self.collector,database=self.catalog.backend()._database).captured()
             queue,_ = RuntimeObservation(self.catalog.backend()._database).queue()
             from library.store import PreparedResult
@@ -156,7 +155,16 @@ class NativeStages:
                      code='failed' if rejected else 'progress',
                      reason='invalid_archive' if rejected else 'none', refs=refs,
                      request_id=hashlib.sha256((aid or task.entity).encode()).hexdigest())
-            return StepResult('done',prepared=intake_results[0])
+            files = {(p['pid'], item['fid']) for p in queue
+                     if p['pid'] == entry.get('package_id') or p.get('mirror_source') == source
+                     for item in p.get('links', [])}
+            deadlines = [due for origin in state['origins'].values()
+                         if origin.get('source') == source and (origin.get('pid'), origin.get('fid')) in files
+                         and (not origin.get('parent_origin') or
+                              state['origins'].get(origin['parent_origin'], {}).get('bundle'))
+                         if (due := retry_at(origin, bundle=bool(origin.get('bundle_engine_policy')))) is not None]
+            return StepResult('defer' if deadlines else 'done', prepared=intake_results[0],
+                              due_at=datetime.fromtimestamp(min(deadlines), timezone.utc) if deadlines else None)
         if task.stage == 'collection':
             from booksys_core.collection import run_once, run_fiche_once
             if task.entity.split(':')[-1].startswith('category-'):

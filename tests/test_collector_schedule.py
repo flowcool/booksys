@@ -79,3 +79,65 @@ class ScheduleTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 Schedule(invalid, timestamp=1060)
         self.assertEqual(retry_after('0' * 5000, received_at=0), ('valid', 0))
+
+
+class CleanupRecoveryEventTests(unittest.TestCase):
+    def test_failed_qualification_emits_one_safe_event_with_saved_deadline(self):
+        import copy
+        import tempfile
+        from contextlib import nullcontext
+        from pathlib import Path
+        from unittest.mock import patch
+        from booksys_core.browser_outcomes import BrowserOutcome
+        from booksys_core.diagnostics import event
+        from booksys_core.errors import BrowserError
+        from booksys_core.scheduler import ScheduledCalls
+
+        failures = (
+            (BrowserOutcome(Outcome('browser_timeout', 'local')), 'browser_timeout', 2800),
+            (BrowserOutcome(Outcome('remote_rate_limited', 'remote', retry_after_state='valid',
+                                   retry_after_seconds=1200)), 'remote_rate_limited', 3100),
+            (BrowserError('secret=do-not-log'), 'cleanup_failed', 2800),
+            ('', 'cleanup_failed', 2800),
+        )
+        for failure, reason, deadline in failures:
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as directory:
+                class Fetch:
+                    def __call__(self, url):
+                        raise AssertionError('No source request expected')
+
+                    def check_session(self):
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+
+                schedule = Schedule({}, timestamp=1000)
+                schedule.record_outcome('source', Outcome('cleanup_failed', 'local'), timestamp=1000)
+                saved = {'version': 1, 'schedule': copy.deepcopy(schedule.record)}
+
+                class State:
+                    def __init__(self, directory):
+                        pass
+
+                    def monitor(self):
+                        return copy.deepcopy(saved)
+
+                    def patch_monitor(self, *, schedule):
+                        saved['schedule'] = copy.deepcopy(schedule)
+
+                calls = ScheduledCalls(Path(directory), Fetch(), clock=lambda: 1900)
+                with patch('booksys_core.scheduler.CollectorState', State), \
+                        patch('booksys_core.network_admission.lane', return_value=nullcontext()), \
+                        patch('booksys_core.scheduler.emit') as emitted:
+                    self.assertFalse(calls.recover_cleanup())
+                    emitted.assert_called_once()
+                    fields = emitted.call_args.kwargs
+                    self.assertEqual((fields['service'], fields['stage'], fields['code'], fields['reason']),
+                                     ('collector', 'byparr', 'degraded', reason))
+                    self.assertEqual(fields['next_attempt'], saved['schedule']['not_before'])
+                    self.assertEqual(Schedule(saved['schedule'], timestamp=1900).next_due, deadline)
+                    self.assertEqual(saved['schedule']['cleanup_recovery']['status'], 'failed')
+                    self.assertTrue(saved['schedule']['review_block'])
+                    self.assertNotIn('do-not-log', str(event(**fields)))
+                    self.assertFalse(calls.recover_cleanup())  # Backoff sends no repeated event/probe.
+                    emitted.assert_called_once()

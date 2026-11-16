@@ -521,6 +521,10 @@ services:
       test:
       - CMD
       - curl
+      - --connect-timeout
+      - "2"
+      - --max-time
+      - "5"
       - --fail
       - --silent
       - --output
