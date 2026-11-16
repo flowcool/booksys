@@ -206,7 +206,8 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
 
 def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: str,
                    origin: dict[str, Any], hint: dict[str, Any], *, save: Callable[[], None],
-                   stable_seconds: float = 2, parts: list[Path] | None = None, detached: bool = False) -> None:
+                   stable_seconds: float = 2, parts: list[Path] | None = None, detached: bool = False,
+                   load_asset: Callable[[str], None] | None = None) -> None:
     from library.intake import decoder_readiness, retry_at
     readiness = decoder_readiness()
     previous = state['origins'].get(oid, {})
@@ -271,6 +272,8 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
                          intake_attempts=1 if policy_changed else int(old.get('intake_attempts', 0)) + 1,
                          intake_next_attempt=time.time() + 300)
             if result['status'] == 'validated':
+                if load_asset is not None:
+                    load_asset(member['sha256'])
                 asset = state['assets'].setdefault(member['sha256'], {**result, 'origins': [],
                     'assertions': [], 'overrides': {}, 'disposition': 'pending', 'captured_hints': {}})
                 if not asset['assertions']:
