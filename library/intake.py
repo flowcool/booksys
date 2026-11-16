@@ -199,7 +199,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
             continue
         from library.multipart import is_multipart, receive_parts
         receive_parts(state, media_directory or store.directory, root, source, package, captured['items'][source],
-            stable_seconds, save=save, detached=media_directory is not None)
+            stable_seconds, save=save, detached=media_directory is not None, load_asset=load_asset)
         for item in package.get('links', []):
             if is_multipart(item['name']):
                 continue

@@ -144,3 +144,69 @@ class IntakeAssetReuseTests(unittest.TestCase):
         self.assertEqual(set(after['origins']), {origin_a, child})
         self.assertEqual(after['assertions'], before['assertions'])
         self.assertIn(source + '#bundle-member=' + child, after['captured_hints'])
+
+    def ingest_multipart(self, content: bytes) -> tuple[str, str, list[Path]]:
+        """Use retained extraction output; volume selection, child validation and saving stay real."""
+        from library.bundle_worker import POLICY
+        from library.bundles import digest_name
+        source = 'https://www.bookys-ebooks.com/2-multipart'
+        parts = [self.reception / f'album.part{i}.rar' for i in (1, 2)]
+        for number, part in enumerate(parts, 1):
+            part.write_bytes(f'unchanged tracked volume {number}'.encode())
+        parent_hash = hashlib.sha256(parts[0].read_bytes()).hexdigest()
+        directory = self.root / 'retained-member'
+        directory.mkdir(exist_ok=True)
+        filename = digest_name('member.cbz') + '.cbz'
+        (directory / filename).write_bytes(content)
+        manifest = {'status': 'extracted', 'policy': POLICY, 'parent_sha256': parent_hash,
+                    'source_parts': [{'name': part.name, 'sha256': hashlib.sha256(part.read_bytes()).hexdigest(),
+                                      'size': part.stat().st_size} for part in parts],
+                    'volume_end_verified': True, 'expanded_size': len(content),
+                    'members': [{'member': 'member.cbz', 'file': filename, 'size': len(content),
+                                 'kind': 'comic', 'sha256': hashlib.sha256(content).hexdigest()}]}
+        queue = [{'pid': 2, 'name': 'tracked', 'folder': '.', 'links': [
+            {'fid': index, 'name': part.name, 'status': 0, 'size': part.stat().st_size,
+             'url': f'https://isolated.invalid/{index}'} for index, part in enumerate(parts, 21)]}]
+        with patch('library.bundles.retain', return_value=(directory, manifest)):
+            receive(self.catalog, self.reception, {'items': {source: {'title': 'Multipart parent'}}},
+                    {'submissions': {source: {'status': 'queued', 'package_id': 2, 'name': 'tracked'}}},
+                    queue, source_only=source, stable_seconds=0)
+        parent = digest({'source': source, 'pid': 2, 'fid': 21})
+        return source, digest({'parent_origin': parent, 'member': 'member.cbz'}), parts
+
+    def test_t6_multipart_member_reuses_canonical_asset_without_overwriting_metadata(self) -> None:
+        content = comic()
+        key = hashlib.sha256(content).hexdigest()
+        _, original = self.ingest(1, content)
+        state = self.catalog.result_set('retire', {'assets': [key]}, media=False)
+        state['assets'][key].update(overrides={'title': 'Keep operator title'}, disposition='retained')
+        self.catalog.save(state, expected=state['revision'])
+        before = self.catalog.get('assets', key)
+        assert before is not None
+        source, child, parts = self.ingest_multipart(content)
+        after = self.catalog.get('assets', key)
+        assert after is not None
+        self.assertEqual(self.catalog.backend().ids('assets'), [key])
+        self.assertEqual(set(after['origins']), {original, child})
+        self.assertEqual({field: value for field, value in after.items() if field not in ('origins', 'captured_hints')},
+                         {field: value for field, value in before.items() if field not in ('origins', 'captured_hints')})
+        self.assertEqual(after['captured_hints'], {**before['captured_hints'],
+            source + '#bundle-member=' + child: {'title': 'member', 'parent_source': source,
+                                                 'parent_title': 'Multipart parent'}})
+        self.assertEqual(self.catalog.get('origins', child)['availability'], 'validated')  # type: ignore[index]
+        self.assertEqual([part.read_bytes() for part in parts],
+                         [b'unchanged tracked volume 1', b'unchanged tracked volume 2'])
+
+    def test_t7_multipart_asset_conflict_retries_without_rejecting_the_member(self) -> None:
+        content = comic()
+        key = hashlib.sha256(content).hexdigest()
+        _, original = self.ingest(1, content)
+        with patch.object(Catalog, 'extend_result', side_effect=LibraryError('Result conflict: relevant inputs changed')):
+            with self.assertRaisesRegex(RuntimeError, 'Intake asset load failed'):
+                self.ingest_multipart(content)
+        self.assertEqual(self.catalog.get('assets', key)['origins'], [original])  # type: ignore[index]
+        source = 'https://www.bookys-ebooks.com/2-multipart'
+        self.assertFalse(any(origin.get('availability') == 'rejected'
+                             for _, origin in self.catalog.records('origins') if origin['source'] == source))
+        _, child, _ = self.ingest_multipart(content)
+        self.assertEqual(set(self.catalog.get('assets', key)['origins']), {original, child})  # type: ignore[index]

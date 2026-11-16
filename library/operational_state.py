@@ -104,6 +104,8 @@ def schema(db: DeadlineConnection) -> None:
     db.execute('CREATE TABLE cycle_status(singleton INTEGER PRIMARY KEY CHECK(singleton=1),payload TEXT NOT NULL)')
     db.execute('CREATE TABLE retirement_observation(singleton INTEGER PRIMARY KEY CHECK(singleton=1),payload TEXT NOT NULL)')
     db.execute('CREATE TABLE copy_operations(namespace TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(namespace,id))')
+    from library.copy_operation_index import schema as copy_operation_schema
+    copy_operation_schema(db)
     db.execute('CREATE TABLE provider_cache(namespace TEXT NOT NULL,url TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(namespace,url))')
     db.execute('CREATE TABLE routing_packages(pid TEXT PRIMARY KEY,payload TEXT NOT NULL)')
     db.execute('CREATE TABLE retirement_cursor(singleton INTEGER PRIMARY KEY CHECK(singleton=1),source TEXT NOT NULL)')
@@ -456,16 +458,16 @@ class CopyOperations:
         return records
 
     def for_asset(self, asset: str, applies: Callable[[dict[str,Any],str],bool]) -> list[dict[str,Any]]:
-        """Validate every journal's scope; transfer full payloads only for this asset."""
+        """Read this asset's journals and any invalid scope; the index excludes known unrelated journals."""
         with self._database.connection() as db:
-            rows = db.execute("SELECT json_build_object('asset',payload::json->'asset',"
-                "'kind',payload::json->'kind','target',payload::json->'target')::text,"
-                "CASE WHEN payload::json->>'asset'=%s THEN payload END "
-                "FROM copy_operations WHERE namespace=%s ORDER BY id", (asset,self.namespace))
+            rows = db.execute('SELECT payload FROM copy_operations WHERE namespace=%s AND '
+                '(copy_operation_asset_v1(payload)=%s OR copy_operation_asset_v1(payload) IS NULL) '
+                'ORDER BY id', (self.namespace,asset))
             records = []
-            for scope, payload in rows:
-                if applies(decode(scope),asset):
-                    records.append(decode(payload))
+            for (payload,) in rows:
+                record = decode(payload)
+                if applies(record,asset):
+                    records.append(record)
             return records
 
     def prepare(self, value: dict[str,Any]) -> OperationalCompletion:

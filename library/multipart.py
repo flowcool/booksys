@@ -8,7 +8,8 @@ from library.multipart_model import is_multipart as is_multipart, select_parts a
 
 def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
                   package: dict[str, Any], hint: dict[str, Any],
-                  stable_seconds: float, *, save: Callable[[], None], detached: bool = False) -> None:
+                  stable_seconds: float, *, save: Callable[[], None], detached: bool = False,
+                  load_asset: Callable[[str], None] | None = None) -> None:
     from pathlib import Path
     from library.reception import reception_path
     from library.bundles import receive_bundle
@@ -54,7 +55,8 @@ def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
                 continue
             origin['multipart_policy'] = policy
             receive_bundle(state, directory, paths[0], oid, origin, hint,
-                save=save, stable_seconds=stable_seconds, parts=paths, detached=detached)
+                save=save, stable_seconds=stable_seconds, parts=paths, detached=detached,
+                load_asset=load_asset)
             state['origins'][oid] = origin
             for member,record in zip(members[1:],records[1:]):
                 mid = digest({'source': source, 'pid': package['pid'], 'fid': member['fid']})
