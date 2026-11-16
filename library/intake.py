@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import copy
 import os
 import shutil
 import time
@@ -133,6 +134,21 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
     state = store.result_set('retire', refs, media=False)
     assert isinstance(state, WorkingState)
     readiness = decoder_readiness()
+    def load_asset(key: str) -> None:
+        if key in state['assets']:
+            return
+        assert state.conflict is not None
+        try:
+            state.conflict = store.extend_result(state.conflict, {'assets': [key]})
+            existing = store.get('assets', key)
+            # Bind the canonical read to the expanded snapshot, including absent keys.
+            store.verify_result(state.conflict)
+        except (LibraryError, OSError) as exc:
+            # Same boundary as save(): a transient conflict retries the step, it never rejects the file.
+            raise RuntimeError('Intake asset load failed') from exc
+        if existing is not None:
+            state['assets'][key] = copy.deepcopy(existing)
+            state.original['assets'][key] = copy.deepcopy(existing)
     def save() -> None:
         try:
             store.save(state, expected=state['revision'])
@@ -249,7 +265,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                                       bundle_attempts=attempts, bundle_next_attempt=previous.get('bundle_next_attempt', 0)
                                       if previous.get('bundle') else time.time() + (300 if attempts == 1 else 900))
                         receive_bundle(state, media_directory or store.directory, path, oid, origin,
-                            captured['items'][source], save=save,
+                            captured['items'][source], save=save, load_asset=load_asset,
                             stable_seconds=stable_seconds, detached=media_directory is not None)
                         continue
                     due = retry_at(previous)
@@ -278,7 +294,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                                                                    'decoder_readiness': readiness}),
                                       bundle_attempts=1, bundle_next_attempt=time.time() + 300)
                         receive_bundle(state, media_directory or store.directory, path, oid, origin,
-                            captured['items'][source], save=save,
+                            captured['items'][source], save=save, load_asset=load_asset,
                             stable_seconds=stable_seconds, detached=media_directory is not None)
                         continue
                     count = (int(previous.get('intake_attempts', 0)) + 1
@@ -296,6 +312,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         old_origin = previous
                         if old_origin and old_origin['sha256'] and old_origin['sha256'] != key:
                             raise LibraryError('Origin bytes changed after identification')
+                        load_asset(key)
                         asset = state['assets'].setdefault(key, {**result, 'origins': [], 'assertions': [],
                             'overrides': {}, 'disposition': 'pending', 'captured_hints': {}})
                         if not asset['assertions']:
