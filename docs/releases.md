@@ -180,4 +180,5 @@ Check these before creating the GitHub release; each one has already cost a fail
 - Run the image validation locally (`ops/validate_image.sh`) for the three images; probes must follow the current runtime.
 - Image probes must decode a synthetic RAR and a PDF through the worker decoder.
 - Check that the `ghcr.io/flowcool/booksys-*` packages are readable by the hosts that pull them.
+- Before creating the release, check that every `.dsc` URL in `release/sources.lock.json` answers 200 (about 330 URLs, two minutes with `curl -sIL`). A 502/503 from `launchpadlibrarian.net` during `qualify` is an upstream outage: nothing is published, so rerun only the failed job (`gh run rerun RUN --failed`) once the four Launchpad URLs answer in under 10 s. Never delete or replace the tag; a lock change needs a new version.
 - Create the release as stable (not a prerelease) only when `latest` should move.
