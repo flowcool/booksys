@@ -207,6 +207,8 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
 def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: str,
                    origin: dict[str, Any], hint: dict[str, Any], *, save: Callable[[], None],
                    stable_seconds: float = 2, parts: list[Path] | None = None, detached: bool = False) -> None:
+    from library.intake import decoder_readiness, retry_at
+    readiness = decoder_readiness()
     previous = state['origins'].get(oid, {})
     stamp = list(fingerprint(source))
     if previous.get('bundle') and (not matches_retained(source, previous.get('fingerprint', []), previous['sha256']) or sha256(source) != previous['sha256']):
@@ -251,14 +253,14 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
                  'member_sha256': member['sha256'], 'size': member['size'],
                  'path': str(Path('bundle-inputs') / parent_hash / member['file']),
                  'sha256': member['sha256'], 'observed_at': now(), 'transfer_status': 0,
-                 'transfer_error': origin.get('transfer_error', False)}
+                 'transfer_error': origin.get('transfer_error', False), 'decoder_readiness': readiness}
         if old.get('availability') == 'validated' and member['sha256'] not in state['assets']:
             raise LibraryError('Validated bundle child references missing asset')
-        temporary = any(fragment in old.get('reason', '').lower() for fragment in
-                        ('isolated reader failed', 'resource limit exceeded', 'timed out'))
-        retry = temporary and int(old.get('intake_attempts', 1)) < 3 and old.get('intake_next_attempt', 0) <= time.time()
-        needs_validation = (not old or old.get('availability') == 'pending' or retry or
-                            old.get('validation_policy') != READER_POLICY)
+        due = retry_at(old)
+        retry = due is not None and due <= time.time()
+        policy_changed = (old.get('validation_policy') != READER_POLICY or
+                          old.get('decoder_readiness', readiness) != readiness)
+        needs_validation = not old or retry or policy_changed
         if needs_validation:
             result = inspect_file(directory / member['file'], stable_seconds=stable_seconds)
             if result.get('reason') == 'Stage enclosing deadline exceeded':
@@ -266,7 +268,8 @@ def receive_bundle(state: dict[str, Any], state_dir: Path, source: Path, oid: st
             if result.get('sha256') and result['sha256'] != member['sha256']:
                 raise LibraryError('Derived input changed during validation')
             child.update(availability=result['status'], reason=result.get('reason', ''), reader_policy=result.get('reader_policy'), validation_policy=READER_POLICY,
-                         intake_attempts=int(old.get('intake_attempts', 0)) + 1, intake_next_attempt=time.time() + 300)
+                         intake_attempts=1 if policy_changed else int(old.get('intake_attempts', 0)) + 1,
+                         intake_next_attempt=time.time() + 300)
             if result['status'] == 'validated':
                 asset = state['assets'].setdefault(member['sha256'], {**result, 'origins': [],
                     'assertions': [], 'overrides': {}, 'disposition': 'pending', 'captured_hints': {}})

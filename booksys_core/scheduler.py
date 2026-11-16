@@ -202,10 +202,14 @@ class ScheduledCalls:
                 schedule.record['wait_reason'] = 'cleanup_failed'
                 schedule.record['cleanup_recovery']['status'] = 'failed'
                 self._save(value, schedule)
+                emit(service='collector', stage='byparr', code='degraded', reason=exc.outcome.code,
+                     next_attempt=schedule.record['not_before'])
                 return False
             except (BrowserError, CollectionError, OSError, ValueError):
                 schedule.record['cleanup_recovery']['status'] = 'failed'
                 self._save(value, schedule)
+                emit(service='collector', stage='byparr', code='degraded', reason='cleanup_failed',
+                     next_attempt=schedule.record['not_before'])
                 return False
             schedule.record['not_before'] = previous_due
             schedule.release_remote_block(timestamp=self.clock(), cleanup_proof=proof)
