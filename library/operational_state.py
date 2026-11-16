@@ -6,6 +6,7 @@ from typing import Any, Callable
 from dataclasses import dataclass
 import copy
 from library.codec import encode, decode
+from library.operational_fields import sync, values, FIELDS, records as operational_records
 from library.postgres import guards
 from library.stage_model import QUEUES, Task
 
@@ -65,6 +66,7 @@ def apply_completion(db: DeadlineConnection, result: OperationalCompletion) -> N
         if (row[0] if row else None)!=result.expected:
             raise LibraryError('Copy operation result conflict')
         db.execute('UPDATE copy_operations SET payload=%s WHERE namespace=%s AND id=%s',(encode(result.value),result.kind,result.identity))
+        sync(db,'copy_operations',(result.kind,result.identity),result.value)
         return
     tables={'category':'collection_categories','fiche':'fiche_progress','routing':'routing_packages','retirement':'retirement_acquisitions'}
     if result.kind not in tables:
@@ -76,19 +78,23 @@ def apply_completion(db: DeadlineConnection, result: OperationalCompletion) -> N
     if result.kind=='retirement':
         retain_retirement(db,result.identity,result.value)
     else:
-        db.execute(f'INSERT INTO {table} VALUES (%s,%s) ON CONFLICT({column}) DO UPDATE SET payload=excluded.payload',
+        db.execute(f'INSERT INTO {table}({column},payload) VALUES (%s,%s) ON CONFLICT({column}) DO UPDATE SET payload=excluded.payload',
                    (result.identity,encode(result.value)))
+        sync(db,table,(result.identity,),result.value)
 
 
 def retain_retirement(db: DeadlineConnection, source: str, value: dict[str,Any]) -> None:
-    db.execute('INSERT INTO retirement_acquisitions VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',
+    db.execute('INSERT INTO retirement_acquisitions(source,payload) VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',
                (source,encode({**value,'packages':{}})))
+    sync(db,'retirement_acquisitions',(source,),value)
     db.execute('DELETE FROM retired_links WHERE source=%s',(source,))
     db.execute('DELETE FROM retired_packages WHERE source=%s',(source,))
     for pid,package in value['packages'].items():
-        db.execute('INSERT INTO retired_packages VALUES (%s,%s,%s)',(source,pid,encode({**package,'links':[]})))
+        db.execute('INSERT INTO retired_packages(source,pid,payload) VALUES (%s,%s,%s)',(source,pid,encode({**package,'links':[]})))
+        sync(db,'retired_packages',(source,pid),package)
         for index,link in enumerate(package['links']):
-            db.execute('INSERT INTO retired_links VALUES (%s,%s,%s,%s)',(source,pid,index,encode(link)))
+            db.execute('INSERT INTO retired_links(source,pid,position,payload) VALUES (%s,%s,%s,%s)',(source,pid,index,encode(link)))
+            sync(db,'retired_links',(source,pid,index),link)
 
 
 def schema(db: DeadlineConnection) -> None:
@@ -176,28 +182,29 @@ class CollectorState:
 
     def monitor(self) -> dict[str,Any]:
         def load(db: DeadlineConnection) -> Any:
-            result={'version':1,'categories':{source:decode(payload) for source,payload in db.execute(
-                'SELECT source,payload FROM collection_categories ORDER BY source')},'submissions':{
-                source:decode(payload) for source,payload in db.execute('SELECT source,payload FROM collection_submissions ORDER BY source')}}
+            result={'version':1,'categories':{source:record for source,record in operational_records(db,'collection_categories','ORDER BY source')},'submissions':{
+                source:record for source,record in operational_records(db,'collection_submissions','ORDER BY source')}}
             result.update(self._checkpoints(db))
             return result
         from library.versioned import cached
-        value: dict[str, Any] = cached(self._database, 'monitor', ('collection_categories', 'collection_submissions', 'collection_checkpoints'), load)
+        value: dict[str, Any] = cached(self._database, 'monitor', ('collection_categories', 'collection_submissions', 'collection_checkpoints', 'submission_links'), load)
         return value
 
     def category(self, source: str, record: dict[str,Any]) -> None:
         with self._database.connection(write=True) as db:
             guards(db,completion_guards(OperationalCompletion('category',source,None,record)))
-            db.execute('INSERT INTO collection_categories VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',(source,encode(record)))
+            db.execute('INSERT INTO collection_categories(source,payload) VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',(source,encode(record)))
+            sync(db,'collection_categories',(source,),record)
 
     def submission(self, source: str, record: dict[str,Any]) -> None:
         with self._database.connection(write=True) as db:
             guards(db,{'submission:'+source})
-            db.execute('INSERT INTO collection_submissions VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',(source,encode(record)))
+            db.execute('INSERT INTO collection_submissions(source,payload) VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',(source,encode(record)))
+            sync(db,'collection_submissions',(source,),record)
 
     @staticmethod
     def _checkpoints(db: DeadlineConnection) -> dict[str,Any]:
-        result={kind:decode(payload) for kind,payload in db.execute("SELECT kind,payload FROM collection_checkpoints WHERE kind='schedule'")}
+        result={kind:record for kind,record in operational_records(db,'collection_checkpoints',"WHERE kind='schedule'")}
         return result
 
     @staticmethod
@@ -206,7 +213,8 @@ class CollectorState:
             db.execute('DELETE FROM collection_checkpoints WHERE kind=%s',(kind,))
             return
         metadata=copy.deepcopy(value)
-        db.execute('INSERT INTO collection_checkpoints VALUES (%s,%s) ON CONFLICT(kind) DO UPDATE SET payload=excluded.payload',(kind,encode(metadata)))
+        db.execute('INSERT INTO collection_checkpoints(kind,payload) VALUES (%s,%s) ON CONFLICT(kind) DO UPDATE SET payload=excluded.payload',(kind,encode(metadata)))
+        sync(db,'collection_checkpoints',(kind,),metadata)
 
     def patch_monitor(self, **changes: Any) -> None:
         if set(changes)-{'schedule'}:
@@ -218,8 +226,7 @@ class CollectorState:
 
     def fiches(self) -> dict[str,Any]:
         def load(db: DeadlineConnection) -> Any:
-            return {'version':1,'items':{source:decode(payload) for source,payload in
-                    db.execute('SELECT source,payload FROM fiche_progress ORDER BY source')}}
+            return {'version':1,'items':{source:record for source,record in operational_records(db,'fiche_progress','ORDER BY source')}}
         from library.versioned import cached
         value: dict[str, Any] = cached(self._database, 'fiches', ('fiche_progress',), load)
         return value
@@ -227,7 +234,8 @@ class CollectorState:
     def fiche(self, source: str, record: dict[str,Any]) -> None:
         with self._database.connection(write=True) as db:
             guards(db,completion_guards(OperationalCompletion('fiche',source,None,record)))
-            db.execute('INSERT INTO fiche_progress VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',(source,encode(record)))
+            db.execute('INSERT INTO fiche_progress(source,payload) VALUES (%s,%s) ON CONFLICT(source) DO UPDATE SET payload=excluded.payload',(source,encode(record)))
+            sync(db,'fiche_progress',(source,),record)
 
     def prepare_completion(self, kind: str, identity: str, value: dict[str,Any], *, expected: tuple[str | None] | None = None) -> OperationalCompletion:
         tables={'category':'collection_categories','fiche':'fiche_progress','routing':'routing_packages','retirement':'retirement_acquisitions'}
@@ -243,15 +251,14 @@ class CollectorState:
         if kind != 'monitor':
             raise LibraryError('Invalid native source kind')
         def load(db: DeadlineConnection) -> Any:
-            monitor={'version':1,'categories':{source:decode(payload) for source,payload in db.execute(
-                'SELECT source,payload FROM collection_categories ORDER BY source')},'submissions':{
-                source:decode(payload) for source,payload in db.execute('SELECT source,payload FROM collection_submissions ORDER BY source')}}
+            monitor={'version':1,'categories':{source:record for source,record in operational_records(db,'collection_categories','ORDER BY source')},'submissions':{
+                source:record for source,record in operational_records(db,'collection_submissions',"WHERE status='queued' ORDER BY source")}}
             monitor.update(self._checkpoints(db))
-            fiches={'items':{source:decode(payload) for source,payload in db.execute('SELECT source,payload FROM fiche_progress')}}
+            fiches={'items':{source:record for source,record in operational_records(db,'fiche_progress','')}}
             return monitor,fiches
         from library.versioned import cached
         monitor,fiches=cached(self._database,'native-view-inputs',('collection_categories','collection_submissions','collection_checkpoints',
-            'fiche_progress'),load)
+            'fiche_progress', 'submission_links'),load)
         view: dict[str,Any]=project(queue,monitor,auxiliary=fiches)
         return view
 
@@ -320,13 +327,20 @@ class RuntimeObservation:
                 db.execute('DELETE FROM observed_packages')
             # Two statements for the whole queue: thousands of single inserts exceeded the SQL deadline.
             if packages and not unchanged:
-                db.execute('INSERT INTO observed_packages SELECT * FROM unnest(%s::bigint[],%s::bigint[],%s::text[])',
-                           ([p['pid'] for p in packages], list(range(len(packages))),
-                            [encode({k:v for k,v in p.items() if k!='links'}) for p in packages]))
-                rows=[(p['pid'],i,encode(link)) for p in packages for i,link in enumerate(p.get('links',[]))]
-                if rows:
-                    db.execute('INSERT INTO observed_links SELECT * FROM unnest(%s::bigint[],%s::bigint[],%s::text[])',
-                               ([r[0] for r in rows],[r[1] for r in rows],[r[2] for r in rows]))
+                import json
+                package_rows=[{'pid':p['pid'],'position':i,'payload':encode({k:v for k,v in p.items() if k!='links'}),
+                    **dict(zip((c for c,_,_ in FIELDS['observed_packages']),values('observed_packages',p)))} for i,p in enumerate(packages)]
+                link_rows=[{'pid':p['pid'],'position':i,'payload':encode(link),
+                    **dict(zip((c for c,_,_ in FIELDS['observed_links']),values('observed_links',link)))}
+                    for p in packages for i,link in enumerate(p.get('links',[]))]
+                for table, rows in (('observed_packages',package_rows),('observed_links',link_rows)):
+                    if rows:
+                        columns=FIELDS[table]
+                        names=('pid','position','payload',*(c for c,_,_ in columns))
+                        types=(('pid','BIGINT'),('position','BIGINT'),('payload','TEXT'),*((c,t) for c,_,t in columns))
+                        db.execute(f'INSERT INTO {table}(' + ','.join(names) + ') SELECT ' + ','.join(names)
+                            + ' FROM jsonb_to_recordset(%s::jsonb) AS r(' + ','.join(c+' '+t for c,t in types) + ')',
+                            (json.dumps(rows,ensure_ascii=False),))
             db.execute('INSERT INTO native_observation VALUES (1,%s,%s,%s) ON CONFLICT(singleton) DO UPDATE SET observed_at=excluded.observed_at,remaining_bytes=excluded.remaining_bytes,overshoot_bytes=excluded.overshoot_bytes',(at,remaining,overshoot))
         _PUBLISHED[(self._database.dsn,self._database.schema)]=fingerprint
 
@@ -342,9 +356,9 @@ class RuntimeObservation:
                 # every readiness check cost half of a retirement step.
                 return copy.deepcopy(cached[1]),header[0]
             links: dict[int,list[dict[str,Any]]]={}
-            for pid,payload in db.execute('SELECT pid,payload FROM observed_links ORDER BY pid,position'):
-                links.setdefault(pid,[]).append(decode(payload))
-            value=[{**decode(payload),'links':links.get(pid,[])} for pid,payload in db.execute('SELECT pid,payload FROM observed_packages ORDER BY position')]
+            for pid,position,record in operational_records(db,'observed_links','ORDER BY pid,position'):
+                links.setdefault(pid,[]).append(record)
+            value=[{**record,'links':links.get(pid,[])} for pid,record in operational_records(db,'observed_packages','ORDER BY position')]
             _QUEUE_CACHE[key]=(header[0],copy.deepcopy(value))
             return value,header[0]
 
@@ -386,13 +400,14 @@ class ProviderCache:
 
     def get(self, url: str) -> dict[str,Any] | None:
         with self._database.connection() as db:
-            row=db.execute('SELECT payload FROM provider_cache WHERE namespace=%s AND url=%s',(self.namespace,url)).fetchone()
-            value: dict[str,Any] | None=decode(row[0]) if row else None
+            rows=operational_records(db,'provider_cache','WHERE namespace=%s AND url=%s',(self.namespace,url))
+            value: dict[str,Any] | None=rows[0][-1] if rows else None
             return value
 
     def retain(self, url: str, value: dict[str,Any]) -> None:
         with self._database.connection(write=True) as db:
-            db.execute('INSERT INTO provider_cache VALUES (%s,%s,%s) ON CONFLICT(namespace,url) DO UPDATE SET payload=excluded.payload',(self.namespace,url,encode(value)))
+            db.execute('INSERT INTO provider_cache(namespace,url,payload) VALUES (%s,%s,%s) ON CONFLICT(namespace,url) DO UPDATE SET payload=excluded.payload',(self.namespace,url,encode(value)))
+            sync(db,'provider_cache',(self.namespace,url),value)
 
 
 class NativeHistory:
@@ -402,22 +417,23 @@ class NativeHistory:
 
     def routing(self) -> dict[str,Any]:
         def load(db: DeadlineConnection) -> Any:
-            return {'schema':1,'packages':{key:decode(payload) for key,payload in db.execute('SELECT pid,payload FROM routing_packages ORDER BY pid')}}
+            return {'schema':1,'packages':{key:record for key,record in operational_records(db,'routing_packages','ORDER BY pid')}}
         from library.versioned import cached
-        value: dict[str, Any] = cached(self._database, 'routing', ('routing_packages',), load)
+        value: dict[str, Any] = cached(self._database, 'routing', ('routing_packages','routing_members'), load)
         return value
 
     def route(self, pid: str, value: dict[str,Any]) -> None:
         with self._database.connection(write=True) as db:
             guards(db,{'routing-package:'+pid})
-            db.execute('INSERT INTO routing_packages VALUES (%s,%s) ON CONFLICT(pid) DO UPDATE SET payload=excluded.payload',(pid,encode(value)))
+            db.execute('INSERT INTO routing_packages(pid,payload) VALUES (%s,%s) ON CONFLICT(pid) DO UPDATE SET payload=excluded.payload',(pid,encode(value)))
+            sync(db,'routing_packages',(pid,),value)
 
     def retirements(self) -> dict[str,Any]:
         def load(db: DeadlineConnection) -> Any:
-            result: dict[str,Any]={'schema':1,'acquisitions':{key:decode(payload) for key,payload in db.execute('SELECT source,payload FROM retirement_acquisitions ORDER BY source')}}
-            packages={(source,pid):decode(payload) for source,pid,payload in db.execute('SELECT source,pid,payload FROM retired_packages')}
-            for source,pid,payload in db.execute('SELECT source,pid,payload FROM retired_links ORDER BY source,pid,position'):
-                packages[source,pid]['links'].append(decode(payload))
+            result: dict[str,Any]={'schema':1,'acquisitions':{key:record for key,record in operational_records(db,'retirement_acquisitions','ORDER BY source')}}
+            packages={(source,pid):record for source,pid,record in operational_records(db,'retired_packages')}
+            for source,pid,position,record in operational_records(db,'retired_links','ORDER BY source,pid,position'):
+                packages[source,pid]['links'].append(record)
             for (source,pid),package in packages.items():
                 result['acquisitions'][source]['packages'][pid]=package
             cursor=db.execute('SELECT source FROM retirement_cursor WHERE singleton=1').fetchone()
@@ -452,22 +468,17 @@ class CopyOperations:
 
     def records(self) -> list[dict[str,Any]]:
         def load(db: DeadlineConnection) -> Any:
-            return [decode(row[0]) for row in db.execute('SELECT payload FROM copy_operations WHERE namespace=%s ORDER BY id',(self.namespace,))]
+            return [row[-1] for row in operational_records(db,'copy_operations','WHERE namespace=%s ORDER BY id',(self.namespace,))]
         from library.versioned import cached
-        records: list[dict[str, Any]] = cached(self._database, 'copy-records:' + self.namespace, ('copy_operations',), load)
+        records: list[dict[str, Any]] = cached(self._database, 'copy-records:' + self.namespace, ('copy_operations','copy_operation_files'), load)
         return records
 
     def for_asset(self, asset: str, applies: Callable[[dict[str,Any],str],bool]) -> list[dict[str,Any]]:
         """Read this asset's journals and any invalid scope; the index excludes known unrelated journals."""
         with self._database.connection() as db:
-            rows = db.execute('SELECT payload FROM copy_operations WHERE namespace=%s AND '
-                '(copy_operation_asset_v1(payload)=%s OR copy_operation_asset_v1(payload) IS NULL) '
-                'ORDER BY id', (self.namespace,asset))
-            records = []
-            for (payload,) in rows:
-                record = decode(payload)
-                if applies(record,asset):
-                    records.append(record)
+            selected = operational_records(db,'copy_operations',
+                'WHERE namespace=%s AND (asset=%s OR ownership_valid=false) ORDER BY id',(self.namespace,asset))
+            records = [row[-1] for row in selected if applies(row[-1],asset)]
             return records
 
     def prepare(self, value: dict[str,Any]) -> OperationalCompletion:
@@ -478,7 +489,8 @@ class CopyOperations:
     def phase(self, value: dict[str,Any]) -> None:
         with self._database.connection(write=True) as db:
             guards(db,{'copy-operation:'+self.namespace+':'+value['id']})
-            db.execute('INSERT INTO copy_operations VALUES (%s,%s,%s) ON CONFLICT(namespace,id) DO UPDATE SET payload=excluded.payload',(self.namespace,value['id'],encode(value)))
+            db.execute('INSERT INTO copy_operations(namespace,id,payload) VALUES (%s,%s,%s) ON CONFLICT(namespace,id) DO UPDATE SET payload=excluded.payload',(self.namespace,value['id'],encode(value)))
+            sync(db,'copy_operations',(self.namespace,value['id']),value)
 
 
 class StatusObservations:

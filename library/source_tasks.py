@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 from library.primitives import LibraryError, digest
 from library.stage_model import Task
+from library.operational_fields import sync, records
 
 MAX_SOURCES = 16
 
@@ -37,7 +38,7 @@ class SourcePolicy:
         from library.codec import decode
         with self.store._database.connection() as db:
             self.store.verify(db)
-            sources={key:decode(payload) for key,payload in db.execute('SELECT id,payload FROM source_registry')}
+            sources={key:record for key,record in records(db,'source_registry')}
             for value in sources.values():
                 value['inputs']={}
                 if value.get('native'):value['native'].update(inputs={},guards={},bindings={})
@@ -55,7 +56,7 @@ class SourcePolicy:
         from library.codec import decode
         with self.store._database.connection() as db:
             self.store.verify(db)
-            return {key: decode(payload) for key, payload in db.execute('SELECT id,payload FROM source_registry')}
+            return {key: record for key,record in records(db,'source_registry')}
 
     def validation_snapshot(self,tasks: list[Task], *, db: DeadlineConnection | None=None) -> tuple[str,set[str]]:
         """Prepare compact native validation outside a queue mutation transaction."""
@@ -83,8 +84,9 @@ class SourcePolicy:
             count = db.execute('SELECT count(*) FROM source_registry').fetchone()
             if count and count[0] >= MAX_SOURCES:
                 raise LibraryError('source_registration_capacity')
-            db.execute('INSERT INTO source_registry VALUES (%s,%s)',
+            db.execute('INSERT INTO source_registry(id,payload) VALUES (%s,%s)',
                        (ident, encode({'queue': queue, 'path': str(journal.absolute()), 'kind':kind, 'cursor': ''})))
+            sync(db,'source_registry',(ident,),{'queue':queue,'path':str(journal.absolute()),'kind':kind,'cursor':''})
             return ident, ''
 
     def retain_scan_failure(self, source: str, expected: dict[str, Any], stamp: str) -> None:
@@ -101,6 +103,7 @@ class SourcePolicy:
                 return
             retained['last_scan'] = stamp
             db.execute('UPDATE source_registry SET payload=%s WHERE id=%s', (encode(retained), source))
+            sync(db,'source_registry',(source,),retained)
 
     def _snapshot(self, db: DeadlineConnection, source: str, view: dict[str, Any], stamp: str, cursor: str, *, expected: str | None=None) -> None:
         from library.codec import encode, decode
@@ -117,6 +120,7 @@ class SourcePolicy:
         if view.get('_native'):
             value['native']={'queue':view['_native']['queue']}
         db.execute('UPDATE source_registry SET payload=%s WHERE id=%s', (encode(value),source))
+        sync(db,'source_registry',(source,),value)
         members=[]
         for entity,record in view['items'].items():
             key=source+':'+entity
@@ -136,6 +140,8 @@ class SourcePolicy:
                    'WHERE (source_inputs.input_revision,source_inputs.method,source_inputs.guard,source_inputs.binding) '
                    'IS DISTINCT FROM (excluded.input_revision,excluded.method,excluded.guard,excluded.binding)',
                    (source,json.dumps(members,ensure_ascii=False)))
+        for member in members:
+            sync(db,'source_inputs',(source,member['entity']),decode(member['binding']) if member['binding'] is not None else {})
         db.execute('DELETE FROM source_inputs WHERE source=%s AND NOT entity=ANY(%s::text[])',
                    (source,[row['entity'] for row in members]))
 

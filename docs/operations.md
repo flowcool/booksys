@@ -43,3 +43,55 @@ Malformed unrelated journals still stop recovery through the existing checks.
 If the install fails, its transaction rolls back; do not activate the new reader.
 For application rollback, restore the preceding image through normal activation
 and retain this additive function/index. No historical conversion is required.
+
+
+## Operational schema 2 conversion
+
+Schema 2 stores operational scalars and queried collections in typed columns
+and keyed relations. Existing raw payloads, journals, source evidence, hashes
+and file references remain intact. Exact raw values still fence completions.
+Workers require schema 2. They never convert schema 1 at startup. Old workers
+reject schema 2. Do not mix writer versions.
+
+Run the explicit conversion from the exact candidate with all application
+writers stopped. Use a consistent isolated database copy first. Retain the
+source dump and technical recovery set. The credential must belong to a
+migration role and use an owned private file. Use a new report path in an
+existing writable directory. The qualified conversion budget is 1800 seconds;
+the CLI default is 600 seconds.
+
+```sh
+python -m library.operational_conversion \
+  --dsn-file /private/migration.dsn \
+  --schema booksys \
+  --authority YOUR_AUTHORITY_ID \
+  --writers-stopped \
+  --seconds 1800 \
+  --report /private/proof/operational-schema-2.json
+```
+
+The command locks the existing tables. It converts in one transaction. It
+validates promoted values, ordered relations and current admission manifests.
+It compares every original column value and raw payload hash before and after
+conversion. It installs change-token triggers and selects schema 2 only after
+these checks. It does not call providers, native download services or media
+readers. It does not reset retries, deadlines or uncertain operations.
+
+An incompatible value stops conversion with its table and row key. Keep the
+diagnostic and resolve the value's accepted semantics before retrying. A failed
+transaction leaves schema 1 and its rows unchanged. A report that only says
+`conversion_started` is not success. If commit acknowledgement is lost, read
+back the schema marker and retain the report before any dependent action.
+
+After successful conversion, bind the exact candidate with the existing
+activation command while roles remain stopped. Recreate the selected roles
+through the deployment runbook. Verify the delivered version and business
+progress. This conversion command does not authorize a live migration or start
+workers. After schema selection or new writes, retain later data and effects
+and repair forward. Do not restore the old dump over later business writes or
+restart an old image against schema 2.
+
+The focused conversion test is `tests.test_operational_conversion`. Set
+`BOOKSYS_TEST_PG_DSN_FILE` to a private credential for a throwaway PostgreSQL
+18.6 instance. The tests create separate random schemas. Never point this
+variable at shared mutable state.
