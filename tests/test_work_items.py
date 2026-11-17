@@ -16,6 +16,13 @@ DSN = os.environ.get('BOOKSYS_SCRATCH_DSN', '')
 T0 = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
 
 
+def test_retry_delay() -> None:
+    from library.work_items import retry_delay
+
+    for attempts, seconds in ((1, 300), (2, 900), (3, 2700), (4, 3600), (0, 300)):
+        assert retry_delay(attempts) == timedelta(seconds=seconds)
+
+
 @unittest.skipUnless(DSN, 'BOOKSYS_SCRATCH_DSN is not set')
 class WorkItemsTests(unittest.TestCase):
     def setUp(self) -> None:
