@@ -34,6 +34,34 @@ def inputs(root, members):
 
 class BundleTests(unittest.TestCase):
 
+    def test_retained_bundle_survives_native_package_absence_without_weakening_source_proof(self):
+        from library.origins import resolve_asset
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            reception, parent, captured, journal, queue = inputs(root, [('valid.cbz', comic())])
+            store = create_catalog(self, root / 'state')
+            state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
+            asset = next(iter(state['assets']))
+            child = state['origins'][state['assets'][asset]['origins'][0]]
+            parent_id = child['parent_origin']
+            for missing_queue in ([], [{'pid': 1, 'name': 'reused'}]):
+                state = receive(store, reception, captured, journal, missing_queue)
+                self.assertEqual(state['origins'][parent_id]['availability'], 'bundle')
+                self.assertEqual(resolve_asset(store, reception, state, asset).read_bytes(), comic())
+            # Historical intake may already have demoted this exact parent.
+            state['origins'][parent_id]['availability'] = 'package_missing'
+            self.assertEqual(resolve_asset(store, reception, state, asset).read_bytes(), comic())
+            state['origins'][parent_id]['availability'] = 'multipart_member'
+            store.save(state, expected=state['revision'])
+            for missing_queue in ([], [{'pid': 1, 'name': 'reused'}]):
+                received = receive(store, reception, captured, journal, missing_queue)
+                self.assertEqual(received['origins'][parent_id]['availability'], 'multipart_member')
+            state['origins'][parent_id]['availability'] = 'package_missing'
+            original = parent.read_bytes()
+            parent.write_bytes(original + b'changed')
+            with self.assertRaisesRegex(LibraryError, 'Bundle parent changed or unavailable'):
+                resolve_asset(store, reception, state, asset)
+
 
     def test_unsafe_and_recursive_bundles_leave_no_admitted_child(self):
         cases = [('../escape.cbz', comic()), ('other.zip', comic()), ('image.png', image_bytes()),
