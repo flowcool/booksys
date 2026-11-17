@@ -13,3 +13,10 @@ deadline, default 120 seconds.
 
 Cookies stay in `Byparr.session` in memory. No cookie persistence is implemented.
 See [operations](operations.md) for configuration and rollback.
+
+## Bundle size policy
+
+The approved source-set and expanded-total ceilings are each 10 GB
+(10,000,000,000 bytes). The per-child ceiling is 1 GiB; the bounds remain
+64 complete comics, 64 volumes and 256 entries. CPU, memory, wall-time,
+CRC, container-end and provenance checks remain enabled.
