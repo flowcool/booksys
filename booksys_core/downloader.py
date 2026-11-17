@@ -30,6 +30,14 @@ def references(values: list[dict[str, str]]) -> Iterator[None]:
         REFERENCES.reset(token)
 
 
+def _package_name(marker: str, title: str) -> str:
+    name = f"{marker} {title}"
+    encoded = name.encode("utf-8")
+    if len(encoded) <= 200:
+        return name
+    return encoded[:200].decode("utf-8", "ignore").rstrip()
+
+
 class Pyload:
     admission: RollingBudget | None = None
     downloads: Path | None = None
@@ -119,7 +127,7 @@ class Pyload:
         if entry and entry["status"] == "queued":
             return int(entry["package_id"])
         marker = "Booksys-" + hashlib.sha256(source.encode()).hexdigest()[:16]
-        name = f"{marker} {record['title']}"
+        name = _package_name(marker, record["title"])
         from mirrors import host_sets, select_primary
         all_links = sorted({url for urls in host_sets(record).values() for url in urls})
         if entry:

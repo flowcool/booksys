@@ -110,3 +110,36 @@ class NetworkAdmissionTests(unittest.TestCase):
 
 
 
+
+class PackageNameTests(unittest.TestCase):
+    def test_package_name_preserves_199_and_200_bytes(self):
+        from booksys_core.downloader import _package_name
+        marker = 'Booksys-0123456789abcdef'
+        for size in (199, 200):
+            title = 'A' * (size - len(marker) - 2) + ' '
+            expected = marker + ' ' + title
+            with self.subTest(size=size):
+                self.assertEqual(_package_name(marker, title).encode('utf-8'), expected.encode('utf-8'))
+
+    def test_package_name_bounds_ascii_and_strips_trailing_space(self):
+        from booksys_core.downloader import _package_name
+        marker = 'Booksys-0123456789abcdef'
+        name = _package_name(marker, 'A' * 174 + ' ' + 'B' * 225)
+        self.assertLessEqual(len(name.encode('utf-8')), 200)
+        self.assertTrue(name.startswith(marker + ' '))
+        self.assertFalse(name.endswith(' '))
+
+    def test_package_name_preserves_utf8_character_boundaries(self):
+        from booksys_core.downloader import _package_name
+        name = _package_name('Booksys-0123456789abcdef', '\u00e9' * 300)
+        self.assertLessEqual(len(name.encode('utf-8')), 200)
+        self.assertEqual(name.encode('utf-8').decode('utf-8'), name)
+        self.assertEqual(name[25:], '\u00e9' * 87)
+
+    def test_package_name_keeps_distinct_source_markers(self):
+        import hashlib
+        from booksys_core.downloader import _package_name
+        sources = ('https://example.invalid/first', 'https://example.invalid/second')
+        markers = ['Booksys-' + hashlib.sha256(source.encode()).hexdigest()[:16] for source in sources]
+        self.assertNotEqual(_package_name(markers[0], 'A' * 400 + 'first'),
+                            _package_name(markers[1], 'A' * 400 + 'second'))
