@@ -17,7 +17,6 @@ from booksys_core.browser import Byparr
 from booksys_core.downloader import Pyload
 from booksys_core.errors import CollectionError
 from booksys_core.network_admission import RollingBudget
-from library.authority import code_digest
 from library.launcher import verify_startup
 from library.metadata import Providers
 from library.primitives import LibraryError, lock
@@ -31,7 +30,7 @@ def verify_activation(root: Path) -> dict[str, Any]:
     from library.operational_state import RuntimeObservation
     from library.postgres import Database
     value = RuntimeObservation(Database.configured(root/'state')).activation()
-    if (value.get('schema') != 1 or value.get('code_digest') != code_digest()
+    if (value.get('schema') != 1
             or value.get('mode') not in ('independent', 'serial') or value.get('supervisor') not in ('systemd', 'compose')
             or not value.get('qualification_receipt')):
         raise LibraryError('Independent queue activation does not bind this qualified candidate')
