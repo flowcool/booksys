@@ -49,7 +49,10 @@ def resolve_asset_origin(store: Catalog, reception: Path, state: dict[str, Any],
                 parent = state['origins'][origin['parent_origin']]
                 relative = Path(parent['path'])
                 parent_path = reception_path(reception, str(relative.parent), relative.name)
-                if (parent.get('availability') != 'bundle' or parent.get('sha256') != origin['parent_sha256']
+                # Native package absence does not invalidate retained bundle bytes.
+                # Existing package_missing parents still need every proof below.
+                if (parent.get('availability') not in ('bundle', 'package_missing')
+                        or parent.get('sha256') != origin['parent_sha256']
                         or not matches_retained(parent_path, parent.get('fingerprint', []), origin['parent_sha256'])
                         or sha256(parent_path) != origin['parent_sha256']):
                     raise LibraryError('Bundle parent changed or unavailable')
