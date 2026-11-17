@@ -35,6 +35,22 @@ def captured(url):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_run_once_continues_after_package_folder_name_too_long(self):
+        from booksys_core.collection import run_once
+        journal = {'categories': {}, 'submissions': {}}
+        records = {source: {'downloads': {}} for source in (FIRST, SECOND)}
+        store = Mock(); store.monitor.return_value = journal; store.captured.return_value = {'items': records}
+        downloader = Mock(); downloader.call.return_value = {'pause': False, 'download': True}
+        downloader.submit.side_effect = [CollectionError('pyLoad package folder name too long'), 2]
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch('booksys_core.collection.CollectorState', return_value=store), \
+                patch('booksys_core.collection.ScheduledCalls'), \
+                patch('booksys_core.collection.catalogue', return_value=([FIRST, SECOND], None)), \
+                patch('booksys_core.collection.CRAWL_PAGES', 1):
+            counts = run_once(Path(temporary), Mock(), downloader)
+        self.assertEqual(counts, {'pages': 1, 'queued': 1, 'skipped': 1})
+        self.assertEqual([call.args[0] for call in downloader.submit.call_args_list], [FIRST, SECOND])
+
     def test_run_once_continues_after_one_unconfirmed_submission(self):
         from unittest.mock import Mock, patch
         from booksys_core.collection import run_once

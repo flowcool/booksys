@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import errno
 import os
 import re
 import tempfile
@@ -49,7 +50,12 @@ def write_fiche(source: str, record: dict[str, Any], package: dict[str, Any], ro
     destination = root / folder
     if destination.is_symlink() or not destination.resolve().is_relative_to(root.resolve()):
         raise CollectionError("Package folder escapes download root")
-    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        if exc.errno == errno.ENAMETOOLONG:
+            raise CollectionError("pyLoad package folder name too long") from exc
+        raise
     fiche = destination / "fiche.md"
     marker = f"<!-- Booksys fiche v1: {source} -->"
     owned = fiche.is_file() and not fiche.is_symlink() and fiche.read_text().startswith(marker + "\n")
@@ -74,7 +80,12 @@ def write_fiche(source: str, record: dict[str, Any], package: dict[str, Any], ro
         rows += ["", "## Fichiers associés", ""]
         rows += [f"- {text(f['name'])} — identifiant pyLoad {f['fid']}" for f in package["links"]]
         rows += ["", "Document généré par Booksys. Conserver les notes personnelles dans un autre fichier.", ""]
-        atomic_bytes(fiche, "\n".join(rows).encode())
+        try:
+            atomic_bytes(fiche, "\n".join(rows).encode())
+        except OSError as exc:
+            if exc.errno == errno.ENAMETOOLONG:
+                raise CollectionError("pyLoad package folder name too long") from exc
+            raise
 
     # Preserve readable text even when cover transfer fails.
     render()
@@ -92,6 +103,11 @@ def write_fiche(source: str, record: dict[str, Any], package: dict[str, Any], ro
         if extension not in {".jpg", ".png", ".webp", ".gif"} or not data:
             raise CoverError("Unsupported cover format")
         cover = destination / ("couverture" + extension)
-        atomic_bytes(cover, data)
+        try:
+            atomic_bytes(cover, data)
+        except OSError as exc:
+            if exc.errno == errno.ENAMETOOLONG:
+                raise CollectionError("pyLoad package folder name too long") from exc
+            raise
         render()
     return str(folder)
