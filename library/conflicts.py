@@ -71,7 +71,21 @@ def verify(store: Store, db: DeadlineConnection, token: dict[str, Any], change: 
         raise LibraryError('Unknown result conflict token')
     state, current = snapshot(store, db, token['action'], token['refs'], token['claims'], media=token['media'])
     if current != token:
-        raise ResultInputsChanged('Result conflict: relevant inputs changed')
+        keys = sorted(key for key in token.keys() | current.keys()
+                      if key not in token or key not in current or token[key] != current[key])
+        parts = [','.join(keys)]
+        if 'entities' in keys:
+            for kind in TABLES:
+                before = set(token.get('entities', {}).get(kind, []))
+                after = set(current.get('entities', {}).get(kind, []))
+                if before != after:
+                    removed, added = sorted(before - after), sorted(after - before)
+                    parts.append(f"{kind} token-only={len(removed)}:"
+                                 + ','.join(ident[:12] for ident in removed[:3])
+                                 + f" current-only={len(added)}:"
+                                 + ','.join(ident[:12] for ident in added[:3]))
+        detail = '; '.join(parts)[:300]
+        raise ResultInputsChanged(f'Result conflict: relevant inputs changed ({detail})')
     if change is None:
         return
     for kind in TABLES:

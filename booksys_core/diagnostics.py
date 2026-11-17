@@ -35,7 +35,7 @@ ERRORS = frozenset(('TimeoutError', 'OSError', 'ValueError', 'TypeError', 'KeyEr
                    'CollectionError', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
 FIELDS = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'cycle_id',
     'request_id', 'operation_id', 'refs', 'title', 'duration_ms', 'wait_ms', 'attempt', 'repeat_count',
-    'dropped_count', 'next_attempt', 'exception_type', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count'))
+    'dropped_count', 'next_attempt', 'exception_type', 'detail', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count'))
 REQUIRED = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'refs'))
 
 
@@ -108,6 +108,8 @@ def validate(value: Any) -> dict[str, Any]:
         raise ValueError('Invalid retry timestamp')
     if 'exception_type' in value and value['exception_type'] not in ERRORS:
         raise ValueError('Unrecognized exception type')
+    if 'detail' in value and (type(value['detail']) is not str or value['detail'] != safe_text(value['detail'], 300)):
+        raise ValueError('Unfiltered event detail')
     if 'title' in value and (type(value['title']) is not str or value['title'] != safe_text(value['title'])):
         raise ValueError('Unfiltered event title')
     if 'measurements' in value:
@@ -311,8 +313,8 @@ class SafeLoggingHandler(logging.Handler):
 
 
 def exception_details(exc: BaseException) -> dict[str, Any]:
-    # Class identity and trusted project frame metadata only. Never format the
-    # exception or copy its args, filename, source lines or local variables.
+    # Only ResultInputsChanged exposes a bounded message. Other exceptions
+    # expose class identity and trusted project frame metadata only.
     import sqlite3
     reason = 'unexpected_exception'
     if isinstance(exc, sqlite3.OperationalError) and getattr(exc, 'sqlite_errorcode', 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
@@ -342,7 +344,11 @@ def exception_details(exc: BaseException) -> dict[str, Any]:
                 and 1 <= tb.tb_lineno <= 1000000):
             stack.append({'module': module, 'function': function, 'line': tb.tb_lineno})
         tb = tb.tb_next
-    return {'reason': reason, 'exception_type': kind if kind in ERRORS else 'Exception', 'stack': stack[-32:]}
+    from library.conflicts import ResultInputsChanged
+    details = {'reason': reason, 'exception_type': kind if kind in ERRORS else 'Exception', 'stack': stack[-32:]}
+    if isinstance(exc, ResultInputsChanged):
+        details['detail'] = safe_text(str(exc), 300)
+    return details
 
 
 def install_logging(service: str) -> None:

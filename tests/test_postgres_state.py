@@ -19,6 +19,34 @@ import psycopg
 from library.primitives import empty
 
 
+class ConflictDiagnosticTests(unittest.TestCase):
+    def test_conflict_names_changed_entity_inputs(self) -> None:
+        from booksys_core.diagnostics import event, exception_details
+        from library.conflicts import ResultInputsChanged, verify
+        token = {'schema': 1, 'action': 'identify', 'refs': {}, 'claims': {},
+                 'media': False, 'entities': {'assets': ['a' * 64], 'origins': []}}
+        current = {**token, 'entities': {'assets': ['b' * 64], 'origins': []}}
+        with patch('library.conflicts.snapshot', return_value=({}, current)):
+            with self.assertRaises(ResultInputsChanged) as raised:
+                verify(Mock(), Mock(), token)
+        message = str(raised.exception)
+        prefix = 'Result conflict: relevant inputs changed ('
+        self.assertTrue(message.startswith(prefix))
+        self.assertLessEqual(len(message[len(prefix):-1]), 300)
+        self.assertIn('entities', message)
+        self.assertIn('assets', message)
+        self.assertIn('token-only=1:aaaaaaaaaaaa', message)
+        self.assertIn('current-only=1:bbbbbbbbbbbb', message)
+        self.assertNotIn('a' * 13, message)
+        self.assertNotIn('b' * 13, message)
+        details = exception_details(raised.exception)
+        self.assertEqual(details['detail'], message[:300])
+        self.assertEqual(event(service='library', stage='diagnostics', code='failed',
+                               **details)['detail'], message[:300])
+        self.assertNotIn('detail', exception_details(ValueError('private message')))
+        self.assertEqual(len(exception_details(ResultInputsChanged('x' * 400))['detail']), 300)
+
+
 @unittest.skipUnless(os.environ.get('BOOKSYS_TEST_PG_DSN_FILE'), 'isolated PostgreSQL required')
 class PostgreSQLStateTests(unittest.TestCase):
     def test_environment_deadline_sets_default_and_preserves_explicit_budget(self) -> None:
