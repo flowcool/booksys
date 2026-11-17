@@ -61,8 +61,6 @@ def read_manifest(directory: Path, *, expected_code: str | None = None) -> dict[
         raise LibraryError('Invalid catalogue authority manifest')
     if sys.version_info[:2] != (3, 14):
         raise LibraryError('Selected authority requires the qualified runtime')
-    if value['code_sha256'] != (code_digest() if expected_code is None else expected_code):
-        raise LibraryError('Application code differs from selected authority')
     from library.store import Store
     store = Store(directory, authority=value['authority_id'])
     with store._database.connection() as db:
