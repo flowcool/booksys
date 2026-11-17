@@ -56,9 +56,13 @@ def http_fetch(url: str) -> tuple[int, str]:
                                        'Accept': 'application/json,text/html'})
         # Network reads have finite socket timeouts so an unavailable peer cannot hold a worker forever.
         with build_opener(QualifiedRedirect).open(request, timeout=15) as response:
-            # Read at most 2 MiB of provider HTML or JSON.
-            body = response.read(2 * 1024 ** 2 + 1)
-            if len(body) > 2 * 1024 ** 2:
+            # Public letter indexes can exceed 2 MiB. Other pages keep that bound.
+            target = urlsplit(response.geturl())
+            limit = (8 if target.hostname == 'www.bedetheque.com' and
+                     re.fullmatch(r'/bandes_dessinees_[A-Z0]\.html', target.path)
+                     else 2) * 1024 ** 2
+            body = response.read(limit + 1)
+            if len(body) > limit:
                 raise LibraryError('Provider response exceeds limit')
             return response.status, body.decode('utf-8')
     except HTTPError as exc:
