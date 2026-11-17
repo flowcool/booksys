@@ -239,7 +239,7 @@ def main() -> None:
         worker()
         return
     transform = operation == 'transform'
-    cpu_limit = 1800 if transform and suffix == '.pdf' else 30
+    cpu_limit = 1800 if transform and suffix == '.pdf' else 240
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     output: dict[str, Any]
