@@ -1,5 +1,6 @@
 "Offline redirect pacing. No database or network."
 from pathlib import Path
+from io import BytesIO
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -8,6 +9,30 @@ import library.metadata as metadata
 from booksys_core.network_admission import BudgetWait
 
 class ProviderSpacingTests(unittest.TestCase):
+    def test_only_bedetheque_letter_indexes_have_a_larger_bounded_response(self):
+        from contextlib import closing
+        cases = [
+            ('https://www.bedetheque.com/bandes_dessinees_P.html', 3, True),
+            ('https://www.bedetheque.com/bandes_dessinees_0.html', 3, True),
+            ('https://www.bedetheque.com/bandes_dessinees_P.html', 8, False),
+            ('https://www.bedetheque.com/serie-1-Example.html', 3, False),
+            ('https://openlibrary.org/search.json', 3, False),
+        ]
+        for final_url, mib, accepted in cases:
+            with self.subTest(final_url=final_url, mib=mib):
+                body = b'x' * (mib * 1024 ** 2 + 1)
+                response = BytesIO(body)
+                response.status = 200
+                response.geturl = lambda: final_url
+                opener = SimpleNamespace(open=lambda *args, **kwargs: closing(response))
+                with patch.object(metadata, 'build_opener', return_value=opener):
+                    if accepted:
+                        self.assertEqual(metadata.http_fetch('https://www.bedetheque.com/bandes_dessinees_P.html'),
+                                         (200, body.decode()))
+                    else:
+                        with self.assertRaisesRegex(metadata.LibraryError, 'Provider response exceeds limit'):
+                            metadata.http_fetch('https://www.bedetheque.com/bandes_dessinees_P.html')
+
     def provider(self, *, requests=50):
         clock = SimpleNamespace(value=100.0, sleeps=[])
         def sleep(seconds):
