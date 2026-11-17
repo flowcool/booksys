@@ -24,3 +24,10 @@ Keep credentials and operational evidence outside Git.
 Organize classified copies by family, series and issue when supported.
 Keep missing metadata explicit. Preserve original files during later enrichment.
 Komga deployment and synchronization remain outside this scope.
+
+Bundle source sets and total expanded contents each have a 10 GB ceiling
+(10,000,000,000 bytes). Keep 1 GiB per child, 64 complete comics, 64 volumes
+and 256 entries, plus the existing CPU, memory, time and integrity checks.
+Policy comic-bundle-3 permits ordinary reinspection after earlier policy
+rejection. Retained comic-bundle-2 manifests remain readable under strict
+manifest and provenance verification. No schema conversion is required.

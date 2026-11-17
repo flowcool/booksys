@@ -19,10 +19,10 @@ import zipfile
 
 from library.primitives import LibraryError
 
-POLICY = 'comic-bundle-2'
-MAX_SOURCE = 4 * 1024**3
+POLICY = 'comic-bundle-3'
+MAX_SOURCE = 10_000_000_000
 MAX_CHILD = 1024**3
-MAX_TOTAL = 4 * 1024**3
+MAX_TOTAL = 10_000_000_000
 MAX_COMICS = 64
 MAX_ENTRIES = 256
 

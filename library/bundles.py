@@ -31,7 +31,7 @@ def verify_directory(directory: Path, parent_hash: str) -> dict[str, Any]:
         raise LibraryError('Symlink bundle manifest')
     manifest_time = manifest.stat().st_mtime_ns          # a child written before the manifest and unchanged is not hashed again
     value = yaml.safe_load(manifest.read_text())
-    if (not isinstance(value, dict) or value.get('schema') != 1 or (value.get('policy') != POLICY and not (value.get('policy') == 'comic-bundle-1' and not value.get('source_parts')))
+    if (not isinstance(value, dict) or value.get('schema') != 1 or (value.get('policy') not in (POLICY, 'comic-bundle-2') and not (value.get('policy') == 'comic-bundle-1' and not value.get('source_parts')))
             or value.get('parent_sha256') != parent_hash or not isinstance(value.get('members'), list)
             or not 1 <= len(value['members']) <= 256):
         raise LibraryError('Invalid retained bundle manifest')
@@ -111,7 +111,7 @@ def retain(source: Path, state_dir: Path, *, stable_seconds: float = 2,
         return known
     before = stamps[0]
     if not 0 < sum(stamp[2] for stamp in stamps) <= MAX_SOURCE:
-        raise LibraryError('Bundle source limit: 4 GiB source set maximum')
+        raise LibraryError('Bundle source limit: 10 GB source set maximum')
     if not parts and re.search(r'(?:^|[ ._-])(?:part|pt)[ ._-]?\d+(?:[ ._-]|$)', source.name, re.I):
         raise LibraryError('Unsupported multipart name; a tracked complete volume set is required')
     time.sleep(stable_seconds)

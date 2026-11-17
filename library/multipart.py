@@ -36,7 +36,7 @@ def receive_parts(state: dict[str, Any], directory: Any, root: Any, source: str,
                 raise LibraryError('Missing part: finished tracked volume is absent')
             stamps = [list(fingerprint(path)) for path in paths]
             if any(stamp[2] <= 0 for stamp in stamps) or sum(stamp[2] for stamp in stamps) > MAX_SOURCE:
-                raise LibraryError('Bundle source limit: 4 GiB source set maximum')
+                raise LibraryError('Bundle source limit: 10 GB source set maximum')
             records = [{'path': str(path.relative_to(root)), 'fid': member['fid'],
                         'sha256': sha256(path), 'fingerprint': stamp,
                         'url': member['url']} for member,path,stamp in zip(members,paths,stamps)]

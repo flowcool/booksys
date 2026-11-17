@@ -95,7 +95,80 @@ class BundleTests(unittest.TestCase):
             root = Path(folder); (root / 'reception').mkdir()
             parent = root / 'reception/oversized.rar'
             with parent.open('wb') as handle:
-                handle.truncate(4 * 1024**3 + 1)
+                handle.truncate(10_000_000_000 + 1)
             with self.assertRaisesRegex(LibraryError, 'source limit'):
                 retain(parent, root / 'state', stable_seconds=.01)
             self.assertFalse((root / 'state').exists())
+
+    def test_decimal_ten_gb_boundaries_preserve_child_limits_and_old_manifests(self):
+        from unittest.mock import MagicMock, patch
+        from library import bundle_worker, bundles, multipart
+
+        class ReachedContent(Exception):
+            pass
+
+        self.assertEqual((bundle_worker.MAX_SOURCE, bundle_worker.MAX_TOTAL),
+                         (10_000_000_000, 10_000_000_000))
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / 'bundle.zip'
+            # Sparse input: exercise the real pre-read bound without allocating
+            # or hashing ten gigabytes, or invoking a decoder.
+            with source.open('wb') as handle:
+                handle.truncate(10_000_000_000)
+            with patch('library.bundles.sha256', side_effect=ReachedContent):
+                with self.assertRaises(ReachedContent):
+                    bundles.retain(source, root / 'state', stable_seconds=0)
+            parts = [root / f'A.part{i}.rar' for i in (1, 2)]
+            links = []
+            for i, part in enumerate(parts, 1):
+                with part.open('wb') as handle:
+                    handle.truncate(5_000_000_000)
+                links.append(dict(fid=i, name=part.name, status=0, url=f'https://h.test/{i}'))
+            with patch('library.readers.sha256', side_effect=ReachedContent):
+                with self.assertRaises(ReachedContent):
+                    multipart.receive_parts({'origins': {}}, root / 'state', root,
+                        SOURCE, dict(pid=1, folder='.', links=links), {}, 0, save=lambda: None)
+            with parts[-1].open('ab') as handle:
+                handle.write(b'x')
+            state = {'origins': {}}
+            with patch('library.readers.sha256', side_effect=AssertionError('Read oversized set')):
+                multipart.receive_parts(state, root / 'state', root, SOURCE,
+                    dict(pid=1, folder='.', links=links), {}, 0, save=lambda: None)
+            self.assertIn('10 GB', next(iter(state['origins'].values()))['reason'])
+
+            with zipfile.ZipFile(source, 'w') as archive:
+                archive.writestr('small.cbz', comic())
+            for total in (10_000_000_000, 10_000_000_001):
+                members = []
+                remaining = total
+                while remaining:
+                    member = zipfile.ZipInfo(f'{len(members)}.cbz')
+                    member.file_size = min(remaining, 1024**3)
+                    remaining -= member.file_size
+                    members.append(member)
+                archive = MagicMock()
+                archive.infolist.return_value = members
+                archive.open.side_effect = ReachedContent
+                with patch('library.bundle_worker.zipfile.ZipFile') as opened:
+                    opened.return_value.__enter__.return_value = archive
+                    error = ReachedContent if total == 10_000_000_000 else LibraryError
+                    with self.assertRaises(error) as caught:
+                        bundle_worker.extract(source, root)
+                    if total > 10_000_000_000:
+                        self.assertIn('expansion limit', str(caught.exception))
+                        archive.open.assert_not_called()
+
+            retained = root / 'retained'
+            retained.mkdir()
+            child = retained / (bundles.digest_name('A.cbz') + '.cbz')
+            child.write_bytes(comic())
+            from library.readers import sha256
+            import yaml
+            manifest = dict(schema=1, policy='comic-bundle-2', parent_sha256='a'*64,
+                expanded_size=child.stat().st_size, members=[dict(member='A.cbz',
+                file=child.name, size=child.stat().st_size, kind='comic', sha256=sha256(child))])
+            (retained / 'manifest.yaml').write_text(yaml.safe_dump(manifest))
+            self.assertEqual(bundles.verify_directory(retained, 'a'*64), manifest)
+            self.assertEqual((bundle_worker.MAX_CHILD, bundle_worker.MAX_COMICS,
+                              bundle_worker.MAX_ENTRIES), (1024**3, 64, 256))
