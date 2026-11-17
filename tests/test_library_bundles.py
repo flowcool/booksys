@@ -35,12 +35,16 @@ def inputs(root, members):
 class BundleTests(unittest.TestCase):
 
     def test_retained_bundle_survives_native_package_absence_without_weakening_source_proof(self):
+        from unittest.mock import patch
         from library.origins import resolve_asset
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             reception, parent, captured, journal, queue = inputs(root, [('valid.cbz', comic())])
             store = create_catalog(self, root / 'state')
-            state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
+            work = root / 'decoder-work'
+            work.mkdir()
+            with patch('library.decode.WORK_ROOT', str(work)):
+                state = receive(store, reception, captured, journal, queue, stable_seconds=.01)
             asset = next(iter(state['assets']))
             child = state['origins'][state['assets'][asset]['origins'][0]]
             parent_id = child['parent_origin']
