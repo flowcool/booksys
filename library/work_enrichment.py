@@ -55,7 +55,8 @@ class FrenchSource:
 
 
 def enrich_work(state: dict[str, Any], key: str, providers: Any,
-                extra: list[dict[str, Any]] | None = None) -> None:
+                extra: list[dict[str, Any]] | None = None, *, discovery: bool = True,
+                hydrate: bool = False) -> None:
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
     queries: list[str] = []
@@ -78,7 +79,20 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     attempts = []
     source = FrenchSource(providers)
     truncated = False
-    for query in queries:
+    # Local index rows carry identity only. Enrich the concordant exact pages
+    # before returning, without another series search. An outage leaves fields
+    # unknown and records the existing provider retry event.
+    candidates.extend(extra or [])
+    if hydrate:
+        local_result = evaluate_work(printed_concordance(evidence, asset, candidates), candidates)
+        if local_result['status'] == 'identified':
+            for row in local_result['concordant_candidates'][:3]:
+                response = source.get(row['url'])
+                attempts.append({'url': row['url'], 'status': response.status, 'reason': response.reason})
+                if response.status == 'ok':
+                    candidates.extend(item.to_match_candidate() for item in
+                        parse_album_editions(response.body, row['url'], response.retrieved_at))
+    for query in queries if discovery else []:
         try:
             if query not in cache:
                 cache[query] = discover(source, query)
@@ -111,7 +125,6 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
         except LibraryError as exc:
             attempts.append({'status': 'unexpected_response', 'reason': str(exc)})
             truncated = True
-    candidates.extend(extra or [])
     candidates = list({(row.get('source'), row.get('edition_ref')): row for row in candidates}.values())
     evidence = printed_concordance(evidence, asset, candidates)
     evidence['discovery_truncated'] = truncated
