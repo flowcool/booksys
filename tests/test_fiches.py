@@ -16,6 +16,14 @@ HTML = """<h1>Example</h1><div itemprop="mainEntity">
 <p itemprop="abstract">A description.<br>Second paragraph &lt;script&gt;.</p></div>"""
 JPEG = b"\xff\xd8\xff" + b"example"
 
+def test_write_fiche_rejects_package_folder_name_too_long(tmp_path):
+    import pytest
+    record = {"title": "Example", "page": extract_page(HTML, SOURCE), "downloads": {}}
+    package = {"folder": "a" * 300, "pid": 1, "links": []}
+    with pytest.raises(CollectionError, match="pyLoad package folder name too long"):
+        write_fiche(SOURCE, record, package, tmp_path, None)
+
+
 class FicheTests(unittest.TestCase):
     def test_real_page_structure_preserves_description_and_local_cover(self):
         page = extract_page(HTML, SOURCE)

@@ -711,6 +711,7 @@ class Store:
                      due_at: datetime | None, proof: str, source_progress: SourceProgress | None) -> None:
         """End a work_items claim inside the commit transaction (same rules as StageTasks._finish)."""
         from datetime import timedelta
+        from library.work_items import retry_delay
         work, claimed = work_claim
         if outcome not in ('done', 'retry', 'uncertain', 'defer'):
             raise LibraryError('Unknown task outcome')
@@ -734,7 +735,7 @@ class Store:
             done = work.finish_in(db, claimed, 'waiting', detail='defer', now=now, reason='deferred',
                                   next_at=due_at or now + timedelta(seconds=30), refund=True)
         else:   # 'retry' and 'uncertain' retry alike: a step reads the external system again before it acts
-            done = work.retry_in(db, claimed, proof[:100] or outcome, timedelta(seconds=300 if claimed.attempts == 1 else 900), now=now)
+            done = work.retry_in(db, claimed, proof[:100] or outcome, retry_delay(claimed.attempts), now=now)
         if not done:
             raise LibraryError('Stale or inactive task result')
 

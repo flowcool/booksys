@@ -14,7 +14,7 @@ from booksys_core.network_admission import before_native_write
 from library.stage_model import Change, Obligation, StepResult, Task, instant
 
 from library.stage_tasks import StageTasks
-from library.work_items import Item, WorkItems
+from library.work_items import Item, WorkItems, retry_delay
 
 # A prerequisite that only another stage can satisfy will not change within 30 s (same table as StageActor).
 WAIT_BACKOFF = {'retirement_prerequisites': 600, 'native_package_unavailable': 300, 'routing_prerequisites': 120}
@@ -118,7 +118,7 @@ class WorkActor:
                 return reason
             return self._run(item, task, now=self._now(now))
         except Exception as exc:
-            self.work.retry(item, f'{type(exc).__name__}: {str(exc)[:200]}', timedelta(seconds=300 if item.attempts == 1 else 900), now=self._now(now))
+            self.work.retry(item, f'{type(exc).__name__}: {str(exc)[:200]}', retry_delay(item.attempts), now=self._now(now))
             self.report('failed', item=item, **exception_details(exc))
             return 'retry'
 

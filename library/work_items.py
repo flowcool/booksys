@@ -71,6 +71,10 @@ class Item:
     ready_at: datetime
 
 
+def retry_delay(attempts: int) -> timedelta:
+    return timedelta(seconds=min(300 * 3 ** (max(1, attempts) - 1), 3600))
+
+
 def _instant(value: datetime | None) -> datetime:
     value = value or datetime.now(timezone.utc)
     if value.tzinfo is None:

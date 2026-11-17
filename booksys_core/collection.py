@@ -235,7 +235,7 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
                         records[source] = record
                     try:
                         downloader.submit(source, record, journal, directory / 'monitor.yaml')
-                    except CollectionError:
+                    except (CollectionError, OSError):
                         from booksys_core.diagnostics import emit
                         from booksys_core.values import digest
                         emit(service='collector', stage='collection', code='failed', reason='unknown_effect',
