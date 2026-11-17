@@ -85,6 +85,8 @@ class Providers:
         self._cache=ProviderCache(shared or (self.admission.path.parent if self.admission else cache.parent),str(cache.absolute()))
         self.last_request = 0.0
         self.events: list[dict[str, Any]] = []
+        from library.bdnex import configured_client
+        self.bdnex = configured_client()
 
     def get(self, url: str) -> dict[str, Any]:
         if self.shared is None:
@@ -299,11 +301,38 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
     state = store.result_set('identify', {'assets': [asset_id]})
     asset = state['assets'][asset_id]
     from library.work_enrichment import enrich_work
-    enrich_work(state, asset_id, providers)
+    local_candidates = []
+    client = getattr(providers, 'bdnex', None)
+    if (asset.get('work_result', {}).get('status') == 'identified'
+            and asset.get('bdnex', {}).get('status') == 'ok'):
+        # Retry enrichment from retained proposals without querying BDneX again.
+        # Re-evaluate against current asset evidence before retaining identity.
+        local_candidates = asset['bdnex']['candidates']
+        enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True)
+        if asset['work_result']['status'] == 'identified' and not references:
+            return state
+        local_candidates = asset['work_result']['candidates']
+    if client is not None and asset.get('work_result', {}).get('status') != 'identified':
+        from library.bdnex import inputs_for
+        inputs = inputs_for(state, asset_id)
+        if inputs:
+            response = client.match(asset_id, inputs)
+            asset['bdnex'] = response
+            if response['status'] == 'ok':
+                local_candidates = response['candidates']
+                enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True)
+                if asset['work_result']['status'] == 'identified' and not references:
+                    return state
+                # Exact-page assertions replace sparse sitemap rows even when
+                # they contradict the proposal. Fallback must not resurrect it.
+                local_candidates = asset['work_result']['candidates']
+            else:
+                providers.events.append({**response, 'retrieved_at': now()})
+    enrich_work(state, asset_id, providers, local_candidates)
     if asset['work_result']['status'] == 'identified' and not references:
         return state
     # All external work happens on the snapshot, outside catalogue locks.
-    candidates = []
+    candidates = list(local_candidates)
     for provider, ref in references:
         response = providers.source(provider, ref)
         add_assertions(asset, response)

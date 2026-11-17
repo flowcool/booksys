@@ -70,15 +70,18 @@ class BusinessStages:
             from library.metadata import prepare_enrichment
             state = prepare_enrichment(self.catalog, task.entity, self.providers, [])
             asset = state['assets'][task.entity]
+            events = [event for event in self.providers.events[start:]
+                      if not (event.get('dependency') == 'bdnex'
+                              and asset.get('work_result', {}).get('status') == 'identified')]
             temporary = any(event.get('status') == 'unavailable' and (event.get('http_status', 0) == 429
                 or event.get('http_status', 0) >= 500 or 'reason' in event and event['reason'] != 'Request budget exhausted')
-                for event in self.providers.events[start:])
-            deferred = any(event.get('reason') == 'Request budget exhausted' for event in self.providers.events[start:])
+                for event in events)
+            deferred = any(event.get('reason') == 'Request budget exhausted' for event in events)
             outcome = 'defer' if deferred else 'retry' if temporary else 'done'
             asset['stage_metadata'] = {'evidence': evidence_version(asset), 'at': instant(now),
                                       'evaluation': task.input_revision, 'outcome': outcome, 'method': task.method}
             failures = {str(event['dependency']): datetime.fromisoformat(event['retrieved_at']).timestamp()
-                        for event in self.providers.events[start:] if event.get('status') == 'unavailable'
+                        for event in events if event.get('status') == 'unavailable'
                         and (event.get('http_status', 0) == 429 or event.get('http_status', 0) >= 500 or 'reason' in event)
                         and event.get('dependency') and event.get('retrieved_at')}
             if failures:

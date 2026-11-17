@@ -1,0 +1,13 @@
+# Infra supplies the image built from upstream commit 9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33.
+# Use a registry digest, or a local tag verified against the recorded image ID.
+ARG BDNEX_IMAGE=booksys-bdnex-upstream:9de29a73
+FROM ${BDNEX_IMAGE}
+WORKDIR /opt/booksys-bdnex
+COPY library/__init__.py library/bdnex_protocol.py ./library/
+COPY bdnex_service ./bdnex_service/
+RUN python -c 'from importlib.metadata import version; assert version("bdnex") == "0.10.0"'
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 1000:1000
+EXPOSE 8766
+ENTRYPOINT ["python", "-m", "bdnex_service"]
+CMD ["serve"]

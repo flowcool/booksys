@@ -26,3 +26,7 @@ booksys_core/__pycache__/
 !THIRD_PARTY_NOTICES.md
 !third_party/
 !third_party/**
+
+!bdnex_service/
+!bdnex_service/**
+bdnex_service/__pycache__/
