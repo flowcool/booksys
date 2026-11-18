@@ -3,7 +3,9 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
+from functools import lru_cache
 from datetime import datetime, timezone
 from collections.abc import Callable
 from pathlib import Path
@@ -29,6 +31,21 @@ CRAWL_PAGES = int(os.environ.get('BOOKSYS_CRAWL_PAGES', '5'))
 
 class PassBudgetReached(Exception):
     """A continuation, raised before an external request starts."""
+
+
+@lru_cache(maxsize=None)
+def _browser_pass_timeout(configured: int, delay: float, max_seconds: float) -> int:
+    # Keep 35 s for native/cover work, 30 s for a cached HTTP attempt,
+    # 20 s for the Byparr transport margin and both browser spacing delays.
+    limit = int(max_seconds - 35 - 30 - 20 - 2 * delay)
+    if limit < 1:
+        raise CollectionError('Collection pass budget cannot fit one browser request')
+    timeout = min(configured, limit)
+    if timeout < configured:
+        logging.getLogger(__name__).warning(
+            'Collection browser timeout clamped from %s s to %s s for a %s s pass',
+            configured, timeout, max_seconds)
+    return timeout
 
 
 def collect(categories: list[str], fetch: Callable[[str], str], directory: Path,
@@ -195,7 +212,9 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
     if CRAWL_PAGES < 1 or max_seconds <= 0 or max_items < 1:
         raise CollectionError('Invalid collection pass limits')
     started = monotonic()
-    browser_seconds = float(fetch.timeout) + fetch.delay + 20 if isinstance(fetch, Byparr) else 142
+    configured_timeout = fetch.timeout if isinstance(fetch, Byparr) else None
+    browser_timeout = _browser_pass_timeout(fetch.timeout, fetch.delay, max_seconds) if isinstance(fetch, Byparr) else None
+    browser_seconds = browser_timeout + 2 * fetch.delay + 50 if isinstance(fetch, Byparr) and browser_timeout is not None else 142
     if browser_seconds + 35 > max_seconds:
         raise CollectionError('Browser request timeout exceeds the collection pass budget')
     def reserve(seconds: float) -> None:
@@ -235,6 +254,8 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
         token = REQUEST_GUARD.set(lambda: reserve(35))
         try:
             if isinstance(fetch, Byparr):
+                if browser_timeout is not None:
+                    fetch.timeout = browser_timeout
                 downloader.fetch_image = bounded_cover
             if shutil.disk_usage(directory).free < minimum_free:
                 raise CollectionError('Free disk reserve reached; submissions stopped')
@@ -328,4 +349,6 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
         finally:
             REQUEST_GUARD.reset(token)
             downloader.fetch_image = previous_image
+            if isinstance(fetch, Byparr) and configured_timeout is not None:
+                fetch.timeout = configured_timeout
             export_links(records, directory)
