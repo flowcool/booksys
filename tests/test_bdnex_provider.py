@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import threading
+import time
 import unittest
 from http.server import HTTPServer
 from typing import Any
+from unittest.mock import patch
 
 from library.bdnex import BDneXClient
 from bdnex_service.server import handler
@@ -14,6 +16,71 @@ from library.work_identity import evaluate_work
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_invalid_logical_path_does_not_block_the_next_asset(self) -> None:
+        received: list[dict[str, Any]] = []
+
+        def match(request: dict[str, Any]) -> dict[str, Any]:
+            received.append(request)
+            return {'index': 'b'*64, 'candidates': []}
+
+        server = HTTPServer(('127.0.0.1', 0), handler('test-secret', match))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        for path in ('Nains\\Redwin.cbz', 'Nains/Redwin\n.cbz', 'Nains//Redwin.cbz', 'x'*1025):
+            with self.subTest(path=repr(path)):
+                client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
+                result = client.match('a'*64, [{'path': path, 'embedded': {}}])
+                self.assertEqual(result, {'status': 'unavailable', 'reason': 'BDneX request invalid',
+                                          'dependency': 'bdnex'})
+                self.assertEqual(client.retry_at, 0)
+                before = len(received)
+                self.assertEqual(client.match('c'*64, [{'path': 'Redwin.cbz', 'embedded': {}}])['status'], 'ok')
+                self.assertEqual(len(received), before + 1)
+
+    def test_transport_error_keeps_the_cooldown(self) -> None:
+        client = BDneXClient('http://127.0.0.1:1', 'test-secret')
+        inputs = [{'path': 'Redwin.cbz', 'embedded': {}}]
+        with patch('library.bdnex.build_opener') as opener:
+            opener.return_value.open.side_effect = TimeoutError('Timed out')
+            before = time.monotonic()
+            self.assertEqual(client.match('a'*64, inputs), {
+                'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'})
+            self.assertGreaterEqual(client.retry_at, before + 60)
+            self.assertEqual(client.match('c'*64, inputs), {
+                'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'})
+            opener.return_value.open.assert_called_once()
+
+    def test_http_400_does_not_cool_down_but_http_401_does(self) -> None:
+        received: list[dict[str, Any]] = []
+
+        def match(request: dict[str, Any]) -> dict[str, Any]:
+            received.append(request)
+            if len(received) == 1:
+                raise ValueError('Bad input')
+            return {'index': 'b'*64, 'candidates': []}
+
+        server = HTTPServer(('127.0.0.1', 0), handler('test-secret', match))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        inputs = [{'path': 'Redwin.cbz', 'embedded': {}}]
+        client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
+        self.assertEqual(client.match('a'*64, inputs), {
+            'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'})
+        self.assertEqual(client.retry_at, 0)
+        self.assertEqual(client.match('c'*64, inputs)['status'], 'ok')
+        self.assertEqual(len(received), 2)
+        denied = BDneXClient(client.endpoint, 'wrong')
+        before = time.monotonic()
+        self.assertEqual(denied.match('a'*64, inputs), {
+            'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'})
+        self.assertGreaterEqual(denied.retry_at, before + 60)
+        with patch('library.bdnex.build_opener') as opener:
+            self.assertEqual(denied.match('c'*64, inputs), {
+                'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'})
+            opener.assert_not_called()
+
     def test_logical_name_and_embedded_hints_round_trip_without_archive_access(self) -> None:
         received: list[dict[str, Any]] = []
 
