@@ -68,6 +68,7 @@ class NameTests(unittest.TestCase):
 
     def test_release_underscore_and_colon_labels(self):
         cases = [
+            ('Neon.Genesis.Evangelion_Anima_01.cbz', 'Neon Genesis Evangelion Anima', '1'),
             ('Neon.Genesis.Evangelion.T06.FRENCH.RETAiL.COMiC.iNTERNAL.eBook-PRiNTER', 'Neon Genesis Evangelion', '6'),
             ('Griffe.Blanche.T01.L.oeuf.du.Dragon.Roi.2013.FRENCH.HYBRiD.COMiC.CBZ', 'Griffe Blanche', '1'),
             ('zzLe.Depisteur.T01.La.Tondue', 'Le Depisteur', '1'),

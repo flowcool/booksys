@@ -46,8 +46,6 @@ def parse_name(value: str) -> dict[str, Any]:
     explicit_issue = match is not None
     if not match:
         match = re.fullmatch(r'(.+?)\s+(?:[-–]\s+)?(?:T(?:ome)?|Vol(?:ume)?)\.?\s*(\d{1,3})(?:\s+[-–]\s+(.+)|:.*' + (r'|\s+.*' if dotted else '') + r')?', name, re.I)
-    if not match and dotted:
-        return {}
     if not match:
         match = re.fullmatch(r'(.+?)\s+[-–]\s+(\d{1,3})(?:\s+[-–]\s+(.+))?', name)
     if not match and encoded:

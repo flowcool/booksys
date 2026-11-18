@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 import hashlib
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
 import xml.etree.ElementTree as ET
@@ -113,7 +114,8 @@ class Engine:
                 _hints.reset(token)
             for match in matches:
                 if match.score < MIN_SCORE:
-                    words = set(query_tokens(query_from_filename(item['path']))[0])
+                    series = re.split(r'\b\d{1,3}\b', query_from_filename(item['path']), maxsplit=1)[0]
+                    words = set(query_tokens(series)[0])
                     if (match.score < MIN_AGREEING_SCORE
                             or match.candidate.volume not in volumes_for(item['path'])
                             or not words or not words <= set(match.candidate.name.split())):

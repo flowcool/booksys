@@ -1,12 +1,15 @@
 """Private recognition protocol and Booksys identity decisions; no live services."""
 from __future__ import annotations
 
+import json
 import threading
 import time
 import unittest
 from http.server import HTTPServer
 from typing import Any
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from library.bdnex import BDneXClient
 from bdnex_service.server import handler
@@ -56,8 +59,6 @@ class ProtocolTests(unittest.TestCase):
 
         def match(request: dict[str, Any]) -> dict[str, Any]:
             received.append(request)
-            if len(received) == 1:
-                raise ValueError('Bad input')
             return {'index': 'b'*64, 'candidates': []}
 
         server = HTTPServer(('127.0.0.1', 0), handler('test-secret', match))
@@ -66,11 +67,14 @@ class ProtocolTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         inputs = [{'path': 'Redwin.cbz', 'embedded': {}}]
         client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
-        self.assertEqual(client.match('a'*64, inputs), {
-            'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'})
+        # Bypass only client validation so the handler receives an invalid path.
+        with patch('library.bdnex.validate_request', side_effect=lambda value: value):
+            self.assertEqual(client.match('a'*64, [{'path': 'Nains//Redwin.cbz', 'embedded': {}}]), {
+                'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'})
+        self.assertEqual(received, [])
         self.assertEqual(client.retry_at, 0)
         self.assertEqual(client.match('c'*64, inputs)['status'], 'ok')
-        self.assertEqual(len(received), 2)
+        self.assertEqual(len(received), 1)
         denied = BDneXClient(client.endpoint, 'wrong')
         before = time.monotonic()
         self.assertEqual(denied.match('a'*64, inputs), {
@@ -80,6 +84,38 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(denied.match('c'*64, inputs), {
                 'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'})
             opener.assert_not_called()
+
+    def test_invalid_engine_score_returns_503_and_cools_down(self) -> None:
+        received: list[dict[str, Any]] = []
+
+        def match(request: dict[str, Any]) -> dict[str, Any]:
+            received.append(request)
+            return {'index': 'b'*64, 'candidates': [{'source': 'bedetheque',
+                'edition_ref': '245127', 'url': 'https://www.bedetheque.com/BD-Nains-245127.html',
+                'title': 'Redwin de la Forge', 'score': 101}]}
+
+        server = HTTPServer(('127.0.0.1', 0), handler('test-secret', match))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
+        inputs = [{'path': 'Redwin.cbz', 'embedded': {}}]
+        request = Request(client.endpoint + '/v1/match',
+            data=json.dumps({'schema': 1, 'asset': 'a'*64, 'inputs': inputs}).encode(),
+            headers={'Authorization': 'Bearer test-secret', 'Content-Type': 'application/json'})
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=5)
+        self.assertEqual(caught.exception.code, 503)
+        caught.exception.close()
+        before = time.monotonic()
+        self.assertEqual(client.match('a'*64, inputs), {
+            'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'})
+        self.assertGreaterEqual(client.retry_at, before + 60)
+        with patch('library.bdnex.build_opener') as opener:
+            self.assertEqual(client.match('c'*64, inputs), {
+                'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'})
+            opener.assert_not_called()
+        self.assertEqual(len(received), 2)
 
     def test_logical_name_and_embedded_hints_round_trip_without_archive_access(self) -> None:
         received: list[dict[str, Any]] = []

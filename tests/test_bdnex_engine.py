@@ -63,10 +63,12 @@ class EngineTests(unittest.TestCase):
             cache.cache_put('bedetheque', 'sitemap', urls[1], b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
             cache.close()
             engine = Engine(path)
-            candidates = engine.match({'inputs': [{'path': 'Akim - 296.cbz', 'embedded': {}}]})['candidates']
-            self.assertEqual([c['edition_ref'] for c in candidates], ['900296'])
-            self.assertGreaterEqual(candidates[0]['score'], 60)
-            self.assertLess(candidates[0]['score'], 70)
+            for name in ('Akim - 296.cbz', 'Akim - 296 - ScanPersonnel.cbz'):
+                with self.subTest(name=name):
+                    candidates = engine.match({'inputs': [{'path': name, 'embedded': {}}]})['candidates']
+                    self.assertEqual([c['edition_ref'] for c in candidates], ['900296'])
+                    self.assertGreaterEqual(candidates[0]['score'], 60)
+                    self.assertLess(candidates[0]['score'], 70)
             for name in ('Akim - 295.cbz', 'Akim.cbz', 'Akim unknown - 296.cbz'):
                 self.assertEqual(engine.match({'inputs': [{'path': name, 'embedded': {}}]})['candidates'], [])
 
