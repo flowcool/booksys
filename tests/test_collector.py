@@ -35,6 +35,70 @@ def captured(url):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_large_configured_browser_budget_runs_bounded_passes_and_resumes(self):
+        from booksys_core.collection import run_once
+        for warm_session in (False, True):
+            with self.subTest(warm_session=warm_session), \
+                    patch.dict(os.environ, BOOKSYS_BYPARR_BUDGET='300'), \
+                    tempfile.TemporaryDirectory() as directory:
+                browser = Byparr('http://byparr/v1', timeout=int(os.environ['BOOKSYS_BYPARR_BUDGET']))
+                if warm_session:
+                    browser.session = {'cookies': [{'name': 'session', 'value': 'synthetic'}],
+                                       'userAgent': 'synthetic'}
+                elapsed, submitted, requests = [0.0], [], []
+                journal = {'categories': {}, 'submissions': {}}
+                store = Mock()
+                store.monitor.return_value = journal
+                store.schedule.return_value = {}
+                store.captured.return_value = {'items': {
+                    source: {'title': 'Synthetic', 'complete_hosters': ['*'], 'downloads': {}}
+                    for source in (FIRST, SECOND)}}
+                store.category.side_effect = lambda source, value: journal['categories'].__setitem__(source, value)
+                downloader = Mock()
+                def status(*args):
+                    elapsed[0] += 30
+                    return {'pause': False, 'download': True}
+                def submit(source, *args):
+                    elapsed[0] += 30
+                    self.assertNotIn(source, submitted)
+                    submitted.append(source)
+                    journal['submissions'][source] = {'status': 'queued', 'package_id': len(submitted)}
+                def transport(request, *, timeout):
+                    elapsed[0] += timeout
+                    if request.full_url != browser.endpoint:
+                        raise TimeoutError('Synthetic cached session failure')
+                    requests.append(json.loads(request.data))
+                    response = Mock()
+                    response.read.return_value = json.dumps({'status': 'ok', 'solution': {
+                        'status': 200, 'url': DEFAULT_CATEGORY,
+                        'response': '<h1>Catalogue</h1><div class="bys-items-container">'
+                                    f'<a class="bys-item" href="{FIRST}">First</a>'
+                                    f'<a class="bys-item" href="{SECOND}">Second</a></div>'}}).encode()
+                    response.__enter__ = Mock(return_value=response)
+                    response.__exit__ = Mock(return_value=False)
+                    return response
+                downloader.call.side_effect = status
+                downloader.submit.side_effect = submit
+                with patch('booksys_core.collection.CollectorState', return_value=store), \
+                        patch('booksys_core.scheduler.CollectorState', return_value=store), \
+                        patch('booksys_core.collection.CRAWL_PAGES', 1), \
+                        patch('booksys_core.browser.urlopen', side_effect=transport), \
+                        patch('booksys_core.browser.time.sleep', side_effect=lambda _: elapsed.__setitem__(0, elapsed[0] + 2)):
+                    for _ in range(4):
+                        elapsed[0] = 0
+                        result = run_once(Path(directory), browser, downloader, monotonic=lambda: elapsed[0])
+                        self.assertLessEqual(elapsed[0], 210)
+                        self.assertEqual(browser.timeout, 300, 'The configured budget must survive the pass')
+                        if not result.get('continued'):
+                            break
+                    else:
+                        self.fail('Bounded passes did not finish')
+                self.assertEqual(result['pages'], 0, 'Resume must use the retained catalogue page')
+                self.assertEqual(submitted, [FIRST, SECOND])
+                self.assertEqual(len(requests), 1)
+                self.assertLess(requests[0]['maxTimeout'], 300000)
+                self.assertNotIn('continuation', journal['categories'][DEFAULT_CATEGORY])
+
     def test_pass_budget_after_native_write_reconciles_without_a_second_submission(self):
         from booksys_core.collection import run_once
         from booksys_core.downloader import Pyload

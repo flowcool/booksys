@@ -1,5 +1,5 @@
 """Native bounded stage adapters keep exact source and package ownership."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -18,6 +18,43 @@ AT = datetime(2026, 11, 9, tzinfo=timezone.utc)
 SOURCE = 'https://www.bookys-ebooks.com/123-album'
 
 class NativeStageTests(unittest.TestCase):
+    def test_collection_method_change_rearms_exhausted_task_on_source_rescan(self):
+        from library.stage_model import METHODS
+        from library.work_items import WorkItems
+        old_method = 'collection-step-v2-bounded'
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, BOOKSYS_WORK_STAGES='collection'):
+            root = Path(directory)
+            store = create_store(self, root, empty())
+            WorkItems.upgrade(store._database)
+            state = CollectorState(root)
+            state.category('https://www.bookys-ebooks.com/category', {'deep_page': 6})
+            tasks = StageTasks(store, policy=SourcePolicy(root/'task-policy.yaml', store=store))
+            work = WorkItems(store._database, max_attempts={'collection': 3})
+            self.addCleanup(work.close)
+            at = AT
+            with patch.dict(METHODS, collection=old_method):
+                self.assertFalse(tasks.scan('collection', root/'monitor.yaml', now=at).blocked)
+                for attempt in range(1, 4):
+                    exhausted = work.claim('collection', 'old-release', now=at)
+                    self.assertIsNotNone(exhausted)
+                    self.assertEqual(exhausted.attempts, attempt)
+                    work.retry(exhausted, 'CollectionError: Browser request timeout exceeds the collection pass budget',
+                               timedelta(minutes=5), now=at)
+                    at += timedelta(minutes=5)
+                self.assertEqual(work.counts('collection'), {'collection': {'failed': 1}})
+                work.close()  # A restart and elapsed time must not reset the allowance.
+                self.assertFalse(tasks.scan('collection', root/'monitor.yaml', now=at).blocked)
+                self.assertIsNone(work.claim('collection', 'same-release', now=at))
+            self.assertFalse(tasks.scan('collection', root/'monitor.yaml', now=at).blocked)
+            rearmed = work.claim('collection', 'fixed-release', now=at)
+            self.assertIsNotNone(rearmed, 'The fixed collection method must re-arm the exhausted task')
+            self.assertEqual((rearmed.item, rearmed.input_rev), (exhausted.item, exhausted.input_rev))
+            self.assertNotEqual(rearmed.method, old_method)
+            self.assertEqual(rearmed.attempts, 1)
+            work.done(rearmed, now=at)
+            self.assertFalse(tasks.scan('collection', root/'monitor.yaml', now=at).blocked)
+            self.assertIsNone(work.claim('collection', 'fixed-release', now=at))
+
     def test_collection_continuation_commits_with_claim_and_resumes_without_duplicates(self):
         from unittest.mock import Mock
         from library.work_items import WorkItems
