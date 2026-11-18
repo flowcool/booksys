@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-SLICES = ("worker", "library", "byparr")
+SLICES = ("worker", "library", "byparr", "bdnex")
 SHA = re.compile(r"[0-9a-f]{40,64}\Z")
 
 
@@ -45,12 +45,16 @@ def scope(paths: list[str] | None) -> dict[str, bool]:
         return dict.fromkeys(SLICES, True)
     selected = dict.fromkeys(SLICES, False)
     for path in paths:
+        if path in ("library/__init__.py", "library/bdnex_protocol.py"):
+            selected["bdnex"] = True
         if path == "Dockerfile":
             selected["worker"] = True
         elif path == "Dockerfile.library" or path.startswith("library/"):
             selected["library"] = True
             if path.startswith("library/"):
                 selected["worker"] = True
+        elif path == "Dockerfile.bdnex" or path.startswith(("bdnex_service/", "tests/test_bdnex_")):
+            selected["bdnex"] = True
         elif path == "Dockerfile.byparr" or path.startswith("ops/byparr/"):
             selected["byparr"] = True
         elif path.startswith("tests/test_library_") or path.startswith("tests/fixtures/french-metadata/"):
