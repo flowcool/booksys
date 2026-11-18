@@ -32,7 +32,7 @@ REASONS = frozenset(('none', 'unknown', 'browser_busy', 'remote_rate_limited', '
     'retirement_prerequisites', 'native_prerequisites_unavailable', 'reconciliation_required'))
 REF_KINDS = ('source', 'package', 'file', 'origin', 'asset', 'decision', 'operation', 'task')
 ERRORS = frozenset(('TimeoutError', 'OSError', 'ValueError', 'TypeError', 'KeyError', 'LibraryError',
-                   'CollectionError', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
+                   'CollectionError', 'Deferred', 'BrowserOutcome', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
 FIELDS = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'cycle_id',
     'request_id', 'operation_id', 'refs', 'title', 'duration_ms', 'wait_ms', 'attempt', 'repeat_count',
     'dropped_count', 'next_attempt', 'exception_type', 'message', 'cause_type', 'detail', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count'))
