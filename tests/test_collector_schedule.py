@@ -6,6 +6,36 @@ from booksys_core.browser_outcomes import Outcome, retry_after
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_browser_reads_only_schedule_and_keeps_remote_deadline(self):
+        import copy
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+        from booksys_core.scheduler import ScheduledCalls
+
+        schedule = Schedule({}, timestamp=1000)
+        saved = copy.deepcopy(schedule.record)
+        state = Mock()
+        state.schedule.side_effect = lambda: copy.deepcopy(saved)
+        state.monitor.side_effect = AssertionError('Browser must not load submissions')
+        def save(*, schedule):
+            saved.clear()
+            saved.update(copy.deepcopy(schedule))
+        state.patch_monitor.side_effect = save
+        fetch = Mock()
+        fetch.fetch_html.return_value = '<h1>OK</h1>'
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('booksys_core.scheduler.CollectorState', return_value=state):
+            calls = ScheduledCalls(Path(directory), fetch, clock=lambda: 1000)
+            self.assertEqual(calls('source'), '<h1>OK</h1>')
+            schedule.record_outcome('source', Outcome('remote_rate_limited', 'remote',
+                                    retry_after_state='valid', retry_after_seconds=1200), timestamp=1000)
+            save(schedule=schedule.record)
+            with self.assertRaises(Deferred) as blocked:
+                calls('another')
+            self.assertEqual(Schedule(blocked.exception.record, timestamp=1000).next_due, 2200)
+            fetch.fetch_html.assert_called_once()
+
     def test_two_busy_retries_shared_across_urls_and_restart(self):
         schedule = Schedule({}, timestamp=1000)
         schedule.before('first', timestamp=1000)
@@ -119,8 +149,8 @@ class CleanupRecoveryEventTests(unittest.TestCase):
                     def __init__(self, directory):
                         pass
 
-                    def monitor(self):
-                        return copy.deepcopy(saved)
+                    def schedule(self):
+                        return copy.deepcopy(saved['schedule'])
 
                     def patch_monitor(self, *, schedule):
                         saved['schedule'] = copy.deepcopy(schedule)
