@@ -7,6 +7,10 @@ class BrowserError(CollectionError):
     """Stop browser work for this cycle after a solver or page-shape failure."""
 
 
+class NativeRefusal(CollectionError):
+    """The native API returned an explicit refusal rather than an uncertain response."""
+
+
 class LibraryError(Exception):
     """A failed gate. Preserve evidence and stop dependent operations."""
 

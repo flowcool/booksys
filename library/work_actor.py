@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from contextlib import nullcontext
 
@@ -11,6 +11,8 @@ from booksys_core.diagnostics import REASONS, context, emit, exception_details, 
 from library.locking import commit_guard, effect_guard, mutation_guard
 from library.primitives import LibraryError
 from booksys_core.network_admission import before_native_write
+from booksys_core.scheduler import Deferred
+from booksys_core.values import seconds
 from library.stage_model import Change, Obligation, StepResult, Task, instant
 
 from library.stage_tasks import StageTasks
@@ -117,6 +119,15 @@ class WorkActor:
                 self.report('waiting', reason, item=item, next_attempt=(self._now(now) + delay).isoformat())
                 return reason
             return self._run(item, task, now=self._now(now))
+        except Deferred as exc:
+            stamp = self._now(now)
+            due = datetime.fromtimestamp(seconds(exc.record.get('not_before')), timezone.utc)
+            if due <= stamp:
+                due = stamp + timedelta(seconds=300)
+            reason = exc.record.get('wait_reason') or 'processing_lock_busy'
+            self.work.wait(item, reason, due, now=stamp)
+            self.report('waiting', reason, item=item, next_attempt=due.isoformat(), outcome='defer')
+            return 'defer'
         except Exception as exc:
             self.work.retry(item, f'{type(exc).__name__}: {str(exc)[:200]}', retry_delay(item.attempts), now=self._now(now))
             self.report('failed', item=item, **exception_details(exc))
@@ -179,7 +190,8 @@ class WorkActor:
     def _run(self, item: Item, task: Task, *, now: datetime) -> str:
         started = time.monotonic()
         self.report('started', item=item)
-        with context(refs=[{'kind': 'task', 'id': task.key}]), self._acting(item, task):
+        with context(refs=[{'kind': 'task', 'id': task.key}],
+                     request_id=hashlib.sha256(item.item.encode()).hexdigest(), attempt=item.attempts), self._acting(item, task):
             result = self.execute(task, now)
             outcome = result.outcome if isinstance(result, StepResult) else result
             if outcome not in ('done', 'retry', 'defer'):

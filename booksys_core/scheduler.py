@@ -158,10 +158,7 @@ class ScheduledCalls:
         self.directory, self.fetch, self.clock = directory, fetch, clock
 
     def _load(self) -> tuple[dict[str, Any], Schedule]:
-        path = self.directory / 'monitor.yaml'
-        value = CollectorState(self.directory).monitor()
-        if not isinstance(value, dict) or value.get('version') != 1:
-            raise CollectionError('Invalid monitor journal')
+        value = {'schedule': CollectorState(self.directory).schedule()}
         return value, Schedule(value.get('schedule', {}), timestamp=self.clock())
 
     def _save(self, value: dict[str, Any], schedule: Schedule) -> None:

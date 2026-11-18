@@ -170,27 +170,47 @@ class WorkItemsTests(unittest.TestCase):
         work.add('routing', 's:a', input_rev='r2', method='m', blocked='remote_review_block', now=T0 + timedelta(hours=5))
         self.assertEqual(self.state('routing', 's:a'), 'blocked', 'a new input keeps the obligation block')
 
-    def test_retry_limit_then_revive(self) -> None:
+    def test_unchanged_failure_stays_failed_while_changed_and_periodic_work_advances(self) -> None:
         work = self.make(max_attempts={'metadata': 1, 'collection': 1})
+        self.addCleanup(work.close)
         for stage in ('metadata', 'collection'):
-            work.add(stage, 'm', input_rev='r', method='m', now=T0)
-            at = T0
-            for count, minutes in enumerate((10, 20, 40, 80, 160, 320, 360, 360), 1):
-                item = work.claim(stage, 'w', now=at)
-                assert item is not None and item.attempts == (1 if stage == 'collection' else count)
-                self.assertTrue(work.retry(item, 'TimeoutError: provider timeout', timedelta(minutes=5), now=at))
-                due = at + timedelta(minutes=10 if stage == 'collection' else minutes)
-                self.assertEqual(work.revive(stage, now=due - timedelta(seconds=1)), 0)
-                at = due + timedelta(seconds=1)
-                self.assertEqual(work.revive(stage, now=at), 1)
+            with self.subTest(stage=stage):
+                work.add(stage, 'poison', input_rev='r1', method='m1', now=T0)
+                item = work.claim(stage, 'w', now=T0)
+                self.assertTrue(work.retry(item, 'TimeoutError: unavailable', timedelta(minutes=5), now=T0))
+                for days in (1, 7, 30):
+                    at = T0 + timedelta(days=days)
+                    self.assertEqual(work.revive(stage, now=at), 0)
+                    self.assertEqual(work.add(stage, 'poison', input_rev='r1', method='m1', next_at=at, now=at), 'same')
+                    self.assertIsNone(work.claim(stage, 'w', now=at))
+                self.assertEqual(self.state(stage, 'poison'), 'failed')
+                work.add(stage, 'healthy', input_rev='r1', method='m1', now=T0)
+                healthy = work.claim(stage, 'w', now=T0)
+                self.assertEqual(healthy.item, 'healthy')
+                work.done(healthy, now=T0)
+                # A new completed collection checkpoint is a new periodic obligation.
+                work.add(stage, 'healthy', input_rev='r2', method='m1', next_at=T0 + timedelta(minutes=5), now=T0)
+                self.assertIsNone(work.claim(stage, 'w', now=T0))
+                periodic = work.claim(stage, 'w', now=T0 + timedelta(minutes=5))
+                self.assertEqual((periodic.item, periodic.attempts), ('healthy', 1))
+                work.done(periodic, now=T0)
+                work.add(stage, 'poison', input_rev='r2', method='m1', now=T0)
+                changed = work.claim(stage, 'w', now=T0)
+                self.assertEqual((changed.input_rev, changed.attempts), ('r2', 1))
+                work.retry(changed, 'TimeoutError: unavailable', timedelta(minutes=5), now=T0)
+                work.add(stage, 'poison', input_rev='r2', method='m2', now=T0)
+                changed = work.claim(stage, 'w', now=T0)
+                self.assertEqual((changed.method, changed.attempts), ('m2', 1))
+                work.done(changed, now=T0)
 
-    def test_identical_failure_has_no_new_event(self) -> None:
+    def test_new_method_gets_a_new_failure_event(self) -> None:
         work = self.make(max_attempts={'metadata': 1})
         work.add('metadata', 'm', input_rev='r', method='m', now=T0)
-        for count, (error, expected) in enumerate((('ValueError: a', 1), ('ValueError: a', 1), ('ValueError: b', 2), ('TypeError: b', 3))):
+        for count, (error, expected) in enumerate((('ValueError: a', 1), ('ValueError: a', 2), ('ValueError: b', 3), ('TypeError: b', 4))):
             at = T0 + timedelta(days=count)
+            work.add('metadata', 'm', input_rev='r', method=f'm{count}', now=at)
             item = work.claim('metadata', 'w', now=at)
-            assert item is not None and item.attempts == count + 1
+            assert item is not None and item.attempts == 1
             work.retry(item, error, timedelta(minutes=5), now=at)
             self.assertEqual(sum(event[2] == 'failed' for event in work.events('metadata', 'm')), expected)
             work.revive('metadata', now=at + timedelta(hours=7))

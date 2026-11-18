@@ -27,7 +27,7 @@ class WorkActorTests(unittest.TestCase):
         (self.dir / 'state').mkdir()
         self.store = create_store(self, self.dir / 'state', empty())
         WorkItems.upgrade(self.store._database)
-        self.work = WorkItems(self.store._database, idempotent=frozenset({'intake', 'copies'}), max_attempts={'intake': 3, 'copies': 3})
+        self.work = WorkItems(self.store._database, max_attempts={'intake': 3, 'copies': 3})
         self.addCleanup(self.work.close)
         os.environ['BOOKSYS_WORK_STAGES'] = 'intake,copies'
         self.addCleanup(lambda: os.environ.pop('BOOKSYS_WORK_STAGES', None))
@@ -41,6 +41,45 @@ class WorkActorTests(unittest.TestCase):
     def state(self, stage: str, item: str) -> str:
         with self.store._database.connection() as db:
             return str(db.execute('SELECT state FROM work_items WHERE stage=%s AND item=%s', (stage, item)).fetchone()[0])
+
+    def test_browser_deferred_keeps_deadline_without_spending_attempt(self):
+        from booksys_core.scheduler import Deferred, Schedule
+        from booksys_core.browser_outcomes import Outcome, BrowserOutcome
+        from booksys_core.diagnostics import exception_details
+        due = T0 + timedelta(minutes=20)
+        schedule = Schedule({}, timestamp=T0.timestamp())
+        schedule.record_outcome('source', Outcome('remote_rate_limited', 'remote',
+                                retry_after_state='valid', retry_after_seconds=1200), timestamp=T0.timestamp())
+        def execute(task, now):
+            raise Deferred(schedule.record)
+        self.work.add('intake', 'source', input_rev='r', method='m', now=T0)
+        actor = self.actor(execute)
+        self.assertEqual(actor.step(now=T0), 'defer')
+        self.assertEqual(self.state('intake', 'source'), 'waiting')
+        self.assertIsNone(self.work.claim('intake', 'next', now=due - timedelta(seconds=1)))
+        item = self.work.claim('intake', 'next', now=due)
+        self.assertEqual(item.attempts, 1)
+        self.assertEqual(exception_details(Deferred(schedule.record))['exception_type'], 'Deferred')
+        self.assertEqual(exception_details(BrowserOutcome(Outcome('browser_timeout', 'local')))['exception_type'], 'BrowserOutcome')
+
+    def test_nested_failure_keeps_request_and_attempt_when_refs_change(self):
+        from unittest.mock import patch
+        from booksys_core.diagnostics import event, emit
+        def execute(task, now):
+            emit(service='collector', stage='collection', code='failed', reason='unknown_effect',
+                 refs=[{'kind': 'source', 'id': 'synthetic-source'}])
+            raise OSError('synthetic failure')
+        self.work.add('intake', 'source', input_rev='r', method='m', now=T0)
+        events = []
+        with patch('booksys_core.diagnostics._default') as sink:
+            sink.emit.side_effect = lambda value: events.append(value) or True
+            self.assertEqual(self.actor(execute).step(now=T0), 'retry')
+        failures = [event(**{k: v for k, v in value.items() if k not in
+                    ('schema', 'event_id', 'at', 'level')}) for value in events if value['code'] == 'failed']
+        self.assertEqual(len(failures), 2)
+        self.assertEqual(failures[0]['refs'], [{'kind': 'source', 'id': 'synthetic-source'}])
+        self.assertEqual(failures[0]['request_id'], failures[1]['request_id'])
+        self.assertEqual([value['attempt'] for value in failures], [1, 1])
 
 
 

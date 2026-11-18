@@ -180,6 +180,12 @@ class CollectorState:
                 for index,url in enumerate(download.get('urls',[])):
                     db.execute('INSERT INTO captured_download_links VALUES (%s,%s,%s,%s)',(source,target,index,url))
 
+    def schedule(self) -> dict[str,Any]:
+        """Read only the browser checkpoint, without loading source or submission records."""
+        with self._database.connection() as db:
+            value: dict[str, Any] = self._checkpoints(db).get('schedule', {})
+            return value
+
     def monitor(self) -> dict[str,Any]:
         def load(db: DeadlineConnection) -> Any:
             result={'version':1,'categories':{source:record for source,record in operational_records(db,'collection_categories','ORDER BY source')},'submissions':{

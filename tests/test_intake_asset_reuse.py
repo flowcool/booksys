@@ -210,7 +210,7 @@ class IntakeAssetReuseTests(unittest.TestCase):
         self.assertEqual(event['exception_type'], 'LibraryError')
         self.assertEqual((event['service'], event['stage'], event['code']), ('library', 'local', 'failed'))
         self.assertIn('load_asset', [frame['function'] for frame in event['stack']])
-        self.assertNotIn('relevant inputs changed', str(event))
+        self.assertEqual(event['message'], 'Result conflict: relevant inputs changed')
         self.assertEqual(self.catalog.get('assets', key)['origins'], [original])  # type: ignore[index]
         source = 'https://www.bookys-ebooks.com/2-multipart'
         self.assertFalse(any(origin.get('availability') == 'rejected'

@@ -35,6 +35,146 @@ def captured(url):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_pass_budget_after_native_write_reconciles_without_a_second_submission(self):
+        from booksys_core.collection import run_once
+        from booksys_core.downloader import Pyload
+        journal = {'categories': {}, 'submissions': {}}
+        records = {FIRST: {'title': 'Synthetic', 'complete_hosters': ['*'],
+                          'downloads': {'target': {'hoster': 'synthetic', 'urls': ['https://files.example/a']}}}}
+        store = Mock()
+        store.monitor.return_value = journal
+        store.captured.return_value = {'items': records}
+        store.category.side_effect = lambda source, value: journal['categories'].__setitem__(source, value)
+        client = object.__new__(Pyload)
+        client.admission = None
+        elapsed, packages, calls = [0], [], []
+        def native(method, *, write=False, **params):
+            elapsed[0] += 30  # The configured native transport timeout.
+            calls.append(method)
+            if method == 'status_server':
+                return {'pause': False, 'download': True}
+            if method in ('get_queue', 'get_collector'):
+                return [p.copy() for p in packages if p['dest'] == (1 if method == 'get_queue' else 0)]
+            if method == 'add_package':
+                packages.append({'pid': 7, 'name': params['name'], 'dest': 0,
+                                 'links': [{'url': url} for url in params['links']]})
+                return 7
+            if method == 'get_package_data':
+                return packages[0].copy()
+            if method == 'move_package':
+                packages[0]['dest'] = 1
+                return None
+            self.fail(method)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('booksys_core.collection.CollectorState', return_value=store), \
+                patch('booksys_core.downloader.CollectorState', return_value=store), \
+                patch('booksys_core.collection.ScheduledCalls'), \
+                patch('booksys_core.collection.catalogue', return_value=([FIRST], None)), \
+                patch('booksys_core.collection.CRAWL_PAGES', 1), \
+                patch.object(client, '_call', side_effect=native), \
+                patch.object(client, 'host_availability', return_value={'hosts': {'synthetic': {'status': True, 'domains': ['files.example']}}}):
+            first = run_once(Path(directory), Mock(), client, monotonic=lambda: elapsed[0])
+            self.assertTrue(first['continued'])
+            self.assertEqual(journal['submissions'][FIRST]['status'], 'moving')
+            self.assertLess(elapsed[0], 300)
+            elapsed[0] = 0
+            second = run_once(Path(directory), Mock(), client, monotonic=lambda: elapsed[0])
+            self.assertNotIn('continued', second)
+            self.assertLess(elapsed[0], 300)
+        self.assertEqual(journal['submissions'][FIRST]['status'], 'queued')
+        self.assertEqual((calls.count('add_package'), calls.count('move_package')), (1, 1))
+
+    def test_native_api_error_response_is_a_certain_refusal(self):
+        import io
+        from booksys_core.downloader import Pyload
+        from booksys_core.errors import NativeRefusal
+        client = object.__new__(Pyload)
+        client.endpoint, client.key, client.admission = 'http://localhost', 'synthetic', None
+        response = Mock()
+        response.__enter__ = Mock(return_value=io.BytesIO(b'{"error":"refused"}'))
+        response.__exit__ = Mock(return_value=False)
+        with patch('booksys_core.downloader.urlopen', return_value=response), \
+                patch('booksys_core.diagnostics.emit') as emitted:
+            with self.assertRaises(NativeRefusal):
+                client.call('add_package', write=True)
+        failure = emitted.call_args.kwargs
+        self.assertEqual(failure['reason'], 'submission_refused')
+        self.assertEqual(failure['exception_type'], 'NativeRefusal')
+
+    def test_submit_failures_distinguish_refusal_from_uncertain_effect_and_keep_operation(self):
+        from booksys_core.collection import run_once
+        from booksys_core.errors import NativeRefusal
+        from booksys_core.diagnostics import context, event
+        journal = {'categories': {}, 'submissions': {
+            FIRST: {'status': 'creating', 'operation_id': 'refused-operation'},
+            SECOND: {'status': 'creating', 'operation_id': 'known-operation'}}}
+        records = {source: {'downloads': {}} for source in (FIRST, SECOND)}
+        store = Mock(); store.monitor.return_value = journal; store.captured.return_value = {'items': records}
+        downloader = Mock(); downloader.call.return_value = {'pause': False, 'download': True}
+        downloader.submit.side_effect = [NativeRefusal('pyLoad rejected add_package'), OSError('token=secret')]
+        events = []
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('booksys_core.collection.CollectorState', return_value=store), \
+                patch('booksys_core.collection.ScheduledCalls'), \
+                patch('booksys_core.collection.catalogue', return_value=([FIRST, SECOND], None)), \
+                patch('booksys_core.collection.CRAWL_PAGES', 1), \
+                patch('booksys_core.diagnostics.emit', side_effect=lambda **fields: events.append(event(**fields))), \
+                context(request_id='owning-request', attempt=2):
+            run_once(Path(directory), Mock(), downloader)
+        self.assertEqual([value['reason'] for value in events], ['submission_refused', 'unknown_effect'])
+        self.assertEqual([value['exception_type'] for value in events], ['NativeRefusal', 'OSError'])
+        self.assertEqual([value['request_id'] for value in events], ['owning-request'] * 2)
+        self.assertEqual([value['attempt'] for value in events], [2, 2])
+        self.assertEqual(events[1]['operation_id'], 'known-operation')
+        self.assertIn({'kind': 'operation', 'id': 'known-operation'}, events[1]['refs'])
+        self.assertNotIn('secret', json.dumps(events))
+
+    def test_bounded_pass_resumes_saved_items_and_partial_links_without_resubmit(self):
+        from booksys_core.collection import run_once
+        journal = {'version': 1, 'categories': {}, 'submissions': {}}
+        records = {}
+        store = Mock()
+        store.monitor.side_effect = lambda: journal
+        store.captured.side_effect = lambda: {'items': records}
+        store.category.side_effect = lambda source, value: journal['categories'].__setitem__(source, value.copy())
+        store.capture.side_effect = lambda source, value: records.__setitem__(source, value.copy())
+        submitted = []
+        downloader = Mock()
+        downloader.call.return_value = {'pause': False, 'download': True}
+        def submit(source, record, journal, path):
+            self.assertNotIn(source, submitted)
+            self.assertTrue(all('urls' in row for row in record['downloads'].values()))
+            submitted.append(source)
+            journal['submissions'][source] = {'status': 'queued', 'package_id': len(submitted)}
+        downloader.submit.side_effect = submit
+        elapsed = [0.0]
+        pages = []
+        def fetch(url):
+            elapsed[0] += 100  # Each browser read is slow. One pass cannot fit two reads.
+            if '?page=' in url:
+                pages.append(url)
+                # A later fresh catalogue omits SECOND. Resume must use the saved page.
+                return (f'<h1>Catalogue</h1><div class="bys-items-container"><a class="bys-item" href="{FIRST}">First</a>'
+                        f'<a class="bys-item" href="{SECOND}">Second</a></div>') if len(pages) == 1 else '<h1>Catalogue</h1>'
+            if url in (FIRST, SECOND):
+                return '<h1>Book</h1><a href="/book/dl/1">First host</a><a href="/book/dl/2">Second host</a>'
+            return '<h1>Links</h1><a class="bys-link bys-host" href="https://files.example/a">File</a>'
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('booksys_core.collection.CollectorState', return_value=store), \
+                patch('booksys_core.collection.ScheduledCalls', side_effect=lambda directory, fetch, **kw: fetch), \
+                patch('booksys_core.collection.CRAWL_PAGES', 1):
+            for _ in range(12):
+                elapsed[0] = 0
+                result = run_once(Path(directory), fetch, downloader, monotonic=lambda: elapsed[0])
+                self.assertLess(elapsed[0], 300)
+                if not result.get('continued'):
+                    break
+            else:
+                self.fail('Bounded passes did not finish')
+        self.assertEqual(submitted, [FIRST, SECOND])
+        self.assertEqual(len(pages), 1)
+        self.assertNotIn('continuation', journal['categories'][DEFAULT_CATEGORY])
+
     def test_run_once_continues_after_package_folder_name_too_long(self):
         from booksys_core.collection import run_once
         journal = {'categories': {}, 'submissions': {}}
