@@ -206,11 +206,12 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
              category: str = DEFAULT_CATEGORY, minimum_free: int = 0, *,
              clock: Callable[[], float] = time.time,
              monotonic: Callable[[], float] = time.monotonic,
-             max_seconds: float = 210, max_items: int = 20,
+             max_seconds: float = 420, max_items: int = 20,
              completions: list[OperationalCompletion] | None = None) -> dict[str, Any]:
     """Bound one pass; retain the exact page and partial source before yielding."""
     if CRAWL_PAGES < 1 or max_seconds <= 0 or max_items < 1:
         raise CollectionError('Invalid collection pass limits')
+    # 300 s solve + 20 s transport + 30 s cached HTTP + two 2 s delays + 35 s native reserve = 389 s.
     started = monotonic()
     configured_timeout = fetch.timeout if isinstance(fetch, Byparr) else None
     browser_timeout = _browser_pass_timeout(fetch.timeout, fetch.delay, max_seconds) if isinstance(fetch, Byparr) else None

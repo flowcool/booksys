@@ -19,8 +19,9 @@ from library.source_tasks import SourcePolicy
 from library.stage_model import Task, StepResult
 from library.stage_tasks import StageTasks
 
+# Collection has a 420 s pass and a further 180 s margin in the enclosing step.
 # A stage step must finish within its enclosing deadline; input size alone does not prove that it will fit.
-TIMEOUTS = dict(collection=300, intake=1200, metadata=1200, copies=3600, routing=300)
+TIMEOUTS = dict(collection=600, intake=1200, metadata=1200, copies=3600, routing=300)
 
 
 class StageRuntime:

@@ -21,7 +21,7 @@ class NativeStageTests(unittest.TestCase):
     def test_collection_method_change_rearms_exhausted_task_on_source_rescan(self):
         from library.stage_model import METHODS
         from library.work_items import WorkItems
-        old_method = 'collection-step-v2-bounded'
+        old_method = 'collection-step-v3-browser-budget'
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, BOOKSYS_WORK_STAGES='collection'):
             root = Path(directory)
             store = create_store(self, root, empty())
@@ -38,7 +38,7 @@ class NativeStageTests(unittest.TestCase):
                     exhausted = work.claim('collection', 'old-release', now=at)
                     self.assertIsNotNone(exhausted)
                     self.assertEqual(exhausted.attempts, attempt)
-                    work.retry(exhausted, 'CollectionError: Browser request timeout exceeds the collection pass budget',
+                    work.retry(exhausted, 'BrowserOutcome: browser_timeout',
                                timedelta(minutes=5), now=at)
                     at += timedelta(minutes=5)
                 self.assertEqual(work.counts('collection'), {'collection': {'failed': 1}})

@@ -17,3 +17,7 @@ class LibraryError(Exception):
 
 class LibraryLockBusy(LibraryError):
     """A nonblocking lock was not acquired; the protected effect did not start."""
+
+
+class ResultInputsChanged(LibraryError):
+    """A prepared result no longer describes the current relevant inputs."""

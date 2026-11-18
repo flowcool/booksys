@@ -24,4 +24,7 @@ def work_stages() -> frozenset[str]:
 
 def work_items_for(database: Database) -> WorkItems:
     from library.work_items import WorkItems
-    return WorkItems(database, max_attempts=dict(MAX_ATTEMPTS))
+    from library.stage_runtime import TIMEOUTS
+    # The supervisor forces process death at deadline + 5 s. Reclaim only after it.
+    return WorkItems(database, max_attempts=dict(MAX_ATTEMPTS),
+                     lease_seconds_by_stage={'collection': TIMEOUTS['collection'] + 10})
