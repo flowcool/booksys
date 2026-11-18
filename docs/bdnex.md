@@ -7,7 +7,7 @@ The token file must be readable by the worker and service users.
 
 The worker sends at most three logical names and existing ComicInfo hints.
 It sends no archives or absolute storage paths. BDneX proposes candidates
-with scores of at least 70. Booksys keeps its existing identity and admission
+with scores of at least 70, or at least 60 when the volume and the series words agree. Booksys keeps its existing identity and admission
 checks. A score does not establish identity. Unknown fields stay unknown.
 Concordant references use existing exact-page enrichment. Uncertain results
 and service outages fall back to the existing public providers.
