@@ -13,7 +13,7 @@ import time
 from typing import Any
 from urllib.parse import urlsplit, parse_qsl, urlencode
 from booksys_core.browser import Byparr
-from booksys_core.downloader import Pyload
+from booksys_core.downloader import Pyload, REQUEST_GUARD
 from booksys_core.errors import BrowserError, CollectionError
 from booksys_core.files import atomic_write, export_links, save, monitor_patch
 from booksys_core.parsing import DEFAULT_CATEGORY, catalogue, extract_page, resolve, site_url, source_plan, resolve_link
@@ -24,6 +24,10 @@ from library.codec import encode
 
 
 CRAWL_PAGES = int(os.environ.get('BOOKSYS_CRAWL_PAGES', '5'))
+
+
+class PassBudgetReached(Exception):
+    """A continuation, raised before an external request starts."""
 
 
 def collect(categories: list[str], fetch: Callable[[str], str], directory: Path,
@@ -183,74 +187,127 @@ def run_fiche_once(directory: Path, browser: Byparr, downloader: Pyload, root: P
 def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
              category: str = DEFAULT_CATEGORY, minimum_free: int = 0, *,
              clock: Callable[[], float] = time.time,
+             monotonic: Callable[[], float] = time.monotonic,
+             max_seconds: float = 210, max_items: int = 20,
              completions: list[OperationalCompletion] | None = None) -> dict[str, Any]:
-    """Crawl fresh pages, then up to ten deep pages; commit the cursor on success."""
-    if CRAWL_PAGES < 1:
-        raise CollectionError('BOOKSYS_CRAWL_PAGES must be a positive integer')
+    """Bound one pass; retain the exact page and partial source before yielding."""
+    if CRAWL_PAGES < 1 or max_seconds <= 0 or max_items < 1:
+        raise CollectionError('Invalid collection pass limits')
+    started = monotonic()
+    browser_seconds = float(fetch.timeout) + fetch.delay + 20 if isinstance(fetch, Byparr) else 142
+    if browser_seconds + 35 > max_seconds:
+        raise CollectionError('Browser request timeout exceeds the collection pass budget')
+    def reserve(seconds: float) -> None:
+        if monotonic() - started + seconds > max_seconds:
+            raise PassBudgetReached()
+    scheduled = ScheduledCalls(directory, fetch, clock=clock)
+    def bounded_fetch(url: str) -> str:
+        reserve(browser_seconds)
+        return scheduled(url)
+    def bounded_cover(url: str, source: str) -> tuple[bytes, str]:
+        needs_session = isinstance(fetch, Byparr) and fetch.cover_needs_session(source)
+        try:
+            reserve((browser_seconds if needs_session else 0) + 35)
+        except PassBudgetReached as exc:
+            # The queued source gets its own fiche task. Do not strand a confirmed package on cover work.
+            raise CoverError('Cover deferred to the fiche task by the collection pass budget') from exc
+        return scheduled.cover(url, source)
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "pipeline.lock").open("w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise CollectionError("Another pipeline is running") from exc
-        fetch = ScheduledCalls(directory, fetch, clock=clock)
-        if isinstance(fetch.fetch, Byparr):
-            downloader.fetch_image = fetch.cover
+        previous_image = downloader.fetch_image
         store = CollectorState(directory)
         journal = store.monitor()
         records = store.captured()['items']
         prior = journal['categories'].get(category)
         deep_page = max(6, (prior or {}).get('deep_page', 6))
-        pages = [*range(1, min(5, CRAWL_PAGES) + 1),
+        cursor = (prior or {}).get('continuation')
+        pages = list(cursor['pages']) if cursor else [*range(1, min(5, CRAWL_PAGES) + 1),
                  *range(deep_page, min(deep_page + 10, CRAWL_PAGES + 1))]
-        if shutil.disk_usage(directory).free < minimum_free:
-            raise CollectionError('Free disk reserve reached; submissions stopped')
-        status = downloader.call('status_server')
-        if status['pause'] or not status['download']:
-            raise CollectionError('pyLoad downloads are paused or disabled')
-        counts = {'pages': 0, 'queued': 0, 'skipped': 0}
+        items = list(cursor['items']) if cursor and cursor['items'] is not None else None
+        counts: dict[str, Any] = {'pages': 0, 'queued': 0, 'skipped': 0}
+        visited = 0
         parts = urlsplit(category)
+        token = REQUEST_GUARD.set(lambda: reserve(35))
         try:
-            for page in pages:
-                url = parts._replace(query=urlencode({**dict(parse_qsl(parts.query)), 'page': page})).geturl()
-                try:
-                    items, _ = catalogue(fetch(url), url)
-                except CollectionError:
-                    if page <= 5:
-                        raise
-                    deep_page = CRAWL_PAGES + 1      # no catalogue on a deep page: the end of the site, the pass is complete
-                    break
-                counts['pages'] += 1
-                for source in items:
-                    if journal['submissions'].get(source, {}).get('status') == 'queued':
-                        counts['skipped'] += 1
-                        continue
-                    # A solver or HTML failure while reading the fiche still stops the pass (do not hammer the site);
-                    # only a refused submission of this one source is skipped.
-                    record = records.get(source)
-                    if record is None:
-                        record = resolve(fetch(source), source, None, fetch)
-                        record['complete_hosters'] = ['*']
-                        store.capture(source, record)
-                        records[source] = record
-                    try:
-                        downloader.submit(source, record, journal, directory / 'monitor.yaml')
-                    except (CollectionError, OSError):
-                        from booksys_core.diagnostics import emit
-                        from booksys_core.values import digest
-                        emit(service='collector', stage='collection', code='failed', reason='unknown_effect',
-                             refs=[{'kind': 'source', 'id': digest(source)}])
-                        counts['skipped'] += 1
-                        continue
-                    counts['queued'] += 1
-                if page > 5:
-                    deep_page = page + 1
-                    # Save the cursor after every deep page: a restart or a failure in the middle of a long cycle used to
-                    # throw the whole cycle away (the cursor was saved at the very end and stayed at page 6 for hours).
-                    saved = {'deep_page': deep_page, 'last_cycle': datetime.fromtimestamp(clock(), timezone.utc).isoformat()}
-                    store.category(category, saved)
-                    prior = saved
-            value = {'deep_page': deep_page, 'last_cycle': datetime.fromtimestamp(clock(), timezone.utc).isoformat()}
+            if isinstance(fetch, Byparr):
+                downloader.fetch_image = bounded_cover
+            if shutil.disk_usage(directory).free < minimum_free:
+                raise CollectionError('Free disk reserve reached; submissions stopped')
+            reserve(35)
+            status = downloader.call('status_server')
+            if status['pause'] or not status['download']:
+                raise CollectionError('pyLoad downloads are paused or disabled')
+            try:
+                while pages:
+                    page = pages[0]
+                    if items is None:
+                        url = parts._replace(query=urlencode({**dict(parse_qsl(parts.query)), 'page': page})).geturl()
+                        try:
+                            found, _ = catalogue(bounded_fetch(url), url)
+                        except (Deferred, BrowserError):
+                            raise
+                        except CollectionError:
+                            if page <= 5:
+                                raise
+                            deep_page = CRAWL_PAGES + 1
+                            pages.clear()
+                            break
+                        items = list(found)
+                        counts['pages'] += 1
+                    while items:
+                        if visited >= max_items:
+                            raise PassBudgetReached()
+                        reserve(0)
+                        source = items[0]
+                        if journal['submissions'].get(source, {}).get('status') == 'queued':
+                            counts['skipped'] += 1
+                        else:
+                            record = records.get(source)
+                            if record is None:
+                                plan = source_plan(bounded_fetch(source), source, None)
+                                record = {**plan, 'downloads': {}, 'pending_downloads': plan['targets']}
+                                record.pop('targets')
+                                record.pop('complete_hosters', None)
+                                store.capture(source, record)
+                                records[source] = record
+                            for target, row in list(record.get('pending_downloads', {}).items()):
+                                record['downloads'][target] = resolve_link(bounded_fetch(target), target, row)
+                                del record['pending_downloads'][target]
+                                store.capture(source, record)
+                            if '*' not in record.get('complete_hosters', []):
+                                record['complete_hosters'] = ['*']
+                                record.pop('pending_downloads', None)
+                                store.capture(source, record)
+                            try:
+                                reserve(35)
+                                downloader.submit(source, record, journal, directory / 'monitor.yaml')
+                            except (CollectionError, OSError):
+                                from booksys_core.diagnostics import emit
+                                from booksys_core.values import digest
+                                emit(service='collector', stage='collection', code='failed', reason='unknown_effect',
+                                     refs=[{'kind': 'source', 'id': digest(source)}])
+                                counts['skipped'] += 1
+                            else:
+                                counts['queued'] += 1
+                        items.pop(0)
+                        visited += 1
+                    if page > 5:
+                        deep_page = page + 1
+                    pages.pop(0)
+                    items = None
+            except PassBudgetReached:
+                pass
+            value = {**(prior or {}), 'deep_page': deep_page,
+                     'last_cycle': datetime.fromtimestamp(clock(), timezone.utc).isoformat()}
+            if pages:
+                value['continuation'] = {'pages': pages, 'items': items}
+                counts['continued'] = True
+            else:
+                value.pop('continuation', None)
             if completions is not None:
                 completions.append(store.prepare_completion('category', category, value,
                                    expected=(encode(prior) if prior is not None else None,)))
@@ -258,4 +315,6 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
                 store.category(category, value)
             return counts
         finally:
+            REQUEST_GUARD.reset(token)
+            downloader.fetch_image = previous_image
             export_links(records, directory)

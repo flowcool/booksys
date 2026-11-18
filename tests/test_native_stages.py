@@ -18,6 +18,52 @@ AT = datetime(2026, 11, 9, tzinfo=timezone.utc)
 SOURCE = 'https://www.bookys-ebooks.com/123-album'
 
 class NativeStageTests(unittest.TestCase):
+    def test_collection_continuation_commits_with_claim_and_resumes_without_duplicates(self):
+        from unittest.mock import Mock
+        from library.work_items import WorkItems
+        from library.work_actor import WorkActor
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, BOOKSYS_WORK_STAGES='collection'):
+            root = Path(directory)
+            store = create_store(self, root, empty())
+            WorkItems.upgrade(store._database)
+            work = WorkItems(store._database, max_attempts={'collection': 3})
+            self.addCleanup(work.close)
+            state = CollectorState(root)
+            category = 'https://www.bookys-ebooks.com/category'
+            state.category(category, {'deep_page': 6})
+            sources = [f'https://www.bookys-ebooks.com/{number}-synthetic' for number in range(21)]
+            for source in sources:
+                state.capture(source, {'title': 'Synthetic', 'downloads': {}, 'complete_hosters': ['*']})
+            policy = SourcePolicy(root/'task-policy.yaml', store=store)
+            tasks = StageTasks(store, policy=policy)
+            client = Mock()
+            client.call.return_value = {'pause': False, 'download': True}
+            submitted = []
+            def submit(source, record, journal, path):
+                self.assertNotIn(source, submitted)
+                submitted.append(source)
+                entry = {'status': 'queued', 'package_id': len(submitted)}
+                journal['submissions'][source] = entry
+                state.submission(source, entry)
+            client.submit.side_effect = submit
+            native = NativeStages(Catalog(root, store=store), root, root, root, browser=Mock(), client=client)
+            actor = WorkActor(store, work, 'collection', lambda task, stamp: native.execute(task, now=stamp))
+            with patch('booksys_core.collection.ScheduledCalls'), \
+                    patch('booksys_core.collection.catalogue', return_value=(sources, None)) as pages, \
+                    patch('booksys_core.collection.CRAWL_PAGES', 1):
+                tasks.scan('collection', root/'monitor.yaml', now=AT)
+                self.assertEqual(actor.step(now=AT), 'done')
+                self.assertEqual(len(submitted), 20)
+                self.assertTrue(state.monitor()['categories'][category]['continuation'])
+                # Complete fiches are outside this test's category work.
+                for source in sources[:20]:
+                    state.fiche(source, {'status': 'complete'})
+                resumed_at = datetime.fromisoformat(state.monitor()['categories'][category]['last_cycle'])
+                tasks.scan('collection', root/'monitor.yaml', now=resumed_at)
+                self.assertEqual(actor.step(now=resumed_at), 'done')
+                self.assertEqual(submitted, sources)
+                self.assertEqual(pages.call_count, 1)
+                self.assertNotIn('continuation', state.monitor()['categories'][category])
 
 
     def test_routing_recovery_reads_back_a_lost_move_without_resend(self):

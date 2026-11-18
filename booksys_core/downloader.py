@@ -2,6 +2,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from contextvars import ContextVar
+from collections.abc import Callable
 from contextlib import contextmanager
 import time
 import uuid
@@ -19,6 +20,7 @@ from booksys_core.network_admission import RollingBudget, configured_budget, nat
 from fiches import CoverError, ImageFetcher, write_fiche
 
 REFERENCES: ContextVar[list[dict[str, str]]] = ContextVar('downloader_references', default=[])
+REQUEST_GUARD: ContextVar[Callable[[], None]] = ContextVar('downloader_request_guard', default=lambda: None)
 
 
 @contextmanager
@@ -52,6 +54,7 @@ class Pyload:
         self.admission = admission or configured_budget('native')
 
     def call(self, method: str, *, write: bool = False, **parameters: Any) -> Any:
+        REQUEST_GUARD.get()()  # A bounded collection pass must reserve time before every request, including readback.
         from booksys_core.diagnostics import emit
         request_id = uuid.uuid4().hex
         refs = list(REFERENCES.get())

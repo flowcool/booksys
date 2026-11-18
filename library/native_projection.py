@@ -29,6 +29,8 @@ def project(queue: str, value: dict[str, Any], *, auxiliary: dict[str, Any] | No
             key = 'category-' + digest(source)
             # A pass is 5 fresh pages plus 10 deep pages: 5 minutes apart while the deep crawl has pages left, once a day after.
             wait = 86400 if checkpoint.get('deep_page', 0) > CRAWL_PAGES else 300
+            if checkpoint.get('continuation'):
+                wait = 0  # A saved page is the same pass. Finish it before the periodic interval.
             category_due = max(deadline_at,
                                datetime.fromisoformat(checkpoint['last_cycle']).timestamp() + wait if checkpoint.get('last_cycle') else 0)
             revision = digest(checkpoint)
