@@ -169,7 +169,7 @@ class NativeStages:
             from booksys_core.collection import run_once, run_fiche_once
             if task.entity.split(':')[-1].startswith('category-'):
                 value = run_once(self.collector, self.browser, self.client, category=source,
-                                 max_seconds=210, completions=completions)
+                                 completions=completions)
             else:
                 import os
                 fiche_root = Path(os.environ.get('BOOKSYS_FICHE_ROOT', str(self.reception)))

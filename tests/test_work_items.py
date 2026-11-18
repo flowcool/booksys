@@ -45,6 +45,21 @@ class WorkItemsTests(unittest.TestCase):
         with self.database.connection() as db:
             return str(db.execute('SELECT state FROM work_items WHERE stage=%s AND item=%s', (stage, item)).fetchone()[0])
 
+    def test_collection_claim_outlasts_supervisor_hard_stop(self) -> None:
+        from library.work_stages import work_items_for
+        work = work_items_for(self.database)
+        self.addCleanup(work.close)
+        for stage in ('collection', 'routing'):
+            work.add(stage, 'x', input_rev='r', method='m', now=T0)
+            self.assertIsNotNone(work.claim(stage, 'A', now=T0))
+        self.assertIsNone(work.claim('collection', 'B', now=T0 + timedelta(seconds=420)))
+        self.assertIsNone(work.claim('collection', 'B', now=T0 + timedelta(seconds=605)))
+        # The routing lease remains 300 s.
+        self.assertIsNotNone(work.claim('routing', 'B', now=T0 + timedelta(seconds=301)))
+        recovered = work.claim('collection', 'B', now=T0 + timedelta(seconds=611))
+        self.assertIsNotNone(recovered)
+        self.assertEqual(recovered.attempts, 2)
+
     def test_oldest_first_and_wait_keeps_age(self) -> None:
         work = self.make()
         for index, name in enumerate(('c', 'a', 'b')):

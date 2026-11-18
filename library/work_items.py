@@ -83,10 +83,12 @@ def _instant(value: datetime | None) -> datetime:
 
 
 class WorkItems:
-    def __init__(self, database: Database, *, max_attempts: dict[str, int] | None = None, lease_seconds: int = 300):
+    def __init__(self, database: Database, *, max_attempts: dict[str, int] | None = None, lease_seconds: int = 300,
+                 lease_seconds_by_stage: dict[str, int] | None = None):
         self.db = database
         self.max_attempts = max_attempts or {}
         self.lease_seconds = lease_seconds
+        self.lease_seconds_by_stage = dict(lease_seconds_by_stage or {})
         self._local = threading.local()            # one long-lived connection per thread: opening one costs 15 ms
 
     @contextmanager
@@ -196,7 +198,7 @@ class WorkItems:
                 "ev AS (INSERT INTO work_events(stage,item,at,from_state,to_state,detail) "
                 "  SELECT stage, item, %(n)s, before, 'claimed', %(w)s FROM upd) "
                 "SELECT stage, item, input_rev, method, source, attempts, claimed_by, ready_at FROM upd",
-                {'s': stage, 'n': at, 'l': self.lease_seconds, 'w': worker}).fetchone()
+                {'s': stage, 'n': at, 'l': self.lease_seconds_by_stage.get(stage, self.lease_seconds), 'w': worker}).fetchone()
         return Item(*row) if row else None
 
     def _finish(self, item: Item, to_state: str, *, detail: str, now: datetime | None, error: str = '', reason: str = '',

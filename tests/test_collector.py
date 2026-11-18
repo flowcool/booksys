@@ -56,7 +56,7 @@ class CollectorTests(unittest.TestCase):
                 store.category.side_effect = lambda source, value: journal['categories'].__setitem__(source, value)
                 downloader = Mock()
                 def status(*args):
-                    elapsed[0] += 30
+                    elapsed[0] += 40
                     return {'pause': False, 'download': True}
                 def submit(source, *args):
                     elapsed[0] += 30
@@ -87,7 +87,7 @@ class CollectorTests(unittest.TestCase):
                     for _ in range(4):
                         elapsed[0] = 0
                         result = run_once(Path(directory), browser, downloader, monotonic=lambda: elapsed[0])
-                        self.assertLessEqual(elapsed[0], 210)
+                        self.assertLessEqual(elapsed[0], 420)
                         self.assertEqual(browser.timeout, 300, 'The configured budget must survive the pass')
                         if not result.get('continued'):
                             break
@@ -96,7 +96,7 @@ class CollectorTests(unittest.TestCase):
                 self.assertEqual(result['pages'], 0, 'Resume must use the retained catalogue page')
                 self.assertEqual(submitted, [FIRST, SECOND])
                 self.assertEqual(len(requests), 1)
-                self.assertLess(requests[0]['maxTimeout'], 300000)
+                self.assertEqual(requests[0]['maxTimeout'], 300000)
                 self.assertNotIn('continuation', journal['categories'][DEFAULT_CATEGORY])
 
     def test_pass_budget_after_native_write_reconciles_without_a_second_submission(self):
@@ -137,12 +137,12 @@ class CollectorTests(unittest.TestCase):
                 patch('booksys_core.collection.CRAWL_PAGES', 1), \
                 patch.object(client, '_call', side_effect=native), \
                 patch.object(client, 'host_availability', return_value={'hosts': {'synthetic': {'status': True, 'domains': ['files.example']}}}):
-            first = run_once(Path(directory), Mock(), client, monotonic=lambda: elapsed[0])
+            first = run_once(Path(directory), Mock(), client, max_seconds=210, monotonic=lambda: elapsed[0])
             self.assertTrue(first['continued'])
             self.assertEqual(journal['submissions'][FIRST]['status'], 'moving')
             self.assertLess(elapsed[0], 300)
             elapsed[0] = 0
-            second = run_once(Path(directory), Mock(), client, monotonic=lambda: elapsed[0])
+            second = run_once(Path(directory), Mock(), client, max_seconds=210, monotonic=lambda: elapsed[0])
             self.assertNotIn('continued', second)
             self.assertLess(elapsed[0], 300)
         self.assertEqual(journal['submissions'][FIRST]['status'], 'queued')
@@ -229,7 +229,7 @@ class CollectorTests(unittest.TestCase):
                 patch('booksys_core.collection.CRAWL_PAGES', 1):
             for _ in range(12):
                 elapsed[0] = 0
-                result = run_once(Path(directory), fetch, downloader, monotonic=lambda: elapsed[0])
+                result = run_once(Path(directory), fetch, downloader, max_seconds=210, monotonic=lambda: elapsed[0])
                 self.assertLess(elapsed[0], 300)
                 if not result.get('continued'):
                     break
