@@ -50,3 +50,18 @@ The retained 100-file diagnostic qualification found seven additional identities
 among 80 difficult files under the unchanged policy. All seven agreed with the
 independent reference observations. This sample does not estimate library yield.
 The supplied-hints adapter matched native candidate IDs and scores for all 100 inputs.
+
+## Filename qualification
+
+Recognition removes the known zz/Zz source prefix from logical labels. Explicit
+issue markers and repeated issue captions retain the series name and its
+qualifiers. Conflicting issue numbers and mixed volume/issue shapes stay
+unqualified. Original archive names and bytes remain unchanged.
+
+The retained 516-file replay increases identity concordance from 112 to 153,
+with all 112 prior identities retained. This measures offline concordance
+against retained references, not independently verified accuracy for every gain.
+The metadata method change uses existing progressive replay; no bulk reset.
+
+A standalone title may contain one informative word when its file name and
+direct captured title agree. Bundle-parent labels cannot supply this proof.

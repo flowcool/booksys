@@ -63,7 +63,7 @@ def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:
     from library.work_identity import normalized, informative
     def standalone(value: str) -> str:
         value = re.sub(r'\.(?:pdf|cbz|cbr)$', '', value, flags=re.I)
-        value = re.sub(r'^Z[zZ](?=[A-ZÀ-Ý])', '', value)
+        value = re.sub(r'^zz(?=[a-zÀ-ÿ])', '', value, flags=re.I)
         value = re.sub(r"\b([LD])_(?=[A-ZÀ-Ý])", r"\1'", value)
         value = value.replace('_', ' ')
         value = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', value)
@@ -74,7 +74,7 @@ def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:
                 continue
             hint = asset.get('captured_hints', {}).get(origin['source'], {}).get('title')
             filename = standalone(PurePosixPath(origin['path']).name)
-            if (isinstance(hint, str) and informative(filename) and len(filename.split()) >= 2
+            if (isinstance(hint, str) and informative(filename)
                     and not re.search(r'\b(?:tomes?|volumes?|int[ée]grale|pages?|pack)\b|\d', filename, re.I)
                     and normalized(filename, 'title') == normalized(standalone(hint), 'title')):
                 result['title'] = filename
