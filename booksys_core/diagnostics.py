@@ -373,7 +373,7 @@ def exception_details(exc: BaseException) -> dict[str, Any]:
                 and 1 <= tb.tb_lineno <= 1000000):
             stack.append({'module': module, 'function': function, 'line': tb.tb_lineno})
         tb = tb.tb_next
-    from library.conflicts import ResultInputsChanged
+    from booksys_core.errors import ResultInputsChanged
     details: dict[str, Any] = {'reason': reason, 'exception_type': kind if kind in ERRORS else 'Exception', 'stack': stack[-32:]}
     if reason == 'unexpected_exception':
         details['message'] = _exception_message(str(exc))

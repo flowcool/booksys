@@ -66,6 +66,38 @@ class LoggingTests(unittest.TestCase):
         self.assertIn('diagnostic_unavailable', saved)
 
 class ErrorDetailTests(unittest.TestCase):
+    def test_exception_details_and_logging_without_library_package(self):
+        import subprocess
+        import sys
+        script = r"""
+import importlib.abc
+import logging
+import sys
+from unittest.mock import patch
+
+class NoLibrary(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'library' or fullname.startswith('library.'):
+            raise ModuleNotFoundError("No module named 'library'", name='library')
+
+sys.meta_path.insert(0, NoLibrary())
+from booksys_core.diagnostics import exception_details, SafeLoggingHandler, event
+try:
+    raise TimeoutError('synthetic browser timeout')
+except TimeoutError as exc:
+    details = exception_details(exc)
+    assert details['exception_type'] == 'TimeoutError', details
+    assert details['message'] == 'synthetic browser timeout', details
+    record = logging.LogRecord('byparr', logging.ERROR, '', 1, 'failed', (), sys.exc_info())
+    with patch('booksys_core.diagnostics.emit') as emitted:
+        SafeLoggingHandler('byparr').emit(record)
+        saved = event(**emitted.call_args.kwargs)
+        assert saved['exception_type'] == 'TimeoutError', saved
+assert not any(name == 'library' or name.startswith('library.') for name in sys.modules)
+"""
+        result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_unexpected_library_error_has_sanitized_message_and_cause(self):
         from booksys_core.diagnostics import exception_details
         from booksys_core.errors import LibraryError

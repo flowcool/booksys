@@ -1,15 +1,12 @@
 from __future__ import annotations
 
+from booksys_core.errors import ResultInputsChanged as ResultInputsChanged
 from library.postgres import DeadlineConnection
 from typing import Any, TYPE_CHECKING
 
 from library.primitives import TABLES, LibraryError, digest
 if TYPE_CHECKING:
     from library.store import Store, Change
-
-
-class ResultInputsChanged(LibraryError):
-    """A prepared result no longer describes the current relevant inputs."""
 
 
 def snapshot(store: Store, db: DeadlineConnection, action: str, refs: dict[str, list[str]],
