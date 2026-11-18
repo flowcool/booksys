@@ -23,6 +23,7 @@ jobs:
       worker: ${{ steps.scope.outputs.worker }}
       library: ${{ steps.scope.outputs.library }}
       byparr: ${{ steps.scope.outputs.byparr }}
+      bdnex: ${{ steps.scope.outputs.bdnex }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,7 +51,7 @@ jobs:
         run: docker compose -f compose.ghcr.example.yaml config --quiet
   offline-tests:
     needs: scope
-    if: needs.scope.outputs.worker == 'true' || needs.scope.outputs.library == 'true' || needs.scope.outputs.byparr == 'true'
+    if: needs.scope.outputs.worker == 'true' || needs.scope.outputs.library == 'true' || needs.scope.outputs.byparr == 'true' || needs.scope.outputs.bdnex == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -126,10 +127,43 @@ jobs:
     with:
       image: byparr
       dockerfile: Dockerfile.byparr
+  bdnex-image:
+    needs: scope
+    if: needs.scope.outputs.bdnex == 'true'
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # Test only: upstream uses floating python:3.12-slim and unpinned dependency ranges.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          version: v0.38.0
+          driver-opts: image=moby/buildkit@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      - name: Build pinned upstream without publication
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: https://github.com/lbesnard/bdnex.git#9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33
+          tags: booksys-bdnex-upstream:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=bdnex-upstream
+          cache-to: type=gha,scope=bdnex-upstream,mode=max
+      - name: Build the Booksys adapter
+        run: docker build -f Dockerfile.bdnex --build-arg BDNEX_IMAGE=booksys-bdnex-upstream:ci -t booksys-bdnex:ci .
+      - name: Run engine tests without external network
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/checkout,readonly" \
+            --workdir /checkout --entrypoint python booksys-bdnex:ci \
+            -m unittest tests.test_bdnex_engine -v
   required:
     name: required
     if: ${{ always() }}
-    needs: [scope, policy, offline-tests, worker-image, library-image, byparr-image]
+    needs: [scope, policy, offline-tests, worker-image, library-image, byparr-image, bdnex-image]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
