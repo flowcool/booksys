@@ -5,6 +5,19 @@ from library.names import parse_name
 
 
 class NameTests(unittest.TestCase):
+    def test_single_word_standalone_requires_file_and_capture_agreement(self):
+        from library.asset_evidence import bind_evidence
+        from library.work_identity import evaluate_work
+        key = 'a' * 64
+        asset = {'sha256': key, 'origins': ['o'], 'embedded': {'Series': 'Avila'},
+                 'captured_hints': {'source': {'title': 'Avila (2026)'}}}
+        state = {'assets': {key: asset}, 'origins': {'o': {
+            'sha256': key, 'path': 'package/ZzAvila.cbz', 'source': 'source'}}}
+        candidate = {'title': 'Avila'}
+        self.assertEqual(evaluate_work(bind_evidence(state, key), [candidate])['status'], 'identified')
+        asset['captured_hints']['source']['title'] = 'Another work'
+        self.assertEqual(evaluate_work(bind_evidence(state, key), [candidate])['status'], 'review')
+
     def test_issue_annotations_do_not_become_part_of_the_series(self):
         self.assertEqual(parse_name('Train De Nuit (1992) #02 - Tome 2.cbz'),
                          {'series': 'Train De Nuit', 'number': '2'})

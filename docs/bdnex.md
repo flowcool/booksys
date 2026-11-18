@@ -58,7 +58,10 @@ issue markers and repeated issue captions retain the series name and its
 qualifiers. Conflicting issue numbers and mixed volume/issue shapes stay
 unqualified. Original archive names and bytes remain unchanged.
 
-The retained 516-file replay increases identity concordance from 112 to 150,
+The retained 516-file replay increases identity concordance from 112 to 153,
 with all 112 prior identities retained. This measures offline concordance
 against retained references, not independently verified accuracy for every gain.
 The metadata method change uses existing progressive replay; no bulk reset.
+
+A standalone title may contain one informative word when its file name and
+direct captured title agree. Bundle-parent labels cannot supply this proof.
