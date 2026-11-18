@@ -65,6 +65,43 @@ class ConcordanceSafetyTests(unittest.TestCase):
         self.assertEqual(result['status'], 'identified')
         self.assertEqual(len(result['concordant_candidates']), 1)
 
+    def test_series_trailing_year_requires_the_same_number(self):
+        evidence = {'series': 'Housewives at Play', 'number': 12, 'asset_bound': True}
+        for series in ('Housewives at Play 1999', 'Housewives at Play (1999)'):
+            for number, status in ((12, 'identified'), (13, 'no_match')):
+                with self.subTest(series=series, number=number):
+                    result = evaluate_work(evidence, [reference(series=series, number=number)])
+                    self.assertEqual(result['status'], status)
+
+    def test_series_with_distinct_trailing_years_remain_in_conflict(self):
+        result = evaluate_work({'series': 'Batman', 'number': 5, 'asset_bound': True},
+            [reference(series='Batman 1940', number=5), reference(series='Batman 2011', number=5)])
+        self.assertEqual(result['status'], 'review')
+        self.assertEqual(result['reason'], 'Concordant references describe different works')
+        self.assertIn('series', result['field_conflicts'])
+
+    def test_exact_series_wins_over_a_same_name_series_with_a_year(self):
+        evidence = {'series': 'Sunstone', 'number': 2, 'asset_bound': True}
+        exact = reference(series='Sunstone', number=2)
+        before = evaluate_work(evidence, [exact])
+        self.assertEqual(before['status'], 'identified')
+        self.assertEqual(evaluate_work(evidence,
+            [reference(series='Sunstone 2011', number=2), exact])['concordant_candidates'],
+            before['concordant_candidates'])
+        after = evaluate_work(evidence, [exact, reference(series='Sunstone 2011', number=2)])
+        self.assertEqual(after['status'], before['status'])
+        self.assertEqual(after['work'], before['work'])
+
+    def test_label_year_must_agree_with_the_relaxed_series_year(self):
+        for labels, status in ((['Magenta (2006) Vol.2'], 'no_match'),
+                               (['Magenta (2008) Vol.2'], 'identified'),
+                               (['Magenta Vol.2'], 'identified'),
+                               (['Magenta (2008) Vol.2', 'Magenta (2006) Vol.2'], 'no_match')):
+            with self.subTest(labels=labels):
+                result = evaluate_work({'series': 'Magenta', 'number': 2,
+                    'asset_bound': True, 'labels': labels}, [reference(series='Magenta 2008', number=2)])
+                self.assertEqual(result['status'], status)
+
     def test_conflicting_file_assertions_block_even_with_one_matching_result(self):
         evidence = {'title': 'Le Grand Voyage', 'asset_bound': True,
                     'provenance': {'title': [{'value': 'Un autre album', 'scope': 'asset', 'source': 'embedded'}]}}

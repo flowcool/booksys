@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 PIN = '9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33'
+MIN_CANDIDATE_SCORE = 60
 MAX_BODY = 16384
 MAX_RESPONSE = 65536
 
@@ -50,7 +51,7 @@ def validate_candidates(rows: Any) -> list[dict[str, Any]]:
                 or not re.fullmatch(r'https://www\.bedetheque\.com/BD-[^/\s?#]+-' + re.escape(ref) + r'\.html', url)):
             raise ValueError('Invalid candidate reference')
         score = row.get('score')
-        if isinstance(score, bool) or not isinstance(score, (float, int)) or not 70 <= score <= 100:
+        if isinstance(score, bool) or not isinstance(score, (float, int)) or not MIN_CANDIDATE_SCORE <= score <= 100:
             raise ValueError('Invalid candidate score')
         if row.keys() - {'source', 'edition_ref', 'url', 'score', 'title', 'series', 'number'}:
             raise ValueError('Unsupported candidate field')

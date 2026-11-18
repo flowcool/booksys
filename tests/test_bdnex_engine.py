@@ -11,6 +11,67 @@ from bdnex_service.engine import Engine, SitemapCache, validate_xml
 
 @unittest.skipUnless(importlib.util.find_spec('bdnex'), 'Pinned engine lives in the separate container')
 class EngineTests(unittest.TestCase):
+    def test_high_score_without_volume_survives_many_wanted_albums(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            cache = SitemapCache(path, writable=True)
+            urls = sitemap_urls()
+            albums = [f'Tueur-Tome-2-Album-{n}-90000{n}' for n in range(1, 8)]
+            albums.append('Tueur-900100')
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', urls[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', urls[1], b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            candidates = engine.source.candidates('Tueur 2')
+            self.assertEqual(len(candidates), 5)
+            integral, score = next((c, s) for c, s in candidates if c.source_id == '900100')
+            self.assertIsNone(integral.volume)
+            self.assertGreater(score, max(s for c, s in candidates if c.volume == 2))
+
+    def test_wanted_volume_survives_cut_with_long_slug(self) -> None:
+        from bdnex.importer.bedetheque import Bedetheque  # type: ignore[import-not-found]
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls  # type: ignore[import-not-found]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            cache = SitemapCache(path, writable=True)
+            urls = sitemap_urls()
+            albums = [f'Akim-Tome-{n}-90000{n}' for n in range(1, 8)]
+            albums.append('Akim-1re-serie-aventures-voyages-Tome-296-La-colere-du-tigre-900296')
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', urls[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', urls[1], b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            upstream = Bedetheque(cache)
+            self.assertNotIn('900296', [c.source_id for c, _ in upstream.candidates('Akim 296')])
+            cache.close()
+            engine = Engine(path)
+            candidates = engine.source.candidates('Akim 296')
+            self.assertEqual(len(candidates), 5)
+            self.assertEqual(candidates[0][0].source_id, '900296')
+            self.assertEqual(candidates[0][1], engine.source._score(['akim'], candidates[0][0]))
+
+    def test_low_score_requires_volume_and_series_words(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls  # type: ignore[import-not-found]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            cache = SitemapCache(path, writable=True)
+            urls = sitemap_urls()
+            cache.cache_put('bedetheque', 'sitemap', urls[0], b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://www.bedetheque.com/BD-Akim-1re-serie-aventures-voyages-Tome-296-La-colere-du-tigre-900296.html</loc></url></urlset>')
+            cache.cache_put('bedetheque', 'sitemap', urls[1], b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            for name in ('Akim - 296.cbz', 'Akim - 296 - ScanPersonnel.cbz'):
+                with self.subTest(name=name):
+                    candidates = engine.match({'inputs': [{'path': name, 'embedded': {}}]})['candidates']
+                    self.assertEqual([c['edition_ref'] for c in candidates], ['900296'])
+                    self.assertGreaterEqual(candidates[0]['score'], 60)
+                    self.assertLess(candidates[0]['score'], 70)
+            for name in ('Akim - 295.cbz', 'Akim.cbz', 'Akim unknown - 296.cbz'):
+                self.assertEqual(engine.match({'inputs': [{'path': name, 'embedded': {}}]})['candidates'], [])
+
     def test_index_and_supplied_hints_find_album_without_reading_logical_path(self) -> None:
         from bdnex.importer.bedetheque.sitemap import sitemap_urls  # type: ignore[import-not-found]
         with tempfile.TemporaryDirectory() as folder:
@@ -64,6 +125,14 @@ class EngineTests(unittest.TestCase):
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_candidate_score_floor_is_60(self) -> None:
+        from library.bdnex_protocol import validate_candidates
+        row = {'source': 'bedetheque', 'edition_ref': '900296',
+               'url': 'https://www.bedetheque.com/BD-Akim-Tome-296-900296.html', 'score': 60}
+        self.assertEqual(validate_candidates([row]), [row])
+        with self.assertRaises(ValueError):
+            validate_candidates([{**row, 'score': 59}])
+
     def test_html_and_entity_documents_are_not_accepted_as_terminal_sitemaps(self) -> None:
         for body in (b'<html/>', b'<!DOCTYPE urlset><urlset/>', b'<urlset/>'):
             with self.assertRaises(ValueError):

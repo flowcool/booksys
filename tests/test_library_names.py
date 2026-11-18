@@ -65,3 +65,24 @@ class NameTests(unittest.TestCase):
     def test_integral_is_one_book_without_invented_number(self):
         self.assertEqual(parse_name('Le Grand Pouvoir du Chninkel - Intégrale.cbz'),
                          {'title': 'Le Grand Pouvoir du Chninkel', 'integral': True})
+
+    def test_release_underscore_and_colon_labels(self):
+        cases = [
+            ('Neon.Genesis.Evangelion_Anima_01.cbz', 'Neon Genesis Evangelion Anima', '1'),
+            ('Neon.Genesis.Evangelion.T06.FRENCH.RETAiL.COMiC.iNTERNAL.eBook-PRiNTER', 'Neon Genesis Evangelion', '6'),
+            ('Griffe.Blanche.T01.L.oeuf.du.Dragon.Roi.2013.FRENCH.HYBRiD.COMiC.CBZ', 'Griffe Blanche', '1'),
+            ('zzLe.Depisteur.T01.La.Tondue', 'Le Depisteur', '1'),
+            ('Lou_Cale_The_Famous_01@BD_Fr', 'Lou Cale The Famous', '1'),
+            ('Rising Stars 06@BD_Fr', 'Rising Stars', '6'),
+            ('Love - Tome 01: Le Tigre - Federico Bertolucci, Frédéric Brrémaud', 'Love', '1'),
+            ('Captain Tsubasa - Saison 1 T04: Anime comics - Captain Tsubasa', 'Captain Tsubasa - Saison 1', '4'),
+            ('Lou_Cale_The_Famous_01.cbz', 'Lou Cale The Famous', '1'),
+            ('Neon.Genesis.Evangelion.T06.truefrench', 'Neon Genesis Evangelion', '6'),
+        ]
+        for label, series, number in cases:
+            with self.subTest(label=label):
+                self.assertEqual(parse_name(label), {'series': series, 'number': number})
+        for label in ('Catch 22', 'Fahrenheit.451.FRENCH', 'Wonder Woman - Historia',
+                      'Series T01 T02', 'Series T01: T02', 'Series_2024_01'):
+            with self.subTest(label=label):
+                self.assertEqual(parse_name(label), {})

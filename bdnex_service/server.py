@@ -44,15 +44,16 @@ def handler(token: str, match: Callable[[dict[str, Any]], dict[str, Any]]) -> ty
                 if not 0 < length <= MAX_BODY or self.headers.get('Transfer-Encoding'):
                     raise ValueError('Invalid body length')
                 request = validate_request(json.loads(self.rfile.read(length)))
+            except (ValueError, KeyError, TypeError):
+                self.reply(400, {})
+                return
+            try:
                 result = match(request)
                 validate_candidates(result['candidates'])
                 payload = {**result, 'schema': 1, 'asset': request['asset'], 'request': digest(request), 'engine': PIN}
                 if len(json.dumps(payload).encode()) > MAX_RESPONSE:
                     raise ValueError('Response too large')
-            except (ValueError, KeyError, TypeError):
-                self.reply(400, {})
-                return
-            except (OSError, RuntimeError):
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError):
                 self.reply(503, {})
                 return
             self.reply(200, payload)

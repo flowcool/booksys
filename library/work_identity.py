@@ -134,6 +134,23 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
                 or (series_anchor and normalized(bound['series'], 'series') == normalized(candidate.get('series', ''), 'series')
                     and normalized(bound['number'], 'number') == normalized(candidate.get('number', ''), 'number'))):
             matched.append(candidate)
+    year_suffix = r'\s+(?:(?:19|20)[0-9]{2}|\((?:19|20)[0-9]{2}\))\s*$'
+    if not matched and series_anchor and not re.search(year_suffix, str(bound['series'])):
+        for candidate in candidates:
+            series = str(candidate.get('series', ''))
+            year = re.search(year_suffix, series)
+            if not year or any(value != year.group().strip().strip('()')
+                               for label in evidence.get('labels', [])
+                               for value in re.findall(r'\(((?:19|20)[0-9]{2})\)', label)):
+                continue
+            if (informative(candidate.get('title', ''))
+                    and normalized(bound['number'], 'number') == normalized(candidate.get('number', ''), 'number')
+                    and normalized(bound['series'], 'series') == normalized(series[:year.start()], 'series')
+                    and not any(present(candidate.get(field))
+                                and normalized(value, field) != normalized(candidate[field], field)
+                                for field, value in bound.items()
+                                if field != 'series' and (field != 'title' or title_anchor))):
+                matched.append(candidate)
     result['concordant_candidates'] = deepcopy(matched)
     if not matched:
         result.update(status='no_match', reason='No reference agrees with asset evidence')

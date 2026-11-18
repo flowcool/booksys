@@ -36,6 +36,9 @@ class BDneXClient:
             body = json.dumps(request).encode()
             if len(body) > MAX_BODY:
                 raise ValueError('BDneX request too large')
+        except ValueError:
+            return {'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'}
+        try:
             req = Request(self.endpoint + '/v1/match', data=body,
                 headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
             # Private credentials must never follow redirects or ambient proxy settings.
@@ -54,6 +57,8 @@ class BDneXClient:
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             if isinstance(exc, HTTPError):
                 exc.close()
+                if exc.code == 400:
+                    return {'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'}
             self.retry_at = time.monotonic() + 60
             return {'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'}
 
