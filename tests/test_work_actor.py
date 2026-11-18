@@ -62,6 +62,25 @@ class WorkActorTests(unittest.TestCase):
         self.assertEqual(exception_details(Deferred(schedule.record))['exception_type'], 'Deferred')
         self.assertEqual(exception_details(BrowserOutcome(Outcome('browser_timeout', 'local')))['exception_type'], 'BrowserOutcome')
 
+    def test_nested_failure_keeps_request_and_attempt_when_refs_change(self):
+        from unittest.mock import patch
+        from booksys_core.diagnostics import event, emit
+        def execute(task, now):
+            emit(service='collector', stage='collection', code='failed', reason='unknown_effect',
+                 refs=[{'kind': 'source', 'id': 'synthetic-source'}])
+            raise OSError('synthetic failure')
+        self.work.add('intake', 'source', input_rev='r', method='m', now=T0)
+        events = []
+        with patch('booksys_core.diagnostics._default') as sink:
+            sink.emit.side_effect = lambda value: events.append(value) or True
+            self.assertEqual(self.actor(execute).step(now=T0), 'retry')
+        failures = [event(**{k: v for k, v in value.items() if k not in
+                    ('schema', 'event_id', 'at', 'level')}) for value in events if value['code'] == 'failed']
+        self.assertEqual(len(failures), 2)
+        self.assertEqual(failures[0]['refs'], [{'kind': 'source', 'id': 'synthetic-source'}])
+        self.assertEqual(failures[0]['request_id'], failures[1]['request_id'])
+        self.assertEqual([value['attempt'] for value in failures], [1, 1])
+
 
 
 

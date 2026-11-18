@@ -84,6 +84,51 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(journal['submissions'][FIRST]['status'], 'queued')
         self.assertEqual((calls.count('add_package'), calls.count('move_package')), (1, 1))
 
+    def test_native_api_error_response_is_a_certain_refusal(self):
+        import io
+        from booksys_core.downloader import Pyload
+        from booksys_core.errors import NativeRefusal
+        client = object.__new__(Pyload)
+        client.endpoint, client.key, client.admission = 'http://localhost', 'synthetic', None
+        response = Mock()
+        response.__enter__ = Mock(return_value=io.BytesIO(b'{"error":"refused"}'))
+        response.__exit__ = Mock(return_value=False)
+        with patch('booksys_core.downloader.urlopen', return_value=response), \
+                patch('booksys_core.diagnostics.emit') as emitted:
+            with self.assertRaises(NativeRefusal):
+                client.call('add_package', write=True)
+        failure = emitted.call_args.kwargs
+        self.assertEqual(failure['reason'], 'submission_refused')
+        self.assertEqual(failure['exception_type'], 'NativeRefusal')
+
+    def test_submit_failures_distinguish_refusal_from_uncertain_effect_and_keep_operation(self):
+        from booksys_core.collection import run_once
+        from booksys_core.errors import NativeRefusal
+        from booksys_core.diagnostics import context, event
+        journal = {'categories': {}, 'submissions': {
+            FIRST: {'status': 'creating', 'operation_id': 'refused-operation'},
+            SECOND: {'status': 'creating', 'operation_id': 'known-operation'}}}
+        records = {source: {'downloads': {}} for source in (FIRST, SECOND)}
+        store = Mock(); store.monitor.return_value = journal; store.captured.return_value = {'items': records}
+        downloader = Mock(); downloader.call.return_value = {'pause': False, 'download': True}
+        downloader.submit.side_effect = [NativeRefusal('pyLoad rejected add_package'), OSError('token=secret')]
+        events = []
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('booksys_core.collection.CollectorState', return_value=store), \
+                patch('booksys_core.collection.ScheduledCalls'), \
+                patch('booksys_core.collection.catalogue', return_value=([FIRST, SECOND], None)), \
+                patch('booksys_core.collection.CRAWL_PAGES', 1), \
+                patch('booksys_core.diagnostics.emit', side_effect=lambda **fields: events.append(event(**fields))), \
+                context(request_id='owning-request', attempt=2):
+            run_once(Path(directory), Mock(), downloader)
+        self.assertEqual([value['reason'] for value in events], ['submission_refused', 'unknown_effect'])
+        self.assertEqual([value['exception_type'] for value in events], ['NativeRefusal', 'OSError'])
+        self.assertEqual([value['request_id'] for value in events], ['owning-request'] * 2)
+        self.assertEqual([value['attempt'] for value in events], [2, 2])
+        self.assertEqual(events[1]['operation_id'], 'known-operation')
+        self.assertIn({'kind': 'operation', 'id': 'known-operation'}, events[1]['refs'])
+        self.assertNotIn('secret', json.dumps(events))
+
     def test_bounded_pass_resumes_saved_items_and_partial_links_without_resubmit(self):
         from booksys_core.collection import run_once
         journal = {'version': 1, 'categories': {}, 'submissions': {}}

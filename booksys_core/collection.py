@@ -14,11 +14,12 @@ from typing import Any
 from urllib.parse import urlsplit, parse_qsl, urlencode
 from booksys_core.browser import Byparr
 from booksys_core.downloader import Pyload, REQUEST_GUARD
-from booksys_core.errors import BrowserError, CollectionError
+from booksys_core.errors import BrowserError, CollectionError, NativeRefusal
 from booksys_core.files import atomic_write, export_links, save, monitor_patch
 from booksys_core.parsing import DEFAULT_CATEGORY, catalogue, extract_page, resolve, site_url, source_plan, resolve_link
 from fiches import CoverError, write_fiche
 from booksys_core.scheduler import ScheduledCalls, Deferred
+from booksys_core.network_admission import BudgetWait
 from library.operational_state import CollectorState,OperationalCompletion
 from library.codec import encode
 
@@ -285,11 +286,21 @@ def run_once(directory: Path, fetch: Callable[[str], str], downloader: Pyload,
                             try:
                                 reserve(35)
                                 downloader.submit(source, record, journal, directory / 'monitor.yaml')
-                            except (CollectionError, OSError):
-                                from booksys_core.diagnostics import emit
+                            except (Deferred, BudgetWait):
+                                raise
+                            except (CollectionError, OSError) as exc:
+                                from booksys_core.diagnostics import emit, exception_details, opaque
                                 from booksys_core.values import digest
-                                emit(service='collector', stage='collection', code='failed', reason='unknown_effect',
-                                     refs=[{'kind': 'source', 'id': digest(source)}])
+                                entry = journal['submissions'].get(source, {})
+                                refs = [{'kind': 'source', 'id': digest(source)}]
+                                fields = exception_details(exc)
+                                # Intent precedes the first native mutation. An existing intent requires readback.
+                                fields['reason'] = 'unknown_effect' if entry and not isinstance(exc, NativeRefusal) else 'submission_refused'
+                                operation = entry.get('operation_id')
+                                if opaque(operation):
+                                    fields['operation_id'] = operation
+                                    refs.append({'kind': 'operation', 'id': operation})
+                                emit(service='collector', stage='collection', code='failed', refs=refs, **fields)
                                 counts['skipped'] += 1
                             else:
                                 counts['queued'] += 1

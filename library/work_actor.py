@@ -190,7 +190,8 @@ class WorkActor:
     def _run(self, item: Item, task: Task, *, now: datetime) -> str:
         started = time.monotonic()
         self.report('started', item=item)
-        with context(refs=[{'kind': 'task', 'id': task.key}]), self._acting(item, task):
+        with context(refs=[{'kind': 'task', 'id': task.key}],
+                     request_id=hashlib.sha256(item.item.encode()).hexdigest(), attempt=item.attempts), self._acting(item, task):
             result = self.execute(task, now)
             outcome = result.outcome if isinstance(result, StepResult) else result
             if outcome not in ('done', 'retry', 'defer'):

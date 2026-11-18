@@ -23,7 +23,7 @@ REASONS = frozenset(('none', 'unknown', 'browser_busy', 'remote_rate_limited', '
     'provider_unavailable', 'provider_budget', 'identity_unknown', 'identity_conflict', 'transfer_wait',
     'transfer_failed', 'invalid_archive', 'unsupported_input', 'decoder_timeout', 'source_drift',
     'ownership_conflict', 'ledger_invalid', 'uncertain_external_write', 'disk_reserve', 'disk_full',
-    'schema_invalid', 'authority_mismatch', 'storage_busy', 'diagnostic_unavailable', 'unknown_effect',
+    'schema_invalid', 'authority_mismatch', 'storage_busy', 'diagnostic_unavailable', 'unknown_effect', 'submission_refused',
     'downloader_paused', 'catalogue_order_invalid', 'pagination_invalid', 'idle', 'resource_wait', 'recovery_wait', 'missing_dependency',
     'unexpected_exception', 'provider_wait', 'inputs_changed', 'operator_decision_pending',
     'domain_prerequisites', 'source_policy_changed', 'nas_unavailable', 'conflict_wait',
@@ -32,7 +32,7 @@ REASONS = frozenset(('none', 'unknown', 'browser_busy', 'remote_rate_limited', '
     'retirement_prerequisites', 'native_prerequisites_unavailable', 'reconciliation_required'))
 REF_KINDS = ('source', 'package', 'file', 'origin', 'asset', 'decision', 'operation', 'task')
 ERRORS = frozenset(('TimeoutError', 'OSError', 'ValueError', 'TypeError', 'KeyError', 'LibraryError',
-                   'CollectionError', 'Deferred', 'BrowserOutcome', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
+                   'CollectionError', 'Deferred', 'BrowserOutcome', 'NativeRefusal', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
 FIELDS = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'cycle_id',
     'request_id', 'operation_id', 'refs', 'title', 'duration_ms', 'wait_ms', 'attempt', 'repeat_count',
     'dropped_count', 'next_attempt', 'exception_type', 'message', 'cause_type', 'detail', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count'))
