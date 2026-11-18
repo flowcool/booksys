@@ -66,6 +66,66 @@ class LoggingTests(unittest.TestCase):
         self.assertIn('diagnostic_unavailable', saved)
 
 class ErrorDetailTests(unittest.TestCase):
+    def test_unexpected_library_error_has_sanitized_message_and_cause(self):
+        from booksys_core.diagnostics import exception_details
+        from booksys_core.errors import LibraryError
+        try:
+            try:
+                raise RuntimeError('cause token=CAUSE-CANARY')
+            except RuntimeError as cause:
+                raise LibraryError(
+                    "decode /data/books/input.cbz '/home/PRIVATE/input.cbz' "
+                    'https://user:URL-CANARY@host/archive token=TOKEN-CANARY '
+                    'Authorization: Bearer AUTH-CANARY') from cause
+        except LibraryError as exc:
+            parsed = parse_event(json.dumps(event(service='library', stage='local',
+                code='failed', **exception_details(exc))))
+        self.assertEqual(parsed['reason'], 'unexpected_exception')
+        self.assertEqual(parsed['exception_type'], 'LibraryError')
+        self.assertEqual(parsed['cause_type'], 'RuntimeError')
+        self.assertIn('decode /data/books/input.cbz', parsed['message'])
+        self.assertNotIn('CANARY', json.dumps(parsed))
+        self.assertNotIn('/home/', parsed['message'])
+        self.assertNotIn('PRIVATE', parsed['message'])
+        self.assertLessEqual(len(parsed['message']), 300)
+        self.assertEqual(parsed['schema'], 1)
+
+    def test_plain_exception_message_is_bounded_and_schema_rejects_unsafe_fields(self):
+        from booksys_core.diagnostics import exception_details
+        parsed = parse_event(json.dumps(event(service='library', stage='local', code='failed',
+            **exception_details(Exception('decoder failed: ' + 'x' * 400)))))
+        self.assertEqual(parsed['message'], 'decoder failed: ' + 'x' * 284)
+        self.assertIsNone(parsed['cause_type'])
+        for fields in ({'message': 'x' * 301}, {'message': '/etc/PRIVATE'},
+                       {'message': '/data/../etc/PRIVATE'}, {'message': 'token=CANARY'},
+                       {'message': 'Bearer CANARY'}, {'message': "token='CANARY words'"},
+                       {'message': 'https://user:CANARY@host'}, {'message': 1},
+                       {'cause_type': 'CANARY'}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                parse_event(json.dumps({**parsed, **fields}))
+
+    def test_truncation_at_data_path_prefix_still_emits_valid_event(self):
+        from booksys_core.diagnostics import exception_details
+        value = event(service='library', stage='local', code='failed',
+            **exception_details(Exception('x' * 296 + ' /data/books/input.cbz')))
+        self.assertLessEqual(len(parse_event(json.dumps(value))['message']), 300)
+
+    def test_implicit_cause_and_suppressed_context_follow_python_chaining(self):
+        from booksys_core.diagnostics import exception_details
+        for suppressed in (False, True):
+            try:
+                try:
+                    raise OSError('private cause')
+                except OSError:
+                    if suppressed:
+                        raise Exception('outer') from None
+                    raise Exception('outer')
+            except Exception as exc:
+                parsed = parse_event(json.dumps(event(service='library', stage='local',
+                    code='failed', **exception_details(exc))))
+            self.assertEqual(parsed['message'], 'outer')
+            self.assertEqual(parsed['cause_type'], None if suppressed else 'OSError')
+
     def test_uncaught_and_logging_errors_keep_only_safe_metadata(self):
         import logging
         import sys

@@ -35,7 +35,7 @@ ERRORS = frozenset(('TimeoutError', 'OSError', 'ValueError', 'TypeError', 'KeyEr
                    'CollectionError', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
 FIELDS = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'cycle_id',
     'request_id', 'operation_id', 'refs', 'title', 'duration_ms', 'wait_ms', 'attempt', 'repeat_count',
-    'dropped_count', 'next_attempt', 'exception_type', 'detail', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count'))
+    'dropped_count', 'next_attempt', 'exception_type', 'message', 'cause_type', 'detail', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count'))
 REQUIRED = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'refs'))
 
 
@@ -60,6 +60,32 @@ def _short_text(value: str, limit: int) -> str:
 
 def safe_text(value: str, limit: int = 240) -> str:
     return _short_text(value, limit) if len(value) <= 512 else _filter_text(value, limit)
+
+
+# Messages are untrusted. Keep /data paths only, with lexical traversal checks.
+_message_paths = re.compile(
+    r"'(?:/|[A-Za-z]:[\\/])[^']*'|\"(?:/|[A-Za-z]:[\\/])[^\"]*\"|"
+    r"(?<![\w/])(?:/|[A-Za-z]:[\\/])[^\s'\"<>,;)\]}]*")
+_message_secrets = re.compile(
+    r'(?i)(?:authorization\s*:\s*(?:(?:bearer|basic)\s+)?|bearer\s+|'
+    r'(?:password|api[_-]?key|(?:access[_-]?|refresh[_-]?)?token|secret)\s*[:=]\s*)'
+    r"(?:'[^']*'|\"[^\"]*\"|[^\s,;]+)")
+
+
+def _exception_message(value: str) -> str:
+    from posixpath import normpath
+
+    def path(match: re.Match[str]) -> str:
+        raw = match.group().strip("'\"")
+        normalized = normpath(raw)
+        return match.group() if (raw == '/data' or raw.startswith('/data/')) and (
+            normalized == '/data' or normalized.startswith('/data/')) else '[private path]'
+
+    value = _urls.sub('[private URL]', value)
+    value = _message_secrets.sub('[private field]', value)
+    value = safe_text(_message_paths.sub(path, value), 300)
+    # Truncation can leave an incomplete /data prefix. Filter that tail again.
+    return safe_text(_message_paths.sub(path, value), 300)
 
 
 def utc(value: Any) -> bool:
@@ -108,6 +134,10 @@ def validate(value: Any) -> dict[str, Any]:
         raise ValueError('Invalid retry timestamp')
     if 'exception_type' in value and value['exception_type'] not in ERRORS:
         raise ValueError('Unrecognized exception type')
+    if 'cause_type' in value and value['cause_type'] is not None and value['cause_type'] not in ERRORS:
+        raise ValueError('Unrecognized cause type')
+    if 'message' in value and (type(value['message']) is not str or value['message'] != _exception_message(value['message'])):
+        raise ValueError('Unfiltered exception message')
     if 'detail' in value and (type(value['detail']) is not str or value['detail'] != safe_text(value['detail'], 300)):
         raise ValueError('Unfiltered event detail')
     if 'title' in value and (type(value['title']) is not str or value['title'] != safe_text(value['title'])):
@@ -294,8 +324,8 @@ def degradation() -> dict[str, int]:
     return {**value, 'rejected_count': value['rejected_count']+_failed_emissions}
 
 
-# Third-party messages are not a safe event source. Keep a controlled indication
-# that they occurred; never call getMessage(), format an exception, or copy args.
+# Third-party log messages are not a safe event source. Never call getMessage()
+# or copy log args. Exception messages pass through the dedicated sanitizer.
 import logging
 
 
@@ -313,8 +343,7 @@ class SafeLoggingHandler(logging.Handler):
 
 
 def exception_details(exc: BaseException) -> dict[str, Any]:
-    # Only ResultInputsChanged exposes a bounded message. Other exceptions
-    # expose class identity and trusted project frame metadata only.
+    # Preserve reason mapping and trusted project frames; sanitize unexpected messages.
     import sqlite3
     reason = 'unexpected_exception'
     if isinstance(exc, sqlite3.OperationalError) and getattr(exc, 'sqlite_errorcode', 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
@@ -345,7 +374,13 @@ def exception_details(exc: BaseException) -> dict[str, Any]:
             stack.append({'module': module, 'function': function, 'line': tb.tb_lineno})
         tb = tb.tb_next
     from library.conflicts import ResultInputsChanged
-    details = {'reason': reason, 'exception_type': kind if kind in ERRORS else 'Exception', 'stack': stack[-32:]}
+    details: dict[str, Any] = {'reason': reason, 'exception_type': kind if kind in ERRORS else 'Exception', 'stack': stack[-32:]}
+    if reason == 'unexpected_exception':
+        details['message'] = _exception_message(str(exc))
+        cause = exc.__cause__ if exc.__cause__ is not None else (
+            None if exc.__suppress_context__ else exc.__context__)
+        cause_kind = type(cause).__name__ if cause is not None else None
+        details['cause_type'] = cause_kind if cause_kind is None or cause_kind in ERRORS else 'Exception'
     if isinstance(exc, ResultInputsChanged):
         details['detail'] = safe_text(str(exc), 300)
     return details
