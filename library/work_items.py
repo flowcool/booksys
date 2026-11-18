@@ -276,19 +276,15 @@ class WorkItems:
             return True
 
     def revive(self, stage: str, *, now: datetime | None = None, older_than: timedelta = timedelta(minutes=10)) -> int:
-        """Retry exhausted work with backoff; the recurring collection keeps its fixed interval."""
-        at = _instant(now)
-        with self._tx() as db:
-            # A failed item waits half its own age between rounds, at least 10 minutes and at most 6 hours (collection: always
-            # 10 minutes): 251 copies revivals an hour with no new cause. attempts restarts at 0, the claim guard refuses more.
-            rows = db.execute("UPDATE work_items SET state='ready', attempts=0, state_at=%(at)s, next_at=%(at)s "
-                              "WHERE stage=%(stage)s AND state='failed' AND state_at < %(at)s - "
-                              "CASE WHEN stage='collection' THEN %(age)s ELSE LEAST(interval '6 hours', "
-                              "GREATEST(%(age)s, (%(at)s - ready_at) / 2)) END RETURNING item",
-                              {'at': at, 'stage': self._stage(stage), 'age': older_than}).fetchall()
-            for (key,) in rows:
-                db.execute("INSERT INTO work_events(stage,item,at,from_state,to_state,detail) VALUES (%s,%s,%s,'failed','ready','revive')", (stage, key, at))
-            return len(rows)
+        """Compatibility entry point: elapsed time is not evidence of recovery.
+
+        Changed inputs and methods re-arm work through add(). A caller with
+        recovery proof must encode that relevant proof in the input revision.
+        Periodic collection uses its committed category checkpoint as input.
+        """
+        self._stage(stage)
+        _instant(now)
+        return 0
 
     def counts(self, stage: str | None = None) -> dict[str, dict[str, int]]:
         """State counts per stage in one aggregate over the index."""

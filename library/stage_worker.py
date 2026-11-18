@@ -121,7 +121,7 @@ def main() -> None:
                     snapshot_at = time.monotonic()
                     intake_at = snapshot_at + 5
                     release_at = snapshot_at + 10
-                    work_revive_at = snapshot_at + 20
+                    trim_at = snapshot_at + 20
                     while not stop.is_set():
                         stamp = datetime.now(timezone.utc)
                         with defer_contention(), (args.root/"state/stage-checkpoint.lock").open("a") as boundary:
@@ -148,15 +148,12 @@ def main() -> None:
                             runtime.discover_business(now=stamp)
                             for queue in ('collection', 'routing'):
                                 runtime.tasks.policy.register(queue, args.collector/'monitor.yaml')  # type: ignore[union-attr]
-                            if time.monotonic() >= work_revive_at:
-                                work_revive_at = time.monotonic() + 300
-                                # Items of the stages on work_items that used their attempts get one more round per hour.
+                            if time.monotonic() >= trim_at:
+                                trim_at = time.monotonic() + 300
+                                # Discovery re-arms changed inputs and methods. Maintenance never resets failures.
                                 try:
-                                    from library.work_stages import work_stages, work_items_for
                                     from library.versioned import trim
                                     trim(runtime.catalog.backend()._database)  # keep table_changes small
-                                    for adopted in sorted(work_stages()):
-                                        work_items_for(runtime.catalog.backend()._database).revive(adopted, now=stamp)
                                 except (CollectionError, LibraryError, OSError) as exc:
                                     emit(service=service, stage='diagnostics', queue=args.queue, code='degraded', **exception_details(exc))
                             if time.monotonic() >= release_at:
