@@ -75,6 +75,29 @@ class ActionableLoggingTests(unittest.TestCase):
                 self.assertNotIn('private', json.dumps(event))
 
 
+    def test_repeated_error_keeps_the_terminal_failure_event(self):
+        from library.work_items import WorkItems, retry_delay
+        from library.primitives import empty
+        from postgres_fixture import create_store
+        with tempfile.TemporaryDirectory() as temporary:
+            store = create_store(self, Path(temporary)/'state', empty())
+            WorkItems.upgrade(store._database)
+            work = WorkItems(store._database, max_attempts={'metadata': 3})
+            self.addCleanup(work.close)
+            work.add('metadata', 'asset', input_rev='r', method='m', now=AT)
+            stamp = AT
+            for attempt in (1, 2, 3):
+                item = work.claim('metadata', 'worker', now=stamp)
+                self.assertEqual(item.attempts, attempt)
+                self.assertTrue(work.retry(item, 'provider_timeout', retry_delay(attempt), now=stamp))
+                stamp += retry_delay(attempt)
+            with store._database.connection() as db:
+                state, attempts = db.execute("SELECT state,attempts FROM work_items WHERE stage='metadata'").fetchone()
+            self.assertEqual((state, attempts), ('failed', 3))
+            events = work.events('metadata', 'asset')
+            self.assertEqual(sum(row[2] == 'failed' for row in events), 1)
+            self.assertTrue(any(row[2] == 'failed' and 'provider_timeout' in row[3] for row in events))
+
     def test_exception_retry_keeps_filtered_cause_and_real_state(self):
         from library.work_actor import WorkActor
         from library.work_items import WorkItems

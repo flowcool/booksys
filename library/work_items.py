@@ -226,7 +226,7 @@ class WorkItems:
              'st': item.stage, 'it': item.item, 'w': item.claimed_by, 'n': item.attempts}).fetchone()
         if row is None:
             return False            # the claim was lost: the caller must discard its result
-        if error and row[1] and previous and previous[0] == error:
+        if error and row[1] and row[0] == 'waiting' and previous and previous[0] == error:
             return True
         db.execute("INSERT INTO work_events(stage,item,at,from_state,to_state,detail) VALUES (%s,%s,%s,'claimed',%s,%s)",
                    (item.stage, item.item, at, row[0], (detail or to_state if row[1] else 'input changed during the step')[:200]))
