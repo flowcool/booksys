@@ -186,6 +186,8 @@ def provider_diagnostic(events: list[dict[str, Any]], *, deferred: bool = False)
               'provider_http_failure' if type(status) is int and status >= 400 else
               'provider_timeout' if event.get('exception_type') == 'TimeoutError' or event.get('failure_reason') == 'provider_timeout' else 'provider_unavailable')
     result: dict[str, Any] = {'reason': reason}
+    if type(event.get('reason')) is str:
+        result['detail'] = _exception_message(event['reason'])
     if event.get('dependency') in ('bdnex', 'www.bedetheque.com', 'catalogue.bnf.fr', 'openlibrary.org'):
         result['dependency'] = event['dependency']
     if type(status) is int and 100 <= status <= 599:

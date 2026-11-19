@@ -151,6 +151,22 @@ class DiagnosticBoundaryTests(unittest.TestCase):
         self.assertEqual(result.outcome, 'retry')
         self.assertEqual(result.diagnostic, {'reason': 'unknown', 'detail': 'Permission denied'})
 
+    def test_provider_dns_failure_keeps_the_sanitized_underlying_cause(self):
+        import socket
+        from urllib.error import URLError
+        from booksys_core.diagnostics import provider_diagnostic, diagnostic_text, event
+        for code, message in ((socket.EAI_AGAIN, 'Temporary failure in name resolution'),
+                              (socket.EAI_NODATA, 'No address associated with hostname')):
+            failure = URLError(socket.gaierror(code, message))
+            fields = provider_diagnostic([{'status': 'unavailable', 'dependency': 'catalogue.bnf.fr',
+                'exception_type': 'URLError', 'reason': str(failure)+' token=secret https://private.invalid /home/private/file'}])
+            self.assertEqual(fields['reason'], 'provider_unavailable')
+            self.assertIn(message, fields['detail'])
+            self.assertIn(message, diagnostic_text(fields))
+            self.assertNotIn('secret', fields['detail'])
+            self.assertNotIn('https://private', fields['detail'])
+            event(service='library', stage='identity', code='waiting', **fields)
+
     def test_diagnostic_fields_drop_untrusted_provider_values(self):
         from booksys_core.diagnostics import diagnostic_fields, diagnostic_text, event
         fields = diagnostic_fields({'reason': 'provider_unavailable', 'dependency': 'secret.invalid/private',
