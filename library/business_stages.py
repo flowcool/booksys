@@ -1,6 +1,7 @@
 """Bounded asset steps. Metadata, printed evidence and CBZ admission stay separate."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,30 @@ class BusinessStages:
             if key not in state['assets']:
                 continue
             for obligation in self.obligations(state, key, now=now):
+                prior = state['assets'][key].get('stage_metadata', {})
+                failures = prior.get('failed_dependencies', {})
+                if (obligation.stage == 'metadata' and prior.get('outcome') == 'retry' and failures
+                        and prior.get('evidence') == evidence_version(state['assets'][key])):
+                    from library.dependency_recovery import DependencyRecovery
+                    proof = DependencyRecovery(self.catalog.directory/'dependency-readiness.yaml',
+                                               database=backend._database).proof(failures)
+                    with backend._database.connection(write=True) as db:
+                        current = db.execute('SELECT w.state,w.input_rev,m.evaluation FROM work_items w '
+                                             'LEFT JOIN asset_metadata m ON m.asset=w.item '
+                                             'WHERE w.stage=%s AND w.item=%s FOR UPDATE OF w',
+                                             ('metadata', key)).fetchone()
+                        if current and (current[0] == 'blocked' or current[2] != prior.get('evaluation')):
+                            continue
+                        # A crash can exhaust an episode before its result commits.
+                        # Keep that revision even if readiness becomes unavailable.
+                        if current and current[1].startswith('recovery:'):
+                            obligation = replace(obligation, input_revision=current[1])
+                        if current and current[0] == 'failed' and proof and proof != prior.get('recovery_proof'):
+                            obligation = replace(obligation, input_revision='recovery:' + proof)
+                        tasks._check(db)
+                        tasks._discover(db, obligation, now=now)
+                        count += 1
+                        continue
                 tasks.discover(obligation, now=now)
                 count += 1
         return count
@@ -80,12 +105,17 @@ class BusinessStages:
             outcome = 'defer' if deferred else 'retry' if temporary else 'done'
             from booksys_core.diagnostics import provider_diagnostic
             diagnostic = provider_diagnostic(events, deferred=deferred) if outcome != 'done' else {}
+            consumed_recovery = (task.input_revision.removeprefix('recovery:')
+                                 if task.input_revision.startswith('recovery:')
+                                 else asset.get('stage_metadata', {}).get('recovery_proof'))
             asset['stage_metadata'] = {'evidence': evidence_version(asset), 'at': instant(now),
                                       'evaluation': task.input_revision, 'outcome': outcome, 'method': task.method}
             failures = {str(event['dependency']): datetime.fromisoformat(event['retrieved_at']).timestamp()
                         for event in events if event.get('status') == 'unavailable'
                         and (event.get('http_status', 0) == 429 or event.get('http_status', 0) >= 500 or 'reason' in event)
                         and event.get('dependency') and event.get('retrieved_at')}
+            if consumed_recovery:
+                asset['stage_metadata']['recovery_proof'] = consumed_recovery
             if failures:
                 asset['stage_metadata']['failed_dependencies'] = failures
             if outcome == 'done':
