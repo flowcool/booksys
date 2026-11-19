@@ -75,8 +75,12 @@ class WorkActorTests(unittest.TestCase):
             sink.emit.side_effect = lambda value: events.append(value) or True
             self.assertEqual(self.actor(execute).step(now=T0), 'retry')
         failures = [event(**{k: v for k, v in value.items() if k not in
-                    ('schema', 'event_id', 'at', 'level')}) for value in events if value['code'] == 'failed']
+                    ('schema', 'event_id', 'at', 'level')}) for value in events if value['code'] in ('failed', 'waiting')]
         self.assertEqual(len(failures), 2)
+        self.assertEqual([value['code'] for value in failures], ['failed', 'waiting'])
+        self.assertEqual(failures[1]['task_state'], 'waiting')
+        self.assertEqual(failures[1]['outcome'], 'retry')
+        self.assertEqual(failures[1]['next_attempt'], (T0 + timedelta(minutes=10)).isoformat())
         self.assertEqual(failures[0]['refs'], [{'kind': 'source', 'id': 'synthetic-source'}])
         self.assertEqual(failures[0]['request_id'], failures[1]['request_id'])
         self.assertEqual([value['attempt'] for value in failures], [1, 1])
