@@ -111,9 +111,10 @@ class NativeStages:
                     return 'retirement_prerequisites'
             return ''
         except (OSError, LibraryError, KeyError, ValueError, TypeError, yaml.YAMLError) as exc:
-            from booksys_core.diagnostics import emit, exception_details
+            from booksys_core.diagnostics import emit, exception_details, opaque
             emit(service='library', stage='diagnostics', queue=task.stage, code='waiting',
-                 refs=[{'kind': 'task', 'id': task.key}], **exception_details(exc))
+                 refs=[{'kind': 'task', 'id': task.key}] if opaque(getattr(task, 'key', None)) else [],
+                 **exception_details(exc))
             return 'native_prerequisites_unavailable'
 
     def execute(self, task: Task, *, now: datetime) -> StepResult:
@@ -319,8 +320,9 @@ class NativeStages:
                     NativeHistory(journal.parent).route(str(entry['package_id']),operation)
                     return 'absent', proof
         except (CollectionError, LibraryError, OSError, KeyError, ValueError, TypeError) as exc:
-            from booksys_core.diagnostics import emit, exception_details
+            from booksys_core.diagnostics import emit, exception_details, opaque
             emit(service='library', stage='diagnostics', queue=task.stage, code='waiting',
-                 refs=[{'kind': 'task', 'id': task.key}], **exception_details(exc))
+                 refs=[{'kind': 'task', 'id': task.key}] if opaque(getattr(task, 'key', None)) else [],
+                 **exception_details(exc))
             return 'uncertain', ''
         return 'uncertain', ''
