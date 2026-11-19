@@ -19,7 +19,7 @@ from src.utils import TimeoutTimer, get_browser
 import uuid
 
 from booksys_core.browser_outcomes import retry_after
-from booksys_core.diagnostics import opaque, emit, install_logging
+from booksys_core.diagnostics import REASONS, opaque, emit, install_logging
 
 
 def positive_env(name: str, default: int) -> int:
@@ -352,20 +352,34 @@ def create_app(browser_factory: Callable[..., Any] = get_browser, *, max_request
             request_generation = watchdog.admit()
             active_request_id = request_id
             started = clock()
+            outcome = 'retry'
+            terminal: dict[str, Any] = {'reason': 'unexpected_exception'}
             try:
                 # Include browser startup in the caller's budget. Upstream also
                 # passes this limit to navigation and Cloudflare solving.
-                return await asyncio.wait_for(perform(request, request_id), timeout=min(BYPARR_BUDGET, max(1, request.max_timeout)))
+                result = await asyncio.wait_for(perform(request, request_id), timeout=min(BYPARR_BUDGET, max(1, request.max_timeout)))
+                outcome = 'done'
+                terminal = {'reason': 'none'}
+                return result
             except TimeoutError as exc:
+                terminal = {'reason': 'browser_timeout', 'exception_type': 'TimeoutError'}
                 raise HTTPException(408, detail('browser_timeout', 'local', request_id)) from exc
-            except HTTPException:
+            except HTTPException as exc:
+                code = exc.detail.get('code') if isinstance(exc.detail, dict) else None
+                terminal = {'reason': code if code in REASONS else 'unknown_browser_failure', 'http_status': exc.status_code}
                 raise
-            except Exception:
+            except asyncio.CancelledError:
+                outcome = 'stopped'
+                terminal = {'reason': 'none'}
+                raise
+            except Exception as exc:
+                from booksys_core.diagnostics import exception_details
+                terminal = exception_details(exc)
                 raise HTTPException(502, detail('unknown_browser_failure', 'unknown', request_id)) from None
             finally:
                 active_request_id = None
                 try:
-                    emit(service='byparr', stage='byparr', code='completed', request_id=request_id,
+                    emit(service='byparr', stage='byparr', code='failed' if outcome == 'retry' else 'completed', request_id=request_id, outcome=outcome, **terminal,
                          duration_ms=max(0, int((clock() - started) * 1000)))
                 finally:
                     watchdog.finish(request_generation)

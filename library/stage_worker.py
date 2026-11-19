@@ -107,7 +107,7 @@ def main() -> None:
                     from library.operational_state import RuntimeObservation
                     RuntimeObservation(runtime.catalog.backend()._database).heartbeat(queue,at=time.time())
             except Exception as exc:  # A busy database must not end the thread: a dead thread leaves the heartbeat stale forever.
-                emit(service=service, stage='diagnostics', queue=args.queue, code='heartbeat_failed', **exception_details(exc))
+                emit(service=service, stage='diagnostics', queue=args.queue, code='degraded', **exception_details(exc))
             notify('WATCHDOG=1')
     pulse = threading.Thread(target=watchdog, daemon=True)
     pulse.start()
@@ -167,10 +167,10 @@ def main() -> None:
                                     moved = Release(runtime.client, runtime.catalog.backend()._database, args.reception,
                                                       args.collector, hooks_safe=hooks).run(limit=40)  # one delete call per batch
                                     if moved['released']:
-                                        emit(service=service, stage='release', queue=args.queue, code='released',
-                                             released=str(moved['released']), candidates=str(moved['candidates']))
+                                        emit(service=service, stage='retirement', queue=args.queue, code='completed',
+                                             detail=f"released={moved['released']} candidates={moved['candidates']}")
                                 except (CollectionError, LibraryError, OSError) as exc:
-                                    emit(service=service, stage='release', queue=args.queue, code='release_failed', **exception_details(exc))
+                                    emit(service=service, stage='retirement', queue=args.queue, code='failed', **exception_details(exc))
                             runtime.tasks.scan_next(now=stamp)
                             try:
                                 if time.monotonic() >= intake_at:

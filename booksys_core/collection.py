@@ -187,11 +187,11 @@ def run_fiche_once(directory: Path, browser: Byparr, downloader: Pyload, root: P
                                               "retry_after": time.time() + (3600 if browser_failed else 900)}
                 if isinstance(exc, CoverError) and package is not None:
                     progress["items"][source]["fiche_relative"] = f"{package['folder']}/fiche.md"
-                from booksys_core.diagnostics import emit
+                from booksys_core.diagnostics import emit, exception_details
                 from booksys_core.values import digest
                 emit(service='collector', stage='collection', code='waiting',
-                     reason='unknown_browser_failure' if browser_failed else 'provider_unavailable',
-                     refs=[{'kind': 'source', 'id': digest(source)}])
+                     next_attempt=datetime.fromtimestamp(progress['items'][source]['retry_after'], timezone.utc).isoformat(),
+                     refs=[{'kind': 'source', 'id': digest(source)}], **exception_details(exc))
                 if browser_failed:
                     attempted = False  # Stop browser work this cycle after a solver failure.
             if completions is not None and progress['items'][source].get('status')=='complete':

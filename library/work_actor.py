@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from contextlib import nullcontext
 
-from booksys_core.diagnostics import REASONS, context, emit, exception_details, opaque
+from booksys_core.diagnostics import REASONS, context, emit, exception_details, opaque, diagnostic_fields, diagnostic_text
 from library.locking import commit_guard, effect_guard, mutation_guard
 from library.primitives import LibraryError
 from booksys_core.network_admission import before_native_write
@@ -129,8 +129,13 @@ class WorkActor:
             self.report('waiting', reason, item=item, next_attempt=due.isoformat(), outcome='defer')
             return 'defer'
         except Exception as exc:
-            self.work.retry(item, f'{type(exc).__name__}: {str(exc)[:200]}', retry_delay(item.attempts), now=self._now(now))
-            self.report('failed', item=item, **exception_details(exc))
+            details = exception_details(exc)
+            # Persist the same filtered cause that reaches stderr, never raw exception text.
+            error = diagnostic_text(details)
+            if details.get('message'):
+                error = (error + ': ' + details['message'])[:200]
+            self.work.retry(item, error, retry_delay(item.attempts), now=self._now(now))
+            self._report_result(item, 'retry', details)
             return 'retry'
 
     def _acting(self, item: Item, task: Task | None = None) -> Any:
@@ -168,7 +173,7 @@ class WorkActor:
         prepared = step.prepared
         self.store.commit(prepared.change if prepared else Change(), expected_revision=prepared.revision if prepared else 0,
                           conflict=prepared.conflict if prepared else None, work_claim=(self.work, item), now=now,
-                          outcome=outcome, due_at=step.due_at, obligations=step.successors,
+                          outcome=outcome, due_at=step.due_at, proof=diagnostic_text(step.diagnostic) if step.diagnostic else '', obligations=step.successors,
                           source_progress=step.source_progress, completions=prepared.completions if prepared else None)
         # No commit_key: the store derives it from the content, so an identical retry is idempotent and a different result
         # after a given-back attempt is a different commit (a key built from the attempt number collided: 49 lost results).
@@ -197,6 +202,28 @@ class WorkActor:
             if outcome not in ('done', 'retry', 'defer'):
                 raise LibraryError('Unknown business step outcome')
             self._commit(item, result if isinstance(result, StepResult) else StepResult(outcome), outcome, now)
-        self.report('completed' if outcome == 'done' else 'waiting', 'none' if outcome == 'done' else 'unknown', item=item, outcome=outcome,
-                    duration_ms=int((time.monotonic() - started) * 1000))
+        step = result if isinstance(result, StepResult) else StepResult(outcome)
+        self._report_result(item, outcome, step.diagnostic, duration_ms=int((time.monotonic() - started) * 1000))
         return outcome
+
+    def _report_result(self, item: Item, outcome: str, diagnostic: dict[str, Any], **fields: Any) -> None:
+        reason = 'none' if outcome == 'done' else diagnostic_fields(diagnostic).get('reason', 'unknown')
+        if outcome != 'done':
+            # Input drift and exhausted attempts can change the requested outcome.
+            try:
+                with self.store._database.connection() as db:
+                    row = db.execute('SELECT state,next_at FROM work_items WHERE stage=%s AND item=%s',
+                                     (item.stage, item.item)).fetchone()
+            except (LibraryError, OSError) as exc:
+                # Observing the result must not turn an already committed success into another retry.
+                self.report('degraded', item=item, **exception_details(exc))
+                row = None
+            if row is not None:
+                fields['task_state'] = row[0]
+                if row[0] == 'waiting':
+                    fields['next_attempt'] = row[1].isoformat()
+            fields.update({key: value for key, value in diagnostic_fields(diagnostic).items() if key != 'reason'})
+            fields.update({key: value for key, value in diagnostic.items()
+                           if key in ('stack', 'message', 'cause_type')})
+        self.report('failed' if fields.get('task_state') == 'failed' else 'completed' if outcome == 'done' else 'waiting',
+                    reason, item=item, outcome=outcome, **fields)

@@ -110,7 +110,11 @@ class NativeStages:
                 if not origins or any(o.get('availability') not in ('validated', 'bundle', 'multipart_member') for o in origins):
                     return 'retirement_prerequisites'
             return ''
-        except (OSError, LibraryError, KeyError, ValueError, TypeError, yaml.YAMLError):
+        except (OSError, LibraryError, KeyError, ValueError, TypeError, yaml.YAMLError) as exc:
+            from booksys_core.diagnostics import emit, exception_details, opaque
+            emit(service='library', stage='diagnostics', queue=task.stage, code='waiting',
+                 refs=[{'kind': 'task', 'id': task.key}] if opaque(getattr(task, 'key', None)) else [],
+                 **exception_details(exc))
             return 'native_prerequisites_unavailable'
 
     def execute(self, task: Task, *, now: datetime) -> StepResult:
@@ -140,7 +144,7 @@ class NativeStages:
             intake_results: list[PreparedResult]=[]
             state = receive(self.catalog, self.reception, captured, monitor, queue,
                     source_only=source, incremental=True, prepared=intake_results)
-            from booksys_core.diagnostics import emit, opaque
+            from booksys_core.diagnostics import emit, opaque, diagnostic_fields
             import hashlib
             # Reuse the committed scoped intake result. No diagnostic-only I/O.
             for oid, origin in list(state['origins'].items())[:32]:
@@ -151,9 +155,11 @@ class NativeStages:
                         refs.append({'kind': kind, 'id': value})
                 aid = origin.get('sha256')
                 rejected = origin.get('availability') == 'rejected'
+                failure = origin.get('reason') if origin.get('availability') in ('pending', 'rejected') else ''
                 emit(service='library', stage='local', queue='intake',
                      code='failed' if rejected else 'progress',
-                     reason='invalid_archive' if rejected else 'none', refs=refs,
+                     reason='invalid_archive' if rejected else 'recovery_wait' if failure else 'none', refs=refs,
+                     **diagnostic_fields({'detail': str(failure)} if failure else {}),
                      request_id=hashlib.sha256((aid or task.entity).encode()).hexdigest())
             files = {(p['pid'], item['fid']) for p in queue
                      if p['pid'] == entry.get('package_id') or p.get('mirror_source') == source
@@ -164,7 +170,8 @@ class NativeStages:
                               state['origins'].get(origin['parent_origin'], {}).get('bundle'))
                          if (due := retry_at(origin, bundle=bool(origin.get('bundle_engine_policy')))) is not None]
             return StepResult('defer' if deadlines else 'done', prepared=intake_results[0],
-                              due_at=datetime.fromtimestamp(min(deadlines), timezone.utc) if deadlines else None)
+                              due_at=datetime.fromtimestamp(min(deadlines), timezone.utc) if deadlines else None,
+                              diagnostic={'reason': 'recovery_wait'} if deadlines else {})
         if task.stage == 'collection':
             from booksys_core.collection import run_once, run_fiche_once
             if task.entity.split(':')[-1].startswith('category-'):
@@ -176,7 +183,8 @@ class NativeStages:
                 value = run_fiche_once(self.collector, self.browser, self.client, fiche_root, source_only=source,completions=completions)
                 progress = CollectorState(self.collector,database=self.catalog.backend()._database).fiches()
                 if not completions and progress.get('items', {}).get(source, {}).get('status') != 'complete':
-                    return StepResult('retry')
+                    return StepResult('retry', diagnostic={'reason': 'unknown',
+                        'detail': str(progress.get('items', {}).get(source, {}).get('error', 'Fiche did not complete'))})
         else:
             state = self.catalog.result_set('retire', origin_refs(self.catalog, source), media=False) if task.stage != 'routing' else {}
             attempt = (task.key, task.generation) if task.native_attempt is not None else None
@@ -200,9 +208,15 @@ class NativeStages:
                 and value.get('outcome') == 'waiting' and value.get('reason') == 'processing_lock_busy'):
             # Retirement proved its entry locks were unavailable before native
             # intent. No business attempt or uncertain side effect was spent.
-            return StepResult('defer')
+            return StepResult('defer', diagnostic={'reason': 'processing_lock_busy'})
         outcome = 'retry' if isinstance(value, dict) and value.get('outcome') in ('blocked', 'pending', 'waiting') else 'done'
-        return StepResult(outcome)
+        diagnostic = {}
+        if outcome != 'done' and isinstance(value, dict):
+            from booksys_core.diagnostics import REASONS, exception_details
+            detail = str(value.get('reason', ''))
+            diagnostic = {'reason': detail if detail in REASONS else 'domain_prerequisites',
+                          'detail': exception_details(LibraryError(detail)).get('message', '')}
+        return StepResult(outcome, diagnostic=diagnostic)
 
     def receipt(self, task: Task) -> tuple[str,str] | StepResult:
         completions: list[OperationalCompletion]=[]
@@ -305,6 +319,10 @@ class NativeStages:
                         return 'done',proof
                     NativeHistory(journal.parent).route(str(entry['package_id']),operation)
                     return 'absent', proof
-        except (CollectionError, LibraryError, OSError, KeyError, ValueError, TypeError):
+        except (CollectionError, LibraryError, OSError, KeyError, ValueError, TypeError) as exc:
+            from booksys_core.diagnostics import emit, exception_details, opaque
+            emit(service='library', stage='diagnostics', queue=task.stage, code='waiting',
+                 refs=[{'kind': 'task', 'id': task.key}] if opaque(getattr(task, 'key', None)) else [],
+                 **exception_details(exc))
             return 'uncertain', ''
         return 'uncertain', ''

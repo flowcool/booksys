@@ -43,8 +43,8 @@ def main() -> int:
         print(json.dumps(counts))
         return 0
     except (CollectionError, OSError, ValueError, yaml.YAMLError) as exc:
-        from booksys_core.diagnostics import emit
-        emit(service='collector', stage='collection', code='failed', reason='unknown_browser_failure')
+        from booksys_core.diagnostics import emit, exception_details
+        emit(service='collector', stage='collection', code='failed', **exception_details(exc))
         print('Collection stopped; inspect filtered diagnostics', file=sys.stderr)
         return 1
 

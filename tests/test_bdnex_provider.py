@@ -48,7 +48,8 @@ class ProtocolTests(unittest.TestCase):
             opener.return_value.open.side_effect = TimeoutError('Timed out')
             before = time.monotonic()
             self.assertEqual(client.match('a'*64, inputs), {
-                'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'})
+                'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex',
+                'exception_type': 'TimeoutError'})
             self.assertGreaterEqual(client.retry_at, before + 60)
             self.assertEqual(client.match('c'*64, inputs), {
                 'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'})
@@ -70,7 +71,8 @@ class ProtocolTests(unittest.TestCase):
         # Bypass only client validation so the handler receives an invalid path.
         with patch('library.bdnex.validate_request', side_effect=lambda value: value):
             self.assertEqual(client.match('a'*64, [{'path': 'Nains//Redwin.cbz', 'embedded': {}}]), {
-                'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'})
+                'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex',
+                'exception_type': 'HTTPError', 'http_status': 400})
         self.assertEqual(received, [])
         self.assertEqual(client.retry_at, 0)
         self.assertEqual(client.match('c'*64, inputs)['status'], 'ok')
@@ -78,7 +80,8 @@ class ProtocolTests(unittest.TestCase):
         denied = BDneXClient(client.endpoint, 'wrong')
         before = time.monotonic()
         self.assertEqual(denied.match('a'*64, inputs), {
-            'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'})
+            'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex',
+            'exception_type': 'HTTPError', 'http_status': 401})
         self.assertGreaterEqual(denied.retry_at, before + 60)
         with patch('library.bdnex.build_opener') as opener:
             self.assertEqual(denied.match('c'*64, inputs), {
@@ -109,7 +112,8 @@ class ProtocolTests(unittest.TestCase):
         caught.exception.close()
         before = time.monotonic()
         self.assertEqual(client.match('a'*64, inputs), {
-            'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'})
+            'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex',
+            'exception_type': 'HTTPError', 'http_status': 503})
         self.assertGreaterEqual(client.retry_at, before + 60)
         with patch('library.bdnex.build_opener') as opener:
             self.assertEqual(client.match('c'*64, inputs), {

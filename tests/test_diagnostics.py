@@ -87,7 +87,8 @@ try:
 except TimeoutError as exc:
     details = exception_details(exc)
     assert details['exception_type'] == 'TimeoutError', details
-    assert details['message'] == 'synthetic browser timeout', details
+    assert details['reason'] == 'operation_timeout', details
+    assert 'message' not in details, details
     record = logging.LogRecord('byparr', logging.ERROR, '', 1, 'failed', (), sys.exc_info())
     with patch('booksys_core.diagnostics.emit') as emitted:
         SafeLoggingHandler('byparr').emit(record)

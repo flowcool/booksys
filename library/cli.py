@@ -162,6 +162,8 @@ def main() -> int:
             return 3
         return 0
     except (LibraryError, OSError, ValueError, KeyError, TypeError) as exc:
+        from booksys_core.diagnostics import emit, exception_details
+        emit(service='library', stage='diagnostics', code='failed', **exception_details(exc))
         print(json.dumps({'status': 'blocked', 'reason': str(exc)}))
         return 2
 

@@ -105,6 +105,7 @@ class StepResult:
     prepared: PreparedResult | None = None
     successors: list[Obligation] = field(default_factory=list)
     source_progress: SourceProgress | None = None
+    diagnostic: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

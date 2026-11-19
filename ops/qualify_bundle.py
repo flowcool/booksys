@@ -108,6 +108,8 @@ def main() -> int:
                           'converted_readbacks': converted, 'source_unchanged': proof['source_unchanged'], 'rerun_idempotent': proof['rerun_idempotent']}))
         return 0 if good else 2
     except (LibraryError, OSError, ValueError, KeyError) as exc:
+        from booksys_core.diagnostics import emit, exception_details
+        emit(service='library', stage='diagnostics', code='failed', **exception_details(exc))
         print(json.dumps({'status': 'blocked', 'reason': str(exc)}))
         return 2
 
