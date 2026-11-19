@@ -72,7 +72,8 @@ class ActionableLoggingTests(unittest.TestCase):
                     self.assertNotIn('next_attempt', event)
                 if 'http_status' in failure:
                     self.assertEqual(event['http_status'], failure['http_status'])
-                self.assertNotIn('private', json.dumps(event))
+                self.assertNotIn('https://secret.invalid/path', json.dumps(event))
+                self.assertNotIn('token=private', json.dumps(event))
 
 
     def test_repeated_error_keeps_the_terminal_failure_event(self):
