@@ -91,6 +91,11 @@ def receive_external(store: Catalog, oid: str) -> PreparedResult:
     if digest({'external': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3]}) != oid:
         raise LibraryError('External origin bytes changed since discovery')
     result = inspect_file(path)
+    if result.get('reason'):
+        from booksys_core.diagnostics import emit, diagnostic_fields
+        emit(service='library', stage='local', code='failed' if result['status'] == 'rejected' else 'waiting',
+             reason='invalid_archive' if result['status'] == 'rejected' else 'recovery_wait',
+             refs=[{'kind': 'origin', 'id': oid}], **diagnostic_fields({'detail': str(result['reason'])}))
     if result.get('reason') == 'Stage enclosing deadline exceeded':
         raise RuntimeError(result['reason'])
     refs = {'origins': [oid], 'assets': [result['sha256']] if result.get('sha256') else []}

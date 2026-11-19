@@ -55,12 +55,15 @@ class BDneXClient:
                 row['provenance'] = {'engine': PIN, 'index': result['index'], 'method': 'bdnex-sitemap-1'}
             return {**result, 'status': 'ok'}
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            from booksys_core.diagnostics import exception_details
+            diagnostic: dict[str, Any] = {'exception_type': exception_details(exc)['exception_type']}
             if isinstance(exc, HTTPError):
+                diagnostic['http_status'] = exc.code
                 exc.close()
                 if exc.code == 400:
-                    return {'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'}
+                    return {'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex', **diagnostic}
             self.retry_at = time.monotonic() + 60
-            return {'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex'}
+            return {'status': 'unavailable', 'reason': 'BDneX unavailable or invalid response', 'dependency': 'bdnex', **diagnostic}
 
 
 def configured_client() -> BDneXClient | None:

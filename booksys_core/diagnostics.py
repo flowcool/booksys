@@ -20,7 +20,7 @@ STAGES = ('collection', 'byparr', 'downloads', 'local', 'identity', 'publication
 CODES = ('started', 'completed', 'waiting', 'attempt', 'failed', 'recovered', 'progress', 'degraded', 'blocked')
 REASONS = frozenset(('none', 'unknown', 'browser_busy', 'remote_rate_limited', 'remote_http_failure',
     'browser_timeout', 'invalid_content', 'cleanup_failed', 'unknown_browser_failure', 'processing_lock_busy',
-    'provider_unavailable', 'provider_budget', 'identity_unknown', 'identity_conflict', 'transfer_wait',
+    'provider_unavailable', 'provider_timeout', 'operation_timeout', 'provider_http_failure', 'provider_cooldown', 'provider_request_invalid', 'provider_budget', 'identity_unknown', 'identity_conflict', 'transfer_wait',
     'transfer_failed', 'invalid_archive', 'unsupported_input', 'decoder_timeout', 'source_drift',
     'ownership_conflict', 'ledger_invalid', 'uncertain_external_write', 'disk_reserve', 'disk_full',
     'schema_invalid', 'authority_mismatch', 'storage_busy', 'diagnostic_unavailable', 'unknown_effect', 'submission_refused',
@@ -32,10 +32,10 @@ REASONS = frozenset(('none', 'unknown', 'browser_busy', 'remote_rate_limited', '
     'retirement_prerequisites', 'native_prerequisites_unavailable', 'reconciliation_required'))
 REF_KINDS = ('source', 'package', 'file', 'origin', 'asset', 'decision', 'operation', 'task')
 ERRORS = frozenset(('TimeoutError', 'OSError', 'ValueError', 'TypeError', 'KeyError', 'LibraryError',
-                   'CollectionError', 'Deferred', 'BrowserOutcome', 'NativeRefusal', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable'))
+                   'CollectionError', 'Deferred', 'BrowserOutcome', 'NativeRefusal', 'HTTPError', 'URLError', 'OperationalError', 'IntegrityError', 'RuntimeError', 'FileNotFoundError', 'Exception', 'ReaderUnavailable', 'PermissionError', 'NotADirectoryError', 'IsADirectoryError', 'BrokenPipeError', 'ConnectionError', 'ConnectionResetError', 'ConnectionRefusedError', 'ImportError', 'ModuleNotFoundError', 'MemoryError', 'TimeoutExpired'))
 FIELDS = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'cycle_id',
     'request_id', 'operation_id', 'refs', 'title', 'duration_ms', 'wait_ms', 'attempt', 'repeat_count',
-    'dropped_count', 'next_attempt', 'exception_type', 'message', 'cause_type', 'detail', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count'))
+    'dropped_count', 'next_attempt', 'exception_type', 'message', 'cause_type', 'detail', 'stack', 'measurements', 'queue', 'outcome', 'rejected_count', 'dependency', 'http_status', 'task_state'))
 REQUIRED = frozenset(('schema', 'event_id', 'at', 'service', 'stage', 'code', 'level', 'reason', 'refs'))
 
 
@@ -119,6 +119,12 @@ def validate(value: Any) -> dict[str, Any]:
                          ('outcome', ('done', 'retry', 'defer', 'uncertain', 'stopped', 'absent'))):
         if key in value and value[key] not in task_options:
             raise ValueError('Invalid controlled task field')
+    if 'dependency' in value and value['dependency'] not in ('bdnex', 'www.bedetheque.com', 'catalogue.bnf.fr', 'openlibrary.org'):
+        raise ValueError('Invalid provider dependency')
+    if 'http_status' in value and (type(value['http_status']) is not int or not 100 <= value['http_status'] <= 599):
+        raise ValueError('Invalid provider HTTP status')
+    if 'task_state' in value and value['task_state'] not in ('ready', 'claimed', 'waiting', 'blocked', 'done', 'failed', 'superseded'):
+        raise ValueError('Invalid task state')
     refs = value['refs']
     if not isinstance(refs, list) or len(refs) > 32 or any(
             not isinstance(ref, dict) or set(ref) != {'kind', 'id'} or ref['kind'] not in REF_KINDS
@@ -163,12 +169,59 @@ def validate(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+def provider_diagnostic(events: list[dict[str, Any]], *, deferred: bool = False) -> dict[str, Any]:
+    """Keep one representative cause; never copy provider text or URLs into logs."""
+    failures = [event for event in events if event.get('status') == 'unavailable'
+                and (event.get('reason') == 'Request budget exhausted' if deferred else
+                     event.get('http_status', 0) == 429 or event.get('http_status', 0) >= 500
+                     or 'reason' in event and event['reason'] != 'Request budget exhausted')]
+    if not failures:
+        return {}
+    event = failures[0]
+    status = event.get('http_status')
+    reason = ('provider_budget' if event.get('reason') == 'Request budget exhausted' else
+              'provider_cooldown' if event.get('reason') == 'BDneX cooldown' else
+              'provider_request_invalid' if event.get('reason') == 'BDneX request invalid' else
+              'remote_rate_limited' if status == 429 else
+              'provider_http_failure' if type(status) is int and status >= 400 else
+              'provider_timeout' if event.get('exception_type') == 'TimeoutError' or event.get('failure_reason') == 'provider_timeout' else 'provider_unavailable')
+    result: dict[str, Any] = {'reason': reason}
+    if event.get('dependency') in ('bdnex', 'www.bedetheque.com', 'catalogue.bnf.fr', 'openlibrary.org'):
+        result['dependency'] = event['dependency']
+    if type(status) is int and 100 <= status <= 599:
+        result['http_status'] = status
+    if event.get('exception_type') in ERRORS:
+        result['exception_type'] = event['exception_type']
+    return result
+
+
+def diagnostic_fields(value: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    if value.get('reason') in REASONS:
+        result['reason'] = value['reason']
+    if value.get('dependency') in ('bdnex', 'www.bedetheque.com', 'catalogue.bnf.fr', 'openlibrary.org'):
+        result['dependency'] = value['dependency']
+    status = value.get('http_status')
+    if type(status) is int and 100 <= status <= 599:
+        result['http_status'] = status
+    if value.get('exception_type') in ERRORS:
+        result['exception_type'] = value['exception_type']
+    if type(value.get('detail')) is str:
+        result['detail'] = _exception_message(value['detail'])
+    return result
+
+
+def diagnostic_text(value: dict[str, Any]) -> str:
+    fields = diagnostic_fields(value)
+    return ' '.join([str(fields.pop('reason', 'unknown'))] + [f'{key}={item}' for key, item in fields.items()])[:200]
+
+
 def severity(reason: str, code: str) -> str:
     if reason in ('cleanup_failed', 'authority_mismatch'):
         return 'CRITICAL'
     if code in ('failed', 'blocked') and reason not in ('identity_unknown', 'provider_budget', 'transfer_wait'):
         return 'ERROR'
-    if reason in ('diagnostic_unavailable', 'storage_busy', 'disk_reserve', 'remote_rate_limited', 'provider_unavailable'):
+    if reason in ('diagnostic_unavailable', 'storage_busy', 'disk_reserve', 'remote_rate_limited', 'provider_unavailable', 'provider_timeout', 'operation_timeout', 'provider_http_failure'):
         return 'WARNING'
     return 'INFO'
 
@@ -288,15 +341,17 @@ def emit(*, service: str, stage: str, code: str, reason: str = 'none', **fields:
                 import atexit
                 _default = Emitter()
                 atexit.register(_default.close)
+            condition = json.dumps([reason, *[value.get(field) for field in
+                ('dependency', 'http_status', 'exception_type', 'cause_type', 'detail', 'task_state')]], sort_keys=True)
             prior = _conditions.get(key)
-            if code == 'waiting' and prior and prior[:2] == (code, reason):
-                _conditions[key] = (code, reason, prior[2] + 1)
+            if code == 'waiting' and prior and prior[:2] == (code, condition):
+                _conditions[key] = (code, condition, prior[2] + 1)
                 return True
             if prior:
                 value['repeat_count'] = prior[2]
             if len(_conditions) >= 256 and key not in _conditions:
                 _conditions.pop(next(iter(_conditions)))
-            _conditions[key] = (code, reason, 0)
+            _conditions[key] = (code, condition, 0)
             return _default.emit(value)
     except (ValueError, TypeError, OSError):
         _failed_emissions += 1
@@ -355,6 +410,31 @@ def exception_details(exc: BaseException) -> dict[str, Any]:
     elif isinstance(exc, ValueError):
         reason = 'invalid_content'
     kind = type(exc).__name__
+    from booksys_core.browser_outcomes import BrowserOutcome
+    from booksys_core.errors import ResultInputsChanged, NativeRefusal
+    import errno
+    import subprocess
+    from urllib.error import URLError
+    if isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError):
+        reason = 'provider_timeout'
+    elif isinstance(exc, BrowserOutcome) and exc.outcome.code in REASONS:
+        reason = exc.outcome.code
+    elif kind == 'Deferred' and getattr(exc, 'record', {}).get('wait_reason') in REASONS:
+        reason = exc.record['wait_reason']  # type: ignore[attr-defined]
+    elif kind == 'BudgetWait':
+        reason = 'provider_budget'
+    elif isinstance(exc, ResultInputsChanged):
+        reason = 'inputs_changed'
+    elif isinstance(exc, NativeRefusal):
+        reason = 'submission_refused'
+    elif isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
+        reason = 'operation_timeout'
+    elif isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        reason = 'disk_full'
+    elif kind == 'LibraryError' and str(exc) == 'Decoder timed out':
+        reason = 'decoder_timeout'
+    elif kind == 'LibraryLockBusy':
+        reason = 'processing_lock_busy'
     stack = []
     tb = exc.__traceback__
     while tb is not None:

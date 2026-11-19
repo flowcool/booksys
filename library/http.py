@@ -54,6 +54,8 @@ def handler(root: Path, *, api: Any = None) -> type[BaseHTTPRequestHandler]:
                 return api.invoke(action, {'payload': payload, 'host': self.headers.get('Host', ''),
                     'origin': self.headers.get('Origin', ''), 'token': self.headers.get('X-CSRF-Token', '')})
             except Exception as exc:
+                from booksys_core.diagnostics import emit, exception_details
+                emit(service='library', stage='diagnostics', code='degraded', **exception_details(exc))
                 raise IPCError('Action unavailable; inspect filtered diagnostics') from exc
 
         def mediated_get(self) -> None:

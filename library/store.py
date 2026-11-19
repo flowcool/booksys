@@ -732,10 +732,10 @@ class Store:
         if outcome == 'done':
             done = work.finish_in(db, claimed, 'done', detail=proof[:100] or 'done', now=now)
         elif outcome == 'defer':
-            done = work.finish_in(db, claimed, 'waiting', detail='defer', now=now, reason='deferred',
-                                  next_at=due_at or now + timedelta(seconds=30), refund=True)
+            done = work.finish_in(db, claimed, 'waiting', detail=proof[:200] or 'defer', now=now, reason='deferred',
+                                  next_at=due_at or now + timedelta(seconds=30), refund=True, error=proof[:200])
         else:   # 'retry' and 'uncertain' retry alike: a step reads the external system again before it acts
-            done = work.retry_in(db, claimed, proof[:100] or outcome, retry_delay(claimed.attempts), now=now)
+            done = work.retry_in(db, claimed, proof[:200] or outcome, retry_delay(claimed.attempts), now=now)
         if not done:
             raise LibraryError('Stale or inactive task result')
 

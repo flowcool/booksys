@@ -94,7 +94,8 @@ class Providers:
         else:
             with lock(self.shared / 'library-network.lock'):
                 result = self._get(url)
-        self.events.append({key: result[key] for key in ('status', 'http_status', 'reason', 'dependency', 'retrieved_at', 'expires') if key in result})
+        result = {**result, 'dependency': urlsplit(url).hostname}
+        self.events.append({key: result[key] for key in ('status', 'http_status', 'reason', 'dependency', 'retrieved_at', 'expires', 'exception_type', 'failure_reason') if key in result})
         return result
 
     def _get(self, url: str) -> dict[str, Any]:
@@ -130,7 +131,10 @@ class Providers:
         except (OSError, ValueError, LibraryError) as exc:
             if str(exc) == 'Request budget exhausted':
                 return {'status': 'unavailable', 'reason': str(exc), 'url': url}
+            from booksys_core.diagnostics import exception_details
+            diagnostic = exception_details(exc)
             result = {'status': 'unavailable', 'reason': str(exc), 'url': url,
+                      'exception_type': diagnostic['exception_type'], 'failure_reason': diagnostic['reason'],
                       'retrieved_at': now(), 'expires': time.time() + 300}
         result['dependency'] = parts.hostname
         if self.admission is not None:

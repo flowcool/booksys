@@ -80,6 +80,8 @@ def main() -> int:
         print(json.dumps({'status': 'applied' if args.apply else 'preview', 'results': results}))
         return 0
     except (LibraryError, CollectionError, OSError, ValueError, KeyError, TypeError) as exc:
+        from booksys_core.diagnostics import emit, exception_details
+        emit(service='library', stage='diagnostics', code='failed', **exception_details(exc))
         print(json.dumps({'status': 'blocked', 'reason': str(exc)}))
         return 2
 

@@ -78,6 +78,8 @@ class BusinessStages:
                 for event in events)
             deferred = any(event.get('reason') == 'Request budget exhausted' for event in events)
             outcome = 'defer' if deferred else 'retry' if temporary else 'done'
+            from booksys_core.diagnostics import provider_diagnostic
+            diagnostic = provider_diagnostic(events, deferred=deferred) if outcome != 'done' else {}
             asset['stage_metadata'] = {'evidence': evidence_version(asset), 'at': instant(now),
                                       'evaluation': task.input_revision, 'outcome': outcome, 'method': task.method}
             failures = {str(event['dependency']): datetime.fromisoformat(event['retrieved_at']).timestamp()
@@ -95,8 +97,8 @@ class BusinessStages:
                     timestamp = self.providers.admission.next_due()
                     if timestamp != float('inf'):
                         due = max(due, datetime.fromtimestamp(timestamp, timezone.utc))
-                return StepResult('defer', due_at=due, prepared=prepared, successors=self.obligations(state, task.entity, now=now))
-            return StepResult(outcome, prepared=prepared, successors=self.obligations(state, task.entity, now=now))
+                return StepResult('defer', due_at=due, prepared=prepared, diagnostic=diagnostic, successors=self.obligations(state, task.entity, now=now))
+            return StepResult(outcome, prepared=prepared, diagnostic=diagnostic, successors=self.obligations(state, task.entity, now=now))
         if task.stage == 'copies':
             from library.store import PreparedResult
             copy_results: list[PreparedResult]=[]

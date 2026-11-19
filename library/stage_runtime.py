@@ -89,7 +89,7 @@ class StageRuntime:
                 from booksys_core.diagnostics import emit
                 emit(service='library' if business else 'collector', stage='identity' if business else 'downloads',
                      code='waiting', reason='provider_budget', next_attempt=datetime.fromtimestamp(due, timezone.utc).isoformat())
-                return StepResult('defer', due_at=datetime.fromtimestamp(due, timezone.utc))
+                return StepResult('defer', due_at=datetime.fromtimestamp(due, timezone.utc), diagnostic={'reason': 'provider_budget'})
         def receipt(task: Task) -> tuple[str,str] | StepResult:
             return self.business.receipt(task) if business else self.native.receipt(task)
         from library.work_stages import work_stages

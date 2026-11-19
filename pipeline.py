@@ -14,7 +14,7 @@ from booksys_core.downloader import Pyload as Pyload
 from booksys_core.collection import (export_catalogue as export_catalogue, run_once as run_once,
     run_fiche_once as run_fiche_once)
 from booksys_core.scheduler import Deferred, seconds
-from booksys_core.diagnostics import emit, install_logging
+from booksys_core.diagnostics import emit, install_logging, exception_details
 
 
 def main() -> int:
@@ -54,7 +54,7 @@ def main() -> int:
             if args.once:
                 return 1
         except Exception as exc:
-            emit(service='collector', stage='collection', code='failed', reason='unknown_effect')
+            emit(service='collector', stage='collection', code='failed', **exception_details(exc))
             if args.once:
                 return 1
         if args.once:
@@ -69,8 +69,8 @@ def main() -> int:
             except Deferred as exc:
                 deadline = min(deadline, time.monotonic() + max(1, seconds(exc.record['not_before']) - time.time()))
                 break
-            except (OSError, ValueError, CollectionError):
-                emit(service='collector', stage='collection', code='failed', reason='unknown_effect')
+            except (OSError, ValueError, CollectionError) as exc:
+                emit(service='collector', stage='collection', code='failed', **exception_details(exc))
                 break
         time.sleep(max(0, deadline - time.monotonic()))
 

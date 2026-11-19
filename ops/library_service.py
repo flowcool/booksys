@@ -72,8 +72,9 @@ def main() -> None:
                     api.relationships.refresh(submissions=collector_state.monitor(),
                         routing=native_history.routing(),
                         retirement=retirement)
-            except Exception:
-                emit(service='library', stage='diagnostics', code='degraded', reason='diagnostic_unavailable')
+            except Exception as exc:
+                from booksys_core.diagnostics import exception_details
+                emit(service='library', stage='diagnostics', code='degraded', **exception_details(exc))
             stop.wait(120)
     observer_thread = threading.Thread(target=observations, name='catalogue-observer')
     observer_thread.start()
