@@ -32,6 +32,9 @@ class DependencyRecoveryTests(unittest.TestCase):
             self.assertEqual(recovery.proof({'openlibrary.org': 11, 'catalogue.bnf.fr': 11}), '')
 
     def test_failed_metadata_reopens_once_after_every_dependency_recovers(self):
+        import os
+        from unittest.mock import patch
+        self.enterContext(patch.dict(os.environ, {'BOOKSYS_WORK_STAGES': 'metadata,copies'}))
         from datetime import timedelta
         from library.business_stages import BusinessStages
         from library.dependency_recovery import DependencyRecovery
@@ -82,7 +85,6 @@ class DependencyRecoveryTests(unittest.TestCase):
             recovery.observe('catalogue.bnf.fr', available=True, at=AT.timestamp()+11)
             stages.discover(tasks, now=AT+timedelta(seconds=12), keys=[key])
             from library.work_actor import WorkActor
-            from unittest.mock import patch
             def cached_failure(catalog, asset_id, providers, references):
                 providers.events.append({'dependency': 'catalogue.bnf.fr', 'status': 'unavailable',
                                          'http_status': 503, 'retrieved_at': AT.isoformat()})
