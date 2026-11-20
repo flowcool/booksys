@@ -330,9 +330,10 @@ class SourceReuseTests(unittest.TestCase):
                 images[image] = {"inventory": [], "reviewed_non_package_components": ["demo"],
                                  "components": [{"id": "demo", "sources": ["demo"]}]}
             revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-            def response(url, timeout):
+            def response(request, timeout):
+                self.assertEqual(request.get_header("User-agent"), "Booksys-Source-Qualification/1.0")
                 result = io.BytesIO(b"source bytes")
-                result.url = url
+                result.url = request.full_url
                 return result
             with patch("release_sources.urlopen", side_effect=response):
                 result = assemble({"images": images, "sources": sources}, root / "artifacts", root / "sources",
@@ -364,7 +365,8 @@ class SourceReuseTests(unittest.TestCase):
                          "package": "demo", "version": "1"},
                 "other": {"url": "https://example.test/other.tar.xz", "sha256": hashlib.sha256(b"other").hexdigest()}}}
             started = Barrier(2)
-            def response(url, timeout):
+            def response(request, timeout):
+                url = request.full_url
                 if url.endswith(("demo.dsc", "other.tar.xz")):
                     started.wait(timeout=5)
                 result = io.BytesIO(contents[url.rsplit("/", 1)[1]])
