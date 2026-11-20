@@ -7,6 +7,7 @@ from library.asset_evidence import bind_evidence
 from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
+from library.names import METHOD as NAME_METHOD
 from library.work_identity import asset_assertions, evaluate_work, classify_work, informative, normalized
 
 
@@ -73,6 +74,17 @@ def exact_bdnex_reference(evidence: dict[str, Any], candidates: list[dict[str, A
     return list(matches.values()) if len(matches) == 1 else []
 
 
+def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any]) -> None:
+    title = reference.get('title') or ''
+    if not informative(title):
+        return
+    creators = {normalized(name) for field in ('writers', 'artists') for name in reference.get(field, [])}
+    for entry in evidence['provenance'].get('title', []):
+        if (entry.get('method') == NAME_METHOD and normalized(entry['value']) in creators
+                and normalized(entry['value'], 'title') != normalized(title, 'title')):
+            entry.update(scope='discovery', creator_reference=reference['url'])
+
+
 def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 extra: list[dict[str, Any]] | None = None, *, discovery: bool = True,
                 hydrate: bool = False) -> None:
@@ -124,9 +136,12 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 attempts[-1]['status'] = 'unexpected_response'
                 continue
             canonical = page_candidates[0]
-            if not early_reference or (canonical['edition_ref'] == row['edition_ref']
-                                       and numbered_work(canonical) == numbered_work(row)):
-                candidates.extend(page_candidates)
+            if early_reference:
+                if (canonical['edition_ref'] != row['edition_ref']
+                        or numbered_work(canonical) != numbered_work(row)):
+                    continue
+                qualify_filename_titles(evidence, canonical)
+            candidates.extend(page_candidates)
     for query in queries if discovery else []:
         try:
             if query not in cache:
