@@ -1903,12 +1903,12 @@
           "rationale": "Exact BUILD20261026 recipe manifest and runtime identify OpenSSL3.5.9,SQLite3.53.1,zlib1.3.2,Expat2.9.0,libedit20240808,mpdecimal4.0.0,ncurses6.5,TclTk/Itcl/thread. Preserve exact recipe LICENSE.* and python-licenses.rst under third_party/native. These runtime libraries use stated permissive/public-domain terms; BDB separately source-covered. Build-only compiler/toolchain not distributed as runtime."
         },
         {
-          "id": "binary:docker-cli-29.9.3",
+          "id": "binary:docker-cli-29.10.0",
           "license": "Apache-2.0 AND retained vendored dependency terms",
           "sources": [
-            "docker-cli-29.9.3"
+            "docker-cli-29.10.0"
           ],
-          "rationale": "Dockerfile copies only /usr/local/bin/docker from exact docker29-cli index2357639ad1ea7d0194134bf3292622fd4e562483966ed674e5d7c945b5f3b28d; registry config identifies29.9.3. Retain complete exact cli source including vendor notices; do not infer shipped Buildx or Compose plugins. Exact source LICENSE/NOTICE retained. No Docker binary execution in this source review."
+          "rationale": "Dockerfile copies only /usr/local/bin/docker from exact Docker CLI 29.10.0 index 34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d. The amd64 CLI reports commit fdd4b8e and Go 1.27.4. Retain complete exact cli source including vendor notices; do not infer shipped Buildx or Compose plugins. Exact source LICENSE/NOTICE retained."
         },
         {
           "id": "dpkg:dirmngr",
@@ -2405,7 +2405,7 @@
         "native:pillow-codec-bundle-13.0.0",
         "native:standalone-python-berkeley-db-6.0.19",
         "native:standalone-python-permissive-libraries",
-        "binary:docker-cli-29.9.3"
+        "binary:docker-cli-29.10.0"
       ]
     },
     "library": {
@@ -12485,9 +12485,9 @@
       "url": "https://files.pythonhosted.org/packages/a9/b5/37e7a3706de436a8a2d75334711dad1afb4ddffab09f25e31d89e467542f/supervisor-4.3.0.tar.gz",
       "sha256": "4a2bf149adf42997e1bb44b70c43b613275ec9852c3edacca86a9166b27e945e"
     },
-    "docker-cli-29.9.3": {
-      "url": "https://codeload.github.com/docker/cli/tar.gz/refs/tags/v29.9.3",
-      "sha256": "23d7472c80bc7483e57655085d687c631b398837bbc92535528c4582fc17e95b"
+    "docker-cli-29.10.0": {
+      "url": "https://codeload.github.com/docker/cli/tar.gz/fdd4b8e5da335e1d0d83d29af5045f57280cd694",
+      "sha256": "cf9f1c34af3b79642fd27a4284291116300a3e0922bb82afed7967712b9ee8bf"
     }
   }
 }

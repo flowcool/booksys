@@ -7,7 +7,8 @@ from library.asset_evidence import bind_evidence
 from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
-from library.work_identity import evaluate_work, classify_work
+from library.names import METHOD as NAME_METHOD
+from library.work_identity import asset_assertions, evaluate_work, classify_work, informative, normalized
 
 
 def printed_concordance(evidence: dict[str, Any], asset: dict[str, Any],
@@ -54,6 +55,36 @@ class FrenchSource:
                             response.get('retrieved_at', ''), response.get('reason', ''))
 
 
+def numbered_work(row: dict[str, Any]) -> tuple[str, str]:
+    return normalized(row.get('series', ''), 'series'), normalized(row.get('number', ''), 'number')
+
+
+def exact_bdnex_reference(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    assertions = asset_assertions(evidence)
+    series = {normalized(a['value'], 'series') for a in assertions
+              if a['field'] == 'series' and informative(a['value'])}
+    numbers = {normalized(a['value'], 'number') for a in assertions if a['field'] == 'number'}
+    if len(series) != 1 or len(numbers) != 1:
+        return []
+    bound = next(iter(series)), next(iter(numbers))
+    matches = {row['url']: row for row in candidates
+               if row.get('source') == 'bedetheque'
+               and row.get('provenance', {}).get('method') == 'bdnex-sitemap-1'
+               and numbered_work(row) == bound}
+    return list(matches.values()) if len(matches) == 1 else []
+
+
+def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any]) -> None:
+    title = reference.get('title') or ''
+    if not informative(title):
+        return
+    creators = {normalized(name) for field in ('writers', 'artists') for name in reference.get(field, [])}
+    for entry in evidence['provenance'].get('title', []):
+        if (entry.get('method') == NAME_METHOD and normalized(entry['value']) in creators
+                and normalized(entry['value'], 'title') != normalized(title, 'title')):
+            entry.update(scope='discovery', creator_reference=reference['url'])
+
+
 def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 extra: list[dict[str, Any]] | None = None, *, discovery: bool = True,
                 hydrate: bool = False) -> None:
@@ -85,13 +116,32 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     candidates.extend(extra or [])
     if hydrate:
         local_result = evaluate_work(printed_concordance(evidence, asset, candidates), candidates)
-        if local_result['status'] == 'identified':
-            for row in local_result['concordant_candidates'][:3]:
-                response = source.get(row['url'])
-                attempts.append({'url': row['url'], 'status': response.status, 'reason': response.reason})
-                if response.status == 'ok':
-                    candidates.extend(item.to_match_candidate() for item in
-                        parse_album_editions(response.body, row['url'], response.retrieved_at))
+        early_reference = local_result['status'] == 'no_match'
+        matching = []
+        if early_reference:
+            matching = exact_bdnex_reference(evidence, candidates)
+        elif local_result['status'] == 'identified':
+            matching = local_result['concordant_candidates'][:3]
+        for row in matching:
+            response = source.get(row['url'])
+            attempts.append({'url': row['url'], 'status': response.status, 'reason': response.reason})
+            if response.status != 'ok':
+                continue
+            try:
+                page_candidates = [item.to_match_candidate() for item in
+                                   parse_album_editions(response.body, row['url'], response.retrieved_at)]
+            except LibraryError:
+                if not early_reference:
+                    raise
+                attempts[-1]['status'] = 'unexpected_response'
+                continue
+            canonical = page_candidates[0]
+            if early_reference:
+                if (canonical['edition_ref'] != row['edition_ref']
+                        or numbered_work(canonical) != numbered_work(row)):
+                    continue
+                qualify_filename_titles(evidence, canonical)
+            candidates.extend(page_candidates)
     for query in queries if discovery else []:
         try:
             if query not in cache:
