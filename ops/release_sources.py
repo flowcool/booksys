@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import urljoin, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from image_validation import identity, security_findings
 from release_images import IMAGES, digest
@@ -119,7 +119,8 @@ def fetch(url: str, expected: str, destination: Path, *, cache: Path | None = No
         if file_digest(destination) != "sha256:" + expected:
             raise ValueError("Preserved download differs; never overwrite it")
     else:
-        with urlopen(url, timeout=120) as response, destination.open("xb") as output:
+        request = Request(url, headers={"User-Agent": "Booksys-Source-Qualification/1.0"})
+        with urlopen(request, timeout=120) as response, destination.open("xb") as output:
             if urlparse(response.url).scheme != "https":
                 raise ValueError("Source download redirected outside HTTPS")
             while chunk := response.read(1024 * 1024):
