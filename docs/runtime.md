@@ -14,8 +14,12 @@ Preserve original downloads and uncertain-effect journals.
 The controller serves HTTP in its own process.
 Collection, intake, metadata, copies and routing use work_items.
 PostgreSQL and the single retained pyLoad remain separate dependencies.
-`Dockerfile.pyload` adds the NAS guard to the downloader image.
-It is not a fourth published Booksys package.
+`Dockerfile.pyload` adds the NAS guard to the downloader image. `Dockerfile.bdnex` adds the
+BDneX service to a separately built upstream image. Neither is a published Booksys package.
+The operator builds both from the release commit and tags each build with its own version,
+never `latest`. Keep any registry copy private: the pyLoad base image is GPL-licensed and
+the release workflow carries no corresponding-source bundle for these two images.
+Do not rebuild an existing version tag.
 
 Compose requires explicit images, credentials, qualified NAS mounts and retained
 dependency selections. Private DSN files must have mode 0600.
