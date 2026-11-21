@@ -1,6 +1,7 @@
 """Private BDneX transport. Scores locate references; they never establish identity."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -55,6 +56,10 @@ class BDneXClient:
             receipt['original_match_counts'] = result['match_counts']
         fallback['prefix_fallback'] = receipt
         return fallback
+
+    def cooldown_deadline(self) -> datetime:
+        remaining = max(self.retry_at - time.monotonic(), 0)
+        return datetime.fromtimestamp(time.time() + remaining, timezone.utc)
 
     def _match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
         if time.monotonic() < self.retry_at:
