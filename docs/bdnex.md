@@ -23,6 +23,8 @@ scheduling supplies progressive replay. No bulk replay is started by index refre
 Build upstream BDneX 0.10.0 at commit
 `9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33` with its original Dockerfile.
 Build `Dockerfile.bdnex` with `BDNEX_IMAGE` set to that qualified base image.
+Build the adapter from the Booksys release commit and tag it with the release version.
+The upstream base is built once per pinned commit and is not part of a Booksys release.
 The service runs on port 8766 as UID/GID 1000. Use a read-only root, writable
 `/data`, and a read-only token file selected by `BOOKSYS_BDNEX_TOKEN_FILE`.
 It needs no archive, cover or Booksys database mount. Restrict access to the
