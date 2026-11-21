@@ -1,0 +1,103 @@
+name: Build Booksys BDneX lab image
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Published Booksys tag including v
+        required: true
+        type: string
+      recipient:
+        description: Public age recipient for the lab archive
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Resolve the qualified Booksys release
+        id: release
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          curl --fail --silent --show-error --max-time 30 \
+            "https://api.github.com/repos/flowcool/booksys/releases/tags/$RELEASE" > "$RUNNER_TEMP/release.json"
+          revision=$(jq -er --arg tag "$RELEASE" '
+            select(.tag_name == $tag and .draft == false and .prerelease == false)
+            | select(any(.assets[]; .name == "manifest.json" and .state == "uploaded"))
+            | .target_commitish | select(test("^[a-f0-9]{40}$"))
+          ' "$RUNNER_TEMP/release.json")
+          printf 'revision=%s\nversion=%s\n' "$revision" "${RELEASE#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: flowcool/booksys
+          ref: refs/tags/${{ inputs.release }}
+          persist-credentials: false
+      - name: Check the released revision
+        env:
+          REVISION: ${{ steps.release.outputs.revision }}
+        run: test "$(git rev-parse HEAD)" = "$REVISION"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          version: v0.38.0
+          driver-opts: image=moby/buildkit@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      - name: Build the pinned upstream BDneX source
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: https://github.com/lbesnard/bdnex.git#9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33
+          platforms: linux/amd64
+          tags: booksys-bdnex-upstream:ci
+          load: true
+          push: false
+
+      - name: Build, test and export the exact lab image
+        env:
+          REVISION: ${{ steps.release.outputs.revision }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          image="booksys-bdnex:$VERSION"
+          output="$RUNNER_TEMP/bdnex"
+          mkdir -p "$output"
+          docker build --platform linux/amd64 --provenance=false -f Dockerfile.bdnex \
+            --build-arg BDNEX_IMAGE=booksys-bdnex-upstream:ci \
+            --label "org.opencontainers.image.revision=$REVISION" \
+            --label "org.opencontainers.image.version=$VERSION" -t "$image" .
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,mode=1777 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/checkout,readonly" \
+            --workdir /checkout --entrypoint python "$image" \
+            -m unittest tests.test_bdnex_engine -v 2>&1 | tee "$output/tests.log"
+          docker image inspect --format '{{json .}}' "$image" > "$output/image.json"
+          docker image inspect --format '{{.Id}}' booksys-bdnex-upstream:ci > "$output/upstream-image.txt"
+          docker image save --platform linux/amd64 -o "$output/image.tar" "$image"
+          (cd "$output" && sha256sum image.tar > SHA256SUMS)
+
+      - name: Encrypt the lab archive for transport
+        env:
+          RECIPIENT: ${{ inputs.recipient }}
+        run: |
+          set -euo pipefail
+          [[ "$RECIPIENT" =~ ^age1[a-z0-9]{58}$ ]]
+          if ! command -v age >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends age
+          fi
+          tar -C "$RUNNER_TEMP/bdnex" -cf - . | age -r "$RECIPIENT" -o "$RUNNER_TEMP/booksys-bdnex.tar.age"
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: booksys-bdnex-${{ steps.release.outputs.version }}
+          path: ${{ runner.temp }}/booksys-bdnex.tar.age
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
