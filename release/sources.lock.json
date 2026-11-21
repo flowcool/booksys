@@ -329,8 +329,8 @@
         {
           "id": "dpkg:libfreetype6:amd64",
           "source": "freetype",
-          "source_version": "2.13.3+dfsg-1+deb13u1",
-          "version": "2.13.3+dfsg-1+deb13u1"
+          "source_version": "2.13.3+dfsg-1+deb13u2",
+          "version": "2.13.3+dfsg-1+deb13u2"
         },
         {
           "id": "dpkg:libgcc-s1:amd64",
@@ -371,14 +371,14 @@
         {
           "id": "dpkg:libgpgme11t64:amd64",
           "source": "gpgme1.0",
-          "source_version": "1.24.2-3",
-          "version": "1.24.2-3"
+          "source_version": "1.24.2-3+deb13u1",
+          "version": "1.24.2-3+deb13u1"
         },
         {
           "id": "dpkg:libgpgmepp6t64:amd64",
           "source": "gpgme1.0",
-          "source_version": "1.24.2-3",
-          "version": "1.24.2-3"
+          "source_version": "1.24.2-3+deb13u1",
+          "version": "1.24.2-3+deb13u1"
         },
         {
           "id": "dpkg:libgssapi-krb5-2:amd64",
@@ -503,8 +503,8 @@
         {
           "id": "dpkg:libnghttp2-14:amd64",
           "source": "nghttp2",
-          "source_version": "1.64.0-1.1+deb13u1",
-          "version": "1.64.0-1.1+deb13u1"
+          "source_version": "1.64.0-1.1+deb13u2",
+          "version": "1.64.0-1.1+deb13u2"
         },
         {
           "id": "dpkg:libnghttp3-9:amd64",
@@ -2050,7 +2050,7 @@
           "id": "dpkg:libfreetype6:amd64",
           "license": "BSD-3-Clause AND BSL-1.0 AND Expat AND FSFAP AND FTL AND FTL and Expat AND GPL-2+ AND GPL-3+ AND MIT-Modern-Variant AND MIT-SMC AND OpenGroup-MIT AND Public-Domain AND Zlib",
           "sources": [
-            "debian_freetype_2.13.3_dfsg-1_deb13u1"
+            "debian_freetype_2.13.3_dfsg-1_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -2082,7 +2082,7 @@
           "id": "dpkg:libgpgme11t64:amd64",
           "license": "GPL-2+ AND GPL-3+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+",
           "sources": [
-            "debian_gpgme1.0_1.24.2-3"
+            "debian_gpgme1.0_1.24.2-3_deb13u1"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -2090,7 +2090,7 @@
           "id": "dpkg:libgpgmepp6t64:amd64",
           "license": "GPL-2+ AND GPL-3+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+",
           "sources": [
-            "debian_gpgme1.0_1.24.2-3"
+            "debian_gpgme1.0_1.24.2-3_deb13u1"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -2146,7 +2146,7 @@
           "id": "dpkg:libnghttp2-14:amd64",
           "license": "BSD-2-clause AND Expat AND GPL-3+ with autoconf exception AND MIT AND all-permissive",
           "sources": [
-            "debian_nghttp2_1.64.0-1.1_deb13u1"
+            "debian_nghttp2_1.64.0-1.1_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -2767,8 +2767,8 @@
         {
           "id": "dpkg:libfreetype6:amd64",
           "source": "freetype",
-          "source_version": "2.13.3+dfsg-1+deb13u1",
-          "version": "2.13.3+dfsg-1+deb13u1"
+          "source_version": "2.13.3+dfsg-1+deb13u2",
+          "version": "2.13.3+dfsg-1+deb13u2"
         },
         {
           "id": "dpkg:libfribidi0:amd64",
@@ -2833,14 +2833,14 @@
         {
           "id": "dpkg:libgpgme11t64:amd64",
           "source": "gpgme1.0",
-          "source_version": "1.24.2-3",
-          "version": "1.24.2-3"
+          "source_version": "1.24.2-3+deb13u1",
+          "version": "1.24.2-3+deb13u1"
         },
         {
           "id": "dpkg:libgpgmepp6t64:amd64",
           "source": "gpgme1.0",
-          "source_version": "1.24.2-3",
-          "version": "1.24.2-3"
+          "source_version": "1.24.2-3+deb13u1",
+          "version": "1.24.2-3+deb13u1"
         },
         {
           "id": "dpkg:libgraphite2-3:amd64",
@@ -2989,8 +2989,8 @@
         {
           "id": "dpkg:libnghttp2-14:amd64",
           "source": "nghttp2",
-          "source_version": "1.64.0-1.1+deb13u1",
-          "version": "1.64.0-1.1+deb13u1"
+          "source_version": "1.64.0-1.1+deb13u2",
+          "version": "1.64.0-1.1+deb13u2"
         },
         {
           "id": "dpkg:libnghttp3-9:amd64",
@@ -4038,7 +4038,7 @@
           "id": "dpkg:libfreetype6:amd64",
           "license": "BSD-3-Clause AND BSL-1.0 AND Expat AND FSFAP AND FTL AND FTL and Expat AND GPL-2+ AND GPL-3+ AND MIT-Modern-Variant AND MIT-SMC AND OpenGroup-MIT AND Public-Domain AND Zlib",
           "sources": [
-            "debian_freetype_2.13.3_dfsg-1_deb13u1"
+            "debian_freetype_2.13.3_dfsg-1_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -4126,7 +4126,7 @@
           "id": "dpkg:libgpgme11t64:amd64",
           "license": "GPL-2+ AND GPL-3+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+",
           "sources": [
-            "debian_gpgme1.0_1.24.2-3"
+            "debian_gpgme1.0_1.24.2-3_deb13u1"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -4134,7 +4134,7 @@
           "id": "dpkg:libgpgmepp6t64:amd64",
           "license": "GPL-2+ AND GPL-3+ AND LGPL-2+ AND LGPL-2.1+ AND LGPL-3+ AND LGPL-3+ or GPL-2+",
           "sources": [
-            "debian_gpgme1.0_1.24.2-3"
+            "debian_gpgme1.0_1.24.2-3_deb13u1"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -4334,7 +4334,7 @@
           "id": "dpkg:libnghttp2-14:amd64",
           "license": "BSD-2-clause AND Expat AND GPL-3+ with autoconf exception AND MIT AND all-permissive",
           "sources": [
-            "debian_nghttp2_1.64.0-1.1_deb13u1"
+            "debian_nghttp2_1.64.0-1.1_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -11933,11 +11933,11 @@
       "url": "https://deb.debian.org/debian/pool/main/libf/libffi/libffi_3.4.8-2.dsc",
       "sha256": "4424defe3f37c0084f062e03330b2ba3d3f927367c33be455cfacf7f85a78161"
     },
-    "debian_freetype_2.13.3_dfsg-1_deb13u1": {
+    "debian_freetype_2.13.3_dfsg-1_deb13u2": {
       "package": "freetype",
-      "version": "2.13.3+dfsg-1+deb13u1",
-      "url": "https://security.debian.org/debian-security/pool/updates/main/f/freetype/freetype_2.13.3+dfsg-1+deb13u1.dsc",
-      "sha256": "8aa6e936f4b8ce5b1ac530d3c1bc7c5c36e6432ef81385c29ce649a3ed79e8cd"
+      "version": "2.13.3+dfsg-1+deb13u2",
+      "url": "https://deb.debian.org/debian/pool/main/f/freetype/freetype_2.13.3+dfsg-1+deb13u2.dsc",
+      "sha256": "919a8775c6546c8660f41c276df5bd13c884478ae3adf13379264dfb1b18c5e4"
     },
     "debian_fribidi_1.0.16-1": {
       "package": "fribidi",
@@ -11987,11 +11987,11 @@
       "url": "https://deb.debian.org/debian/pool/main/libg/libgpg-error/libgpg-error_1.51-4.dsc",
       "sha256": "fecb803e22016cbf46b7c0a0d5c23f8a45a2f70fa10d3b3b67b10be917987410"
     },
-    "debian_gpgme1.0_1.24.2-3": {
+    "debian_gpgme1.0_1.24.2-3_deb13u1": {
       "package": "gpgme1.0",
-      "version": "1.24.2-3",
-      "url": "https://deb.debian.org/debian/pool/main/g/gpgme1.0/gpgme1.0_1.24.2-3.dsc",
-      "sha256": "822672941458bfd0953527b53899fd88e38f84b16220bbade2bab598f8435d46"
+      "version": "1.24.2-3+deb13u1",
+      "url": "https://security.debian.org/debian-security/pool/updates/main/g/gpgme1.0/gpgme1.0_1.24.2-3+deb13u1.dsc",
+      "sha256": "54b052aba835d6d796b027e2a539ad48d1532833d5b4c36214a2050081746185"
     },
     "debian_graphite2_1.3.14-2_deb13u1": {
       "package": "graphite2",
@@ -12101,11 +12101,11 @@
       "url": "https://deb.debian.org/debian/pool/main/n/ncurses/ncurses_6.5+20250216-2.dsc",
       "sha256": "00539cc2bc6bb84be1b8a8a5decf606682e14b6f39b76b9aa090e65d2c2d4580"
     },
-    "debian_nghttp2_1.64.0-1.1_deb13u1": {
+    "debian_nghttp2_1.64.0-1.1_deb13u2": {
       "package": "nghttp2",
-      "version": "1.64.0-1.1+deb13u1",
-      "url": "https://security.debian.org/debian-security/pool/updates/main/n/nghttp2/nghttp2_1.64.0-1.1+deb13u1.dsc",
-      "sha256": "11f4603a9f417bc3d195be36cb462bb9df0657f52b72dd9276453a31bc0227c7"
+      "version": "1.64.0-1.1+deb13u2",
+      "url": "https://deb.debian.org/debian/pool/main/n/nghttp2/nghttp2_1.64.0-1.1+deb13u2.dsc",
+      "sha256": "a290ecb88f9a58a8d701e54af0694bb4f5f09268683a32e264c4c770f30e1c9f"
     },
     "debian_nghttp3_1.8.0-1": {
       "package": "nghttp3",
