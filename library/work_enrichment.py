@@ -8,7 +8,13 @@ from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
 from library.names import METHOD as NAME_METHOD
-from library.work_identity import asset_assertions, evaluate_work, classify_work, informative, normalized
+from library.work_identity import (
+    NUMBERED_SERIES_ALIASES, asset_assertions, evaluate_work, classify_work, informative, normalized,
+)
+
+COMPETING_NUMBERED_SERIES = {'garry': frozenset({
+    'garry sergent imperia 1re serie grand format', 'garry soleil', 'garry pacifique imperia', 'garry special',
+})}
 
 
 def printed_concordance(evidence: dict[str, Any], asset: dict[str, Any],
@@ -30,6 +36,8 @@ def printed_concordance(evidence: dict[str, Any], asset: dict[str, Any],
         if len(title.split()) < 2 or not author or ' '+title+' ' not in text or ' '+author+' ' not in text:
             continue
         for field in ('title', 'series', 'number', 'integral'):
+            if field == 'series' and candidate.get('field_provenance', {}).get('series', {}).get('file_series_alias'):
+                continue  # The existing file series assertion was verified against this reference.
             if candidate.get(field) not in (None, ''):
                 result['provenance'].setdefault(field, []).append({'value': candidate[field],
                     'scope': 'asset', 'source': 'printed:'+asset['sha256'],
@@ -59,19 +67,29 @@ def numbered_work(row: dict[str, Any]) -> tuple[str, str]:
     return normalized(row.get('series', ''), 'series'), normalized(row.get('number', ''), 'number')
 
 
-def exact_bdnex_reference(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def exact_bdnex_reference(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
     assertions = asset_assertions(evidence)
     series = {normalized(a['value'], 'series') for a in assertions
               if a['field'] == 'series' and informative(a['value'])}
     numbers = {normalized(a['value'], 'number') for a in assertions if a['field'] == 'number'}
     if len(series) != 1 or len(numbers) != 1:
-        return []
-    bound = next(iter(series)), next(iter(numbers))
-    matches = {row['url']: row for row in candidates
-               if row.get('source') == 'bedetheque'
-               and row.get('provenance', {}).get('method') == 'bdnex-sitemap-1'
-               and numbered_work(row) == bound}
-    return list(matches.values()) if len(matches) == 1 else []
+        return [], None
+    file_series, number = next(iter(series)), next(iter(numbers))
+    allowed = {file_series, NUMBERED_SERIES_ALIASES.get(file_series, file_series)}
+    numbered = {(row['url'], row['edition_ref']): row for row in candidates
+                if row.get('source') == 'bedetheque'
+                and row.get('provenance', {}).get('method') == 'bdnex-sitemap-1'
+                and numbered_work(row)[1] == number}
+    matches = [row for row in numbered.values() if numbered_work(row)[0] in allowed]
+    if len(matches) != 1:
+        return [], None
+    row = matches[0]
+    if numbered_work(row)[0] == file_series:
+        return [row], None
+    competing = COMPETING_NUMBERED_SERIES.get(file_series, frozenset())
+    if any(numbered_work(other)[0] in competing for other in numbered.values()):
+        return [], None
+    return [row], file_series
 
 
 def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any]) -> None:
@@ -119,9 +137,10 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     if hydrate:
         local_result = evaluate_work(printed_concordance(evidence, asset, candidates), candidates)
         early_reference = local_result['status'] == 'no_match'
-        matching = []
+        matching: list[dict[str, Any]] = []
+        file_series_alias = None
         if early_reference:
-            matching = exact_bdnex_reference(evidence, candidates)
+            matching, file_series_alias = exact_bdnex_reference(evidence, candidates)
         elif local_result['status'] == 'identified':
             matching = local_result['concordant_candidates'][:3]
         for row in matching:
@@ -144,10 +163,17 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             canonical = page_candidates[0]
             if early_reference:
                 if (canonical['edition_ref'] != row['edition_ref']
-                        or numbered_work(canonical) != numbered_work(row)):
+                        or numbered_work(canonical) != numbered_work(row)
+                        or (file_series_alias and canonical['provenance'].get('canonical_album_ref') != row['edition_ref'])):
                     page_attempt['status'] = 'reference_mismatch'
                     continue
-                qualify_filename_titles(evidence, canonical)
+                if file_series_alias:
+                    for candidate in page_candidates:
+                        candidate['field_provenance']['series'] = {
+                            **candidate['field_provenance']['series'], 'file_series_alias': file_series_alias,
+                        }
+                else:
+                    qualify_filename_titles(evidence, canonical)
             candidates.extend(page_candidates)
     for query in queries if discovery else []:
         try:

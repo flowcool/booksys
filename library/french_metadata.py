@@ -187,7 +187,16 @@ def parse_album_page(body: str, url: str, retrieved_at: str) -> ReferenceCandida
         fields['integral'] = True
     # Additional field mapping can only use explicit labelled assertions.
     # No family/language/age is inferred from the website, name or cover.
-    return ReferenceCandidate(reference, url, series, title, number, fields, provenance(url, retrieved_at))
+    source = provenance(url, retrieved_at)
+    canonical = value('link[rel="canonical"]', 'href')
+    if canonical:
+        try:
+            canonical_ref = page_id(canonical, 'album')
+        except LibraryError:
+            canonical_ref = None
+        if canonical_ref:
+            source['canonical_album_ref'] = canonical_ref
+    return ReferenceCandidate(reference, url, series, title, number, fields, source)
 
 
 @dataclass(frozen=True)

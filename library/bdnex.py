@@ -12,6 +12,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 from urllib.parse import urlsplit
 
 from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates, valid_match_counts
+from library.names import parse_name
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -122,3 +123,30 @@ def inputs_for(state: dict[str, Any], key: str) -> list[dict[str, Any]]:
             if item not in inputs:
                 inputs.append(item)
     return inputs[:3]
+
+
+def bookys_heading_input(state: dict[str, Any], key: str, original: dict[str, Any]) -> dict[str, Any] | None:
+    """A single direct Bookys item's heading can supply a logical search name."""
+    asset = state['assets'][key]
+    origins = asset.get('origins', [])
+    if len(origins) != 1:
+        return None
+    origin = state['origins'][origins[0]]
+    source = origin.get('source', '')
+    if (origin.get('parent_origin') or origin.get('bundle')
+            or not re.fullmatch(r'https://www\d*\.bookys-ebooks\.com/bandes-dessinees/\d+-[^/?#]+', source)):
+        return None
+    hint = asset.get('captured_hints', {}).get(source)
+    title = hint.get('title') if isinstance(hint, dict) else None
+    if not isinstance(title, str):
+        return None
+    fields = parse_name(re.sub(r'[/\\\x00-\x1f\x7f]', ' ', title))
+    if not fields.get('series') or not fields.get('number'):
+        return None
+    name = f"{fields['series']} - T{str(fields['number']).zfill(2)}"
+    if fields.get('title'):
+        name += f" - {fields['title']}"
+    path = name + '.cbz'
+    if path == PurePosixPath(original['path']).name:
+        return None
+    return {'path': path, 'embedded': original['embedded']}

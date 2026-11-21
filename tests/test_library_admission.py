@@ -23,12 +23,35 @@ class AdmissionTests(unittest.TestCase):
                 desired = projection(state, key)
                 expected_display = title or 'Joe Bar Team'
                 self.assertEqual(desired['status'], 'classified')
-                self.assertTrue(Path(desired['target']).name.startswith(f'0004 - {expected_display}--'))
+                expected_label = 'Joe Bar Team - T04' + (f' - {title}' if title else '')
+                self.assertTrue(Path(desired['target']).name.startswith(f'{expected_label}--'))
                 self.assertEqual(desired['fiche_title'], expected_display)
                 self.assertEqual(desired['fields'].get('title'), title)
         holding = projection({'assets': {key: {}}}, key)
         self.assertTrue(holding['target'].startswith('holding/À identifier--'))
         self.assertEqual(holding['fiche_title'], 'À identifier')
+
+    def test_legacy_classified_copy_keeps_its_journal_and_original_path(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            catalog, reception, original, key = setup_library(root, self)
+            original_sha = sha256(original)
+            state = catalog.read()
+            state['assets'][key]['work_result'] = {'status': 'identified', 'work': {
+                'family': 'BD', 'series': 'Joe Bar Team', 'number': 4, 'title': 'La première course'}}
+            catalog.save(state, expected=state['revision'])
+            desired = projection(state, key)
+            legacy_target = f"classified/BD/Joe Bar Team/0004 - La première course--{key}--{desired['signature'][:12]}"
+            publisher = AdmissionPublisher(catalog, reception, root/'library', isolated=True)
+            with patch('library.admission.projection', return_value={**desired, 'target': legacy_target}):
+                first = publisher.publish_asset(key)
+
+            self.assertEqual(publisher.publish_asset(key), first)
+            self.assertTrue((publisher.root / legacy_target / 'book.cbz').is_file())
+            self.assertFalse((publisher.root / desired['target']).exists())
+            self.assertEqual(sha256(original), original_sha)
 
     def test_scoped_recovery_on_postgresql(self):
         from library.operational_state import CopyOperations

@@ -7,7 +7,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit, urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -16,6 +16,9 @@ from library.catalog import Catalog
 from library.primitives import LibraryError, now, lock
 
 from booksys_core.network_admission import RollingBudget
+
+if TYPE_CHECKING:
+    from library.bdnex import BDneXClient
 
 PROVIDER_BUDGET: ContextVar[RollingBudget | None] = ContextVar('current_provider_budget', default=None)
 
@@ -300,6 +303,37 @@ def add_assertions(asset: dict[str, Any], response: dict[str, Any]) -> None:
     asset['source_attempts'] = asset['source_attempts'][-50:]
 
 
+def _corroborated_heading_candidates(state: dict[str, Any], asset_id: str,
+                                     candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from library.asset_evidence import bind_evidence
+    from library.work_enrichment import printed_concordance
+    from library.work_identity import evaluate_work
+
+    evidence = bind_evidence(state, asset_id, include_capture=False)
+    asset = state['assets'][asset_id]
+    outcome = evaluate_work(printed_concordance(evidence, asset, candidates), candidates)
+    return outcome['concordant_candidates'] if outcome['status'] == 'identified' else []
+
+
+def _search_bookys_heading(state: dict[str, Any], asset_id: str, client: BDneXClient,
+                           providers: Providers, inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from library.bdnex import bookys_heading_input
+
+    # One input leaves room for both scan-prefix cleanup and the heading.
+    if len(inputs) != 1:
+        return []
+    heading = bookys_heading_input(state, asset_id, inputs[0])
+    if heading is None:
+        return []
+    fallback = client.match(asset_id, [heading])
+    asset = state['assets'][asset_id]
+    asset['bdnex'] = {**asset['bdnex'], 'bookys_heading_fallback': fallback}
+    if fallback['status'] != 'ok':
+        providers.events.append({**fallback, 'retrieved_at': now()})
+        return []
+    return _corroborated_heading_candidates(state, asset_id, fallback['candidates'])
+
+
 def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
            references: list[tuple[str, str]]) -> dict[str, Any]:
     state = store.result_set('identify', {'assets': [asset_id]})
@@ -313,6 +347,9 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
         # Retry enrichment from retained proposals without querying BDneX again.
         # Re-evaluate against current asset evidence before retaining identity.
         local_candidates = asset['bdnex']['candidates']
+        heading_candidates = asset['bdnex'].get('bookys_heading_fallback', {}).get('candidates', [])
+        if heading_candidates:
+            local_candidates = [*local_candidates, *_corroborated_heading_candidates(state, asset_id, heading_candidates)]
         enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
                     exact_page_attempts=exact_page_attempts)
         if asset['work_result']['status'] == 'identified' and not references:
@@ -333,6 +370,15 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                 # Exact-page assertions replace sparse sitemap rows even when
                 # they contradict the proposal. Fallback must not resurrect it.
                 local_candidates = asset['work_result']['candidates']
+                if (not exact_page_attempts and not asset['work_result']['field_conflicts']
+                        and asset['work_result']['status'] != 'identified'):
+                    extra = _search_bookys_heading(state, asset_id, client, providers, inputs)
+                    if extra:
+                        enrich_work(state, asset_id, providers, [*local_candidates, *extra],
+                                    discovery=False, hydrate=True, exact_page_attempts=exact_page_attempts)
+                        if asset['work_result']['status'] == 'identified' and not references:
+                            return state
+                        local_candidates = asset['work_result']['candidates']
             else:
                 providers.events.append({**response, 'retrieved_at': now()})
     enrich_work(state, asset_id, providers, local_candidates, exact_page_attempts=exact_page_attempts)
