@@ -16,6 +16,50 @@ class WorkIdentityTests(unittest.TestCase):
         self.assertNotIn('number', result['work'])
         self.assertNotIn('isbn', result['work'])
 
+    def test_numbered_album_with_a_generic_title_keeps_its_series_identity(self):
+        evidence = {'series': 'Joe Bar Team', 'number': '04', 'asset_bound': True}
+        candidates = [reference(title=title, series='Joe Bar Team', number=4)
+                      for title in ('Tome 4', 'Volume 4')]
+        result = evaluate_work(evidence, candidates)
+        self.assertEqual(result['status'], 'identified')
+        self.assertEqual(result['work'], {'series': 'Joe Bar Team', 'number': 4})
+        self.assertEqual(result['concordant_candidates'], candidates)
+        self.assertEqual(result['field_conflicts'], {})
+
+    def test_generic_title_does_not_override_conflicting_identity(self):
+        evidence = {'series': 'Akim', 'number': 4, 'asset_bound': True}
+        for asset, candidate in (
+            (evidence, reference(title='Tome 4', series='Akim Color', number=4)),
+            (evidence, reference(title='Tome 3', series='Akim', number=3)),
+            (evidence, reference(title='Tome 3', series='Akim', number=4)),
+            (evidence, reference(title='Intégrale', series='Akim', number=4)),
+            ({**evidence, 'title': 'Le Grand Voyage'},
+             reference(title='Tome 4', series='Akim', number=4)),
+            ({**evidence, 'integral': False},
+             reference(title='Tome 4', series='Akim', number=4, integral=True)),
+        ):
+            with self.subTest(asset=asset, candidate=candidate):
+                self.assertEqual(evaluate_work(asset, [candidate])['status'], 'no_match')
+
+    def test_reports_fields_that_prevent_candidate_concordance(self):
+        evidence = {'title': 'Le Grand Voyage', 'series': 'Voyages', 'number': 4, 'asset_bound': True}
+        candidates = [reference(title='Une autre aventure', series='Voyages', number=4),
+                      reference(series='Voyages', number=3)]
+        result = evaluate_work(evidence, candidates)
+        self.assertEqual(result['status'], 'no_match')
+        self.assertEqual(result['rejected_fields'], ['number', 'title'])
+        self.assertNotIn('rejected_fields', evaluate_work(evidence, []))
+
+    def test_generic_titles_keep_series_year_ambiguity_and_label_safeguards(self):
+        evidence = {'series': 'Batman', 'number': 5, 'asset_bound': True}
+        first = reference(title='Volume 5', series='Batman (1940)', number=5)
+        second = reference(title='Tome 5', series='Batman 2011', number=5)
+        self.assertEqual(evaluate_work(evidence, [first, second])['status'], 'review')
+        self.assertEqual(evaluate_work({**evidence, 'labels': ['Batman (1941) T5']}, [first])['status'],
+                         'no_match')
+        self.assertEqual(evaluate_work({**evidence, 'labels': ['Batman (1940) T5']}, [first])['status'],
+                         'identified')
+
 
 class ConcordanceSafetyTests(unittest.TestCase):
     def test_homonymous_works_with_different_authors_abstain_and_keep_candidates(self):

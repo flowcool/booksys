@@ -56,6 +56,19 @@ def informative(value: Any) -> bool:
     return any(not token.isdigit() and token not in generic for token in text.split())
 
 
+def usable_reference_title(candidate: dict[str, Any]) -> bool:
+    title = candidate.get('title')
+    if informative(title):
+        return True
+    # An issue label can accompany a series and number match without naming the work.
+    label = re.fullmatch(r'(?:tome|volume|vol\.?)\s+(\d+(?:[.,]\d+)?)', str(title).strip(), re.I)
+    return label is not None and normalized(label[1], 'number') == normalized(candidate.get('number'), 'number')
+
+
+def known_work_value(field: str, value: Any) -> bool:
+    return informative(value) if field == 'title' else present(value)
+
+
 def asset_assertions(evidence: dict[str, Any]) -> list[dict[str, Any]]:
     assertions = [deepcopy(a) for a in evidence.get('assertions', [])
                   if isinstance(a, dict) and a.get('scope') == 'asset' and a.get('field') in IDENTITY_FIELDS
@@ -123,12 +136,16 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
     series_anchor = informative(bound.get('series', '')) and present(bound.get('number'))
     if not title_anchor and not series_anchor:
         return result
+    comparable = {field: value for field, value in bound.items() if field != 'title' or title_anchor}
+    rejected_fields: set[str] = set()
     matched = []
     for candidate in candidates:
-        if not informative(candidate.get('title', '')):
-            continue
-        if any(present(candidate.get(field)) and normalized(value, field) != normalized(candidate[field], field)
-               for field, value in bound.items() if field != 'title' or title_anchor):
+        conflicts = {field for field, value in comparable.items()
+                     if present(candidate.get(field)) and normalized(value, field) != normalized(candidate[field], field)}
+        if not usable_reference_title(candidate):
+            conflicts.add('title')
+        if conflicts:
+            rejected_fields.update(conflicts)
             continue
         if ((title_anchor and normalized(bound['title'], 'title') == normalized(candidate.get('title', ''), 'title'))
                 or (series_anchor and normalized(bound['series'], 'series') == normalized(candidate.get('series', ''), 'series')
@@ -143,7 +160,7 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
                                for label in evidence.get('labels', [])
                                for value in re.findall(r'\(((?:19|20)[0-9]{2})\)', label)):
                 continue
-            if (informative(candidate.get('title', ''))
+            if (usable_reference_title(candidate)
                     and normalized(bound['number'], 'number') == normalized(candidate.get('number', ''), 'number')
                     and normalized(bound['series'], 'series') == normalized(series[:year.start()], 'series')
                     and not any(present(candidate.get(field))
@@ -154,12 +171,15 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
     result['concordant_candidates'] = deepcopy(matched)
     if not matched:
         result.update(status='no_match', reason='No reference agrees with asset evidence')
+        if rejected_fields:
+            result['rejected_fields'] = sorted(rejected_fields)
         return result
     for field in IDENTITY_FIELDS:
-        values = [c[field] for c in matched if present(c.get(field))]
+        values = [c[field] for c in matched if known_work_value(field, c.get(field))]
         if len({normalized(value, field) for value in values}) > 1:
-            result['field_conflicts'][field] = [{'value': c.get(field), 'url': c.get('url'), 'source': c.get('source')}
-                                               for c in matched if present(c.get(field))]
+            result['field_conflicts'][field] = [
+                {'value': c.get(field), 'url': c.get('url'), 'source': c.get('source')}
+                for c in matched if known_work_value(field, c.get(field))]
     if result['field_conflicts']:
         result['reason'] = 'Concordant references describe different works'
         return result
@@ -178,7 +198,7 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
         return result
     work: dict[str, Any] = {}
     for field in WORK_FIELDS:
-        values = [c[field] for c in matched if present(c.get(field))]
+        values = [c[field] for c in matched if known_work_value(field, c.get(field))]
         distinct = {normalized(value, field) for value in values}
         if field == 'genres' and len(values) == len(matched) and all(isinstance(value, list) for value in values):
             common = set(normalized(value) for value in values[0])
