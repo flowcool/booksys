@@ -98,20 +98,24 @@ class BusinessStages:
             events = [event for event in self.providers.events[start:]
                       if not (event.get('dependency') == 'bdnex'
                               and asset.get('work_result', {}).get('status') == 'identified')]
+            cooldowns = [event for event in events if 'cooldown_until' in event]
+            attempted = [event for event in events if 'cooldown_until' not in event]
             temporary = any(event.get('status') == 'unavailable' and (event.get('http_status', 0) == 429
                 or event.get('http_status', 0) >= 500 or 'reason' in event and event['reason'] != 'Request budget exhausted')
-                for event in events)
-            deferred = any(event.get('reason') == 'Request budget exhausted' for event in events)
-            outcome = 'defer' if deferred else 'retry' if temporary else 'done'
+                for event in attempted)
+            budget_exhausted = any(event.get('reason') == 'Request budget exhausted' for event in attempted)
+            outcome = ('defer' if budget_exhausted else 'retry' if temporary
+                       else 'defer' if cooldowns else 'done')
             from booksys_core.diagnostics import provider_diagnostic
-            diagnostic = provider_diagnostic(events, deferred=deferred) if outcome != 'done' else {}
+            diagnostic_events = cooldowns if outcome == 'defer' and not budget_exhausted else attempted
+            diagnostic = provider_diagnostic(diagnostic_events, deferred=budget_exhausted) if outcome != 'done' else {}
             consumed_recovery = (task.input_revision.removeprefix('recovery:')
                                  if task.input_revision.startswith('recovery:')
                                  else asset.get('stage_metadata', {}).get('recovery_proof'))
             asset['stage_metadata'] = {'evidence': evidence_version(asset), 'at': instant(now),
                                       'evaluation': task.input_revision, 'outcome': outcome, 'method': task.method}
             failures = {str(event['dependency']): datetime.fromisoformat(event['retrieved_at']).timestamp()
-                        for event in events if event.get('status') == 'unavailable'
+                        for event in attempted if event.get('status') == 'unavailable'
                         and (event.get('http_status', 0) == 429 or event.get('http_status', 0) >= 500 or 'reason' in event)
                         and event.get('dependency') and event.get('retrieved_at')}
             if consumed_recovery:
@@ -121,12 +125,15 @@ class BusinessStages:
             if outcome == 'done':
                 asset['stage_metadata']['next_at'] = instant(now + timedelta(seconds=WEEK))
             prepared = self.catalog.prepare(state)
-            if deferred:
-                due = datetime.now(timezone.utc)+timedelta(seconds=30)
-                if self.providers.admission is not None:
-                    timestamp = self.providers.admission.next_due()
-                    if timestamp != float('inf'):
-                        due = max(due, datetime.fromtimestamp(timestamp, timezone.utc))
+            if outcome == 'defer':
+                due = max((datetime.fromtimestamp(event['cooldown_until'], timezone.utc)
+                           for event in cooldowns), default=now)
+                if budget_exhausted:
+                    due = max(due, datetime.now(timezone.utc) + timedelta(seconds=30))
+                    if self.providers.admission is not None:
+                        timestamp = self.providers.admission.next_due()
+                        if timestamp != float('inf'):
+                            due = max(due, datetime.fromtimestamp(timestamp, timezone.utc))
                 return StepResult('defer', due_at=due, prepared=prepared, diagnostic=diagnostic, successors=self.obligations(state, task.entity, now=now))
             return StepResult(outcome, prepared=prepared, diagnostic=diagnostic, successors=self.obligations(state, task.entity, now=now))
         if task.stage == 'copies':

@@ -57,8 +57,10 @@ class BDneXClient:
         return fallback
 
     def _match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
-        if time.monotonic() < self.retry_at:
-            return {'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'}
+        remaining = self.retry_at - time.monotonic()
+        if remaining > 0:
+            return {'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex',
+                    'cooldown_until': time.time() + remaining}
         try:
             request = validate_request({'schema': 1, 'asset': asset, 'inputs': inputs})
             body = json.dumps(request).encode()
