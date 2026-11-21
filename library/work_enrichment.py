@@ -87,7 +87,7 @@ def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any])
 
 def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 extra: list[dict[str, Any]] | None = None, *, discovery: bool = True,
-                hydrate: bool = False) -> None:
+                hydrate: bool = False, exact_page_attempts: list[dict[str, str]] | None = None) -> None:
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
     queries: list[str] = []
@@ -108,6 +108,8 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     candidates: list[dict[str, Any]] = []
     event_start = len(getattr(providers, 'events', []))
     attempts = []
+    if exact_page_attempts is None:
+        exact_page_attempts = []
     source = FrenchSource(providers)
     truncated = False
     # Local index rows carry identity only. Enrich the concordant exact pages
@@ -125,6 +127,8 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
         for row in matching:
             response = source.get(row['url'])
             attempts.append({'url': row['url'], 'status': response.status, 'reason': response.reason})
+            page_attempt = {'edition_ref': row['edition_ref'], 'status': response.status}
+            exact_page_attempts.append(page_attempt)
             if response.status != 'ok':
                 continue
             try:
@@ -134,11 +138,14 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 if not early_reference:
                     raise
                 attempts[-1]['status'] = 'unexpected_response'
+                page_attempt['status'] = 'unexpected_response'
                 continue
+            page_attempt['status'] = 'parsed'
             canonical = page_candidates[0]
             if early_reference:
                 if (canonical['edition_ref'] != row['edition_ref']
                         or numbered_work(canonical) != numbered_work(row)):
+                    page_attempt['status'] = 'reference_mismatch'
                     continue
                 qualify_filename_titles(evidence, canonical)
             candidates.extend(page_candidates)
@@ -180,6 +187,7 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     evidence['discovery_truncated'] = truncated
     result = evaluate_work(evidence, candidates)
     result['attempts'] = attempts
+    result['exact_page_attempts'] = exact_page_attempts
     result['evidence'] = evidence
     result['updated_at'] = now()
     if not candidates and not evidence.get('identity_conflicts'):

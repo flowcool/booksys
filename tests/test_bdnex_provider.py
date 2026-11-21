@@ -19,6 +19,49 @@ from library.work_identity import evaluate_work
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_scan_prefix_fallback_uses_spare_slots_only_after_an_empty_match(self) -> None:
+        hint = {'Series': 'Navy', 'Number': '149'}
+        original = {'path': 'Navy/ZzNavy - 149.cbz', 'embedded': hint}
+        alternate = {'path': 'Navy/Navy - 149.cbz', 'embedded': hint}
+        mirror = {'path': 'ZzFolder/Mirror.cbz', 'embedded': hint}
+        other = {'path': 'Other.cbz', 'embedded': hint}
+        candidate = {'source': 'bedetheque', 'edition_ref': '123',
+                     'url': 'https://www.bedetheque.com/BD-Navy-123.html',
+                     'title': 'Prise de guerre', 'series': 'Navy', 'number': '149', 'score': 80}
+        received: list[dict[str, Any]] = []
+        original_matches = False
+
+        def match(request: dict[str, Any]) -> dict[str, Any]:
+            received.append(request)
+            found = original_matches or request['inputs'] == [alternate]
+            return {'index': 'b'*64, 'candidates': [candidate] if found else []}
+
+        server = HTTPServer(('127.0.0.1', 0), handler('test-secret', match))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
+
+        fallback = client.match('a'*64, [original, mirror])
+        self.assertEqual([r['inputs'] for r in received], [[original, mirror], [alternate]])
+        self.assertEqual([r['edition_ref'] for r in fallback['candidates']], ['123'])
+        from library.bdnex_protocol import digest
+        self.assertEqual(fallback['request'], digest(received[1]))
+        self.assertEqual(fallback['prefix_fallback']['original_request'], digest(received[0]))
+
+        for inputs in ([original, alternate], [original, mirror, other]):
+            with self.subTest(inputs=inputs):
+                received.clear()
+                self.assertEqual(client.match('a'*64, inputs)['candidates'], [])
+                self.assertEqual([r['inputs'] for r in received], [inputs])
+
+        original_matches = True
+        received.clear()
+        successful = client.match('a'*64, [original])
+        self.assertEqual([r['edition_ref'] for r in successful['candidates']], ['123'])
+        self.assertEqual([r['inputs'] for r in received], [[original]])
+        self.assertNotIn('prefix_fallback', successful)
+
     def test_invalid_logical_path_does_not_block_the_next_asset(self) -> None:
         received: list[dict[str, Any]] = []
 
@@ -126,7 +169,9 @@ class ProtocolTests(unittest.TestCase):
 
         def match(request: dict[str, Any]) -> dict[str, Any]:
             received.append(request)
-            return {'index': 'b'*64, 'candidates': [{'source': 'bedetheque',
+            counts = {'native': 3, 'filtered': 2} if request['asset'] == 'a'*64 else {'native': -1, 'filtered': 2}
+            return {'index': 'b'*64, 'match_counts': counts,
+                'candidates': [{'source': 'bedetheque',
                 'edition_ref': '245127', 'url': 'https://www.bedetheque.com/BD-Nains-Tome-1-Redwin-de-la-Forge-245127.html',
                 'title': 'Redwin de la Forge', 'series': 'Nains', 'number': '1', 'score': 89.0}]}
 
@@ -139,10 +184,15 @@ class ProtocolTests(unittest.TestCase):
         result = client.match('a'*64, [{'path': 'Nains/Redwin.cbz', 'embedded': {'Series': 'Nains', 'Number': '1'}}])
         self.assertEqual(received[0]['inputs'][0]['path'], 'Nains/Redwin.cbz')
         self.assertEqual(result['candidates'][0]['number'], '1')
+        self.assertEqual(result['match_counts'], {'native': 3, 'filtered': 2})
         self.assertEqual(result['candidates'][0]['provenance']['index'], 'b'*64)
+        malformed = client.match('c'*64, [{'path': 'Redwin.cbz', 'embedded': {}}])
+        self.assertEqual(malformed['status'], 'ok')
+        self.assertEqual(malformed['candidates'][0]['number'], '1')
+        self.assertNotIn('match_counts', malformed)
         denied = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'wrong')
         self.assertEqual(denied.match('a'*64, [{'path': 'Redwin.cbz', 'embedded': {}}])['status'], 'unavailable')
-        self.assertEqual(len(received), 1)
+        self.assertEqual(len(received), 2)
 
 
 class IdentityTests(unittest.TestCase):
@@ -178,7 +228,11 @@ class IdentityTests(unittest.TestCase):
 
         result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
         self.assertNotEqual(result['assets'][key]['work_result']['status'], 'identified')
-        self.assertEqual(result['assets'][key]['work_result']['candidates'][0]['title'], 'New title')
+        work = result['assets'][key]['work_result']
+        self.assertEqual(work['candidates'][0]['title'], 'New title')
+        self.assertEqual(work['exact_page_attempts'], [{
+            'edition_ref': '123', 'status': 'parsed',
+        }])
 
     def test_scores_and_wrong_embedded_web_do_not_override_asset_identity(self) -> None:
         evidence = {'asset_bound': True, 'series': 'Nains', 'number': '1'}

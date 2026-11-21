@@ -41,11 +41,14 @@ def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
     fields = {**(work or {}), **asset.get('overrides', {})}
     status = 'classified' if work else 'holding'
     signature = digest({'asset': key, 'work': work, 'overrides': asset.get('overrides', {})})
+    work_title = (work or {}).get('title')
+    series_fallback = work.get('series') if work and not work_title else None
     leaf = slug((str(fields.get('number', '')).zfill(4) + ' - ' if fields.get('number') else '') +
-                str(fields.get('title') or 'À identifier')) + '--' + key + '--' + signature[:12]
+                str(fields.get('title') or series_fallback or 'À identifier')) + '--' + key + '--' + signature[:12]
     family = str(fields.get('family')) if fields.get('family') in ('BD', 'Manga', 'Comics') else 'Unknown family'
     target = str(Path('classified') / family / slug(fields.get('series') or fields.get('title')) / leaf) if work else str(Path('holding') / leaf)
-    return {'status': status, 'signature': signature, 'target': target, 'fields': work or {}}
+    return {'status': status, 'signature': signature, 'target': target, 'fields': work or {},
+            'fiche_title': str(work_title or series_fallback or 'À identifier')}
 
 
 class AdmissionPublisher(Publisher):
@@ -180,7 +183,7 @@ class AdmissionPublisher(Publisher):
                 raise LibraryError('Unmanaged admission target')
             evidence = {'asset': key, 'status': desired['status'],
                         'work': asset.get('work_result'), 'origins': [state['origins'][oid] for oid in asset['origins']]}
-            fiche = ('# ' + ('À identifier' if desired['status'] == 'holding' else html.escape(str(desired['fields'].get('title')))) +
+            fiche = ('# ' + html.escape(desired['fiche_title']) +
                      '\n\n<pre>' + html.escape(json.dumps(evidence, ensure_ascii=False, indent=2)) + '</pre>\n').encode()
             fields = desired['fields']
             notes = 'Booksys; source_asset_sha256=' + key + '; admission=' + desired['status']

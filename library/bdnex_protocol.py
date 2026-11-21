@@ -59,3 +59,11 @@ def validate_candidates(rows: Any) -> list[dict[str, Any]]:
             if row.get(key) is not None and (not isinstance(row[key], str) or len(row[key]) > 2048):
                 raise ValueError('Invalid candidate field')
     return rows
+
+
+
+def valid_match_counts(counts: Any, candidate_count: int) -> bool:
+    return (isinstance(counts, dict) and counts.keys() == {'native', 'filtered'}
+            and all(type(count) is int for count in counts.values())
+            and 0 <= counts['filtered'] <= counts['native'] <= 15
+            and candidate_count <= counts['native'] - counts['filtered'])

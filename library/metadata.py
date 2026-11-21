@@ -306,13 +306,15 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
     asset = state['assets'][asset_id]
     from library.work_enrichment import enrich_work
     local_candidates = []
+    exact_page_attempts: list[dict[str, str]] = []
     client = getattr(providers, 'bdnex', None)
     if (asset.get('work_result', {}).get('status') == 'identified'
             and asset.get('bdnex', {}).get('status') == 'ok'):
         # Retry enrichment from retained proposals without querying BDneX again.
         # Re-evaluate against current asset evidence before retaining identity.
         local_candidates = asset['bdnex']['candidates']
-        enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True)
+        enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
+                    exact_page_attempts=exact_page_attempts)
         if asset['work_result']['status'] == 'identified' and not references:
             return state
         local_candidates = asset['work_result']['candidates']
@@ -324,7 +326,8 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
             asset['bdnex'] = response
             if response['status'] == 'ok':
                 local_candidates = response['candidates']
-                enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True)
+                enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
+                            exact_page_attempts=exact_page_attempts)
                 if asset['work_result']['status'] == 'identified' and not references:
                     return state
                 # Exact-page assertions replace sparse sitemap rows even when
@@ -332,7 +335,7 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                 local_candidates = asset['work_result']['candidates']
             else:
                 providers.events.append({**response, 'retrieved_at': now()})
-    enrich_work(state, asset_id, providers, local_candidates)
+    enrich_work(state, asset_id, providers, local_candidates, exact_page_attempts=exact_page_attempts)
     if asset['work_result']['status'] == 'identified' and not references:
         return state
     # All external work happens on the snapshot, outside catalogue locks.
@@ -393,7 +396,7 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                     candidates.append(response['candidate'])
         candidates = list({(candidate['source'], candidate['edition_ref']): candidate
                            for candidate in candidates}.values())
-    enrich_work(state, asset_id, providers, candidates)
+    enrich_work(state, asset_id, providers, candidates, exact_page_attempts=exact_page_attempts)
     return state
 
 

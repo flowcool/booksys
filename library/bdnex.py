@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from urllib.parse import urlsplit
 
-from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates
+from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates, valid_match_counts
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -29,6 +29,33 @@ class BDneXClient:
         self.retry_at = 0.0
 
     def match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+        result = self._match(asset, inputs)
+        if result['status'] != 'ok' or result['candidates']:
+            return result
+
+        # A scan prefix can hide a candidate. Try its basename without the prefix
+        # only after the original request is empty, within the three-name budget.
+        paths = {item['path'] for item in inputs}
+        variants: list[dict[str, Any]] = []
+        for item in inputs:
+            if len(inputs) + len(variants) == 3:
+                break
+            folder, separator, filename = item['path'].rpartition('/')
+            path = folder + separator + re.sub(r'^zz(?=[a-zÀ-ÿ])', '', filename, flags=re.I)
+            if path not in paths:
+                variants.append({**item, 'path': path})
+                paths.add(path)
+        if not variants:
+            return result
+
+        fallback = self._match(asset, variants)
+        receipt = {'original_request': result['request']}
+        if 'match_counts' in result:
+            receipt['original_match_counts'] = result['match_counts']
+        fallback['prefix_fallback'] = receipt
+        return fallback
+
+    def _match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
         if time.monotonic() < self.retry_at:
             return {'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'}
         try:
@@ -51,6 +78,8 @@ class BDneXClient:
                     or result.get('engine') != PIN or not re.fullmatch('[a-f0-9]{64}', str(result.get('index', '')))):
                 raise ValueError('Invalid BDneX binding')
             rows = validate_candidates(result['candidates'])
+            if not valid_match_counts(result.get('match_counts'), len(rows)):
+                result.pop('match_counts', None)
             for row in rows:
                 row['provenance'] = {'engine': PIN, 'index': result['index'], 'method': 'bdnex-sitemap-1'}
             return {**result, 'status': 'ok'}
