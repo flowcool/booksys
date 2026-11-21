@@ -126,7 +126,9 @@ class ProtocolTests(unittest.TestCase):
 
         def match(request: dict[str, Any]) -> dict[str, Any]:
             received.append(request)
-            return {'index': 'b'*64, 'candidates': [{'source': 'bedetheque',
+            counts = {'native': 3, 'filtered': 2} if request['asset'] == 'a'*64 else {'native': -1, 'filtered': 2}
+            return {'index': 'b'*64, 'match_counts': counts,
+                'candidates': [{'source': 'bedetheque',
                 'edition_ref': '245127', 'url': 'https://www.bedetheque.com/BD-Nains-Tome-1-Redwin-de-la-Forge-245127.html',
                 'title': 'Redwin de la Forge', 'series': 'Nains', 'number': '1', 'score': 89.0}]}
 
@@ -139,10 +141,15 @@ class ProtocolTests(unittest.TestCase):
         result = client.match('a'*64, [{'path': 'Nains/Redwin.cbz', 'embedded': {'Series': 'Nains', 'Number': '1'}}])
         self.assertEqual(received[0]['inputs'][0]['path'], 'Nains/Redwin.cbz')
         self.assertEqual(result['candidates'][0]['number'], '1')
+        self.assertEqual(result['match_counts'], {'native': 3, 'filtered': 2})
         self.assertEqual(result['candidates'][0]['provenance']['index'], 'b'*64)
+        malformed = client.match('c'*64, [{'path': 'Redwin.cbz', 'embedded': {}}])
+        self.assertEqual(malformed['status'], 'ok')
+        self.assertEqual(malformed['candidates'][0]['number'], '1')
+        self.assertNotIn('match_counts', malformed)
         denied = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'wrong')
         self.assertEqual(denied.match('a'*64, [{'path': 'Redwin.cbz', 'embedded': {}}])['status'], 'unavailable')
-        self.assertEqual(len(received), 1)
+        self.assertEqual(len(received), 2)
 
 
 class IdentityTests(unittest.TestCase):
@@ -178,7 +185,11 @@ class IdentityTests(unittest.TestCase):
 
         result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
         self.assertNotEqual(result['assets'][key]['work_result']['status'], 'identified')
-        self.assertEqual(result['assets'][key]['work_result']['candidates'][0]['title'], 'New title')
+        work = result['assets'][key]['work_result']
+        self.assertEqual(work['candidates'][0]['title'], 'New title')
+        self.assertEqual(work['exact_page_attempts'], [{
+            'edition_ref': '123', 'status': 'parsed',
+        }])
 
     def test_scores_and_wrong_embedded_web_do_not_override_asset_identity(self) -> None:
         evidence = {'asset_bound': True, 'series': 'Nains', 'number': '1'}

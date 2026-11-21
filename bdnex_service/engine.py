@@ -106,12 +106,14 @@ class Engine:
         from bdnex.importer.matching import find_matches, query_from_filename, volumes_for  # type: ignore[import-not-found]
         from bdnex.importer.bedetheque.sitemap import query_tokens
         rows: dict[str, dict[str, Any]] = {}
+        native = filtered = 0
         for item in request['inputs']:
             token = _hints.set(item['embedded'])
             try:
                 matches = find_matches(self.source, item['path'], limit=5)
             finally:
                 _hints.reset(token)
+            native += len(matches)
             for match in matches:
                 if match.score < MIN_SCORE:
                     series = re.split(r'\b\d{1,3}\b', query_from_filename(item['path']), maxsplit=1)[0]
@@ -119,6 +121,7 @@ class Engine:
                     if (match.score < MIN_AGREEING_SCORE
                             or match.candidate.volume not in volumes_for(item['path'])
                             or not words or not words <= set(match.candidate.name.split())):
+                        filtered += 1
                         continue
                 info = self.source.partial_info(match.candidate)
                 row = {'source': 'bedetheque', 'edition_ref': info.source_id,
@@ -129,4 +132,5 @@ class Engine:
                 if info.source_id not in rows or rows[info.source_id]['score'] < match.score:
                     rows[info.source_id] = row
         candidates = sorted(rows.values(), key=lambda row: row['score'], reverse=True)
-        return {'index': self.index, 'candidates': validate_candidates(candidates)}
+        return {'index': self.index, 'candidates': validate_candidates(candidates),
+                'match_counts': {'native': native, 'filtered': filtered}}

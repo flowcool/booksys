@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from urllib.parse import urlsplit
 
-from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates
+from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates, valid_match_counts
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -51,6 +51,8 @@ class BDneXClient:
                     or result.get('engine') != PIN or not re.fullmatch('[a-f0-9]{64}', str(result.get('index', '')))):
                 raise ValueError('Invalid BDneX binding')
             rows = validate_candidates(result['candidates'])
+            if not valid_match_counts(result.get('match_counts'), len(rows)):
+                result.pop('match_counts', None)
             for row in rows:
                 row['provenance'] = {'engine': PIN, 'index': result['index'], 'method': 'bdnex-sitemap-1'}
             return {**result, 'status': 'ok'}
