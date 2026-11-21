@@ -10,6 +10,7 @@ import unicodedata
 IDENTITY_FIELDS = ('title', 'series', 'number', 'integral')
 WORK_FIELDS = (*IDENTITY_FIELDS, 'author', 'contributors', 'summary', 'language',
                'publisher', 'date', 'isbn', 'genres', 'adult', 'recommended_age', 'family')
+NUMBERED_SERIES_ALIASES = {'big bull': 'big bull imperia', 'garry': 'garry imperia 2e serie'}
 
 
 def normalized(value: Any, field: str = '') -> Any:
@@ -137,19 +138,28 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
     if not title_anchor and not series_anchor:
         return result
     comparable = {field: value for field, value in bound.items() if field != 'title' or title_anchor}
+    file_series = normalized(bound.get('series', ''), 'series')
+    file_number = normalized(bound.get('number', ''), 'number')
     rejected_fields: set[str] = set()
     matched = []
     for candidate in candidates:
+        candidate_series = normalized(candidate.get('series', ''), 'series')
+        number_matches = file_number == normalized(candidate.get('number', ''), 'number')
+        series_matches = file_series == candidate_series or (
+            series_anchor and number_matches and NUMBERED_SERIES_ALIASES.get(file_series) == candidate_series
+            and candidate.get('field_provenance', {}).get('series', {}).get('file_series_alias') == file_series)
         conflicts = {field for field, value in comparable.items()
-                     if present(candidate.get(field)) and normalized(value, field) != normalized(candidate[field], field)}
+                     if field != 'series' and present(candidate.get(field))
+                     and normalized(value, field) != normalized(candidate[field], field)}
+        if 'series' in comparable and present(candidate.get('series')) and not series_matches:
+            conflicts.add('series')
         if not usable_reference_title(candidate):
             conflicts.add('title')
         if conflicts:
             rejected_fields.update(conflicts)
             continue
         if ((title_anchor and normalized(bound['title'], 'title') == normalized(candidate.get('title', ''), 'title'))
-                or (series_anchor and normalized(bound['series'], 'series') == normalized(candidate.get('series', ''), 'series')
-                    and normalized(bound['number'], 'number') == normalized(candidate.get('number', ''), 'number'))):
+                or (series_anchor and series_matches and number_matches)):
             matched.append(candidate)
     year_suffix = r'\s+(?:(?:19|20)[0-9]{2}|\((?:19|20)[0-9]{2}\))\s*$'
     if not matched and series_anchor and not re.search(year_suffix, str(bound['series'])):

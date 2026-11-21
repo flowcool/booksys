@@ -196,6 +196,93 @@ class ProtocolTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
+    def numbered_alias_result(self, filename: str, candidates: list[dict[str, Any]],
+                              html: str | None) -> dict[str, Any]:
+        from copy import deepcopy
+
+        key = 'a'*64
+        state = {'assets': {key: {'sha256': key, 'origins': ['o']}},
+                 'origins': {'o': {'sha256': key, 'path': filename}}}
+
+        class Snapshot:
+            def result_set(self, *args: Any) -> dict[str, Any]:
+                return deepcopy(state)
+
+        class Local:
+            def match(self, *args: Any) -> dict[str, Any]:
+                return {'status': 'ok', 'candidates': candidates}
+
+        class Public:
+            bdnex = Local()
+
+            def get(self, url: str) -> dict[str, Any]:
+                if url.endswith('/robots.txt'):
+                    return {'status': 'ok', 'body': 'User-agent: *\nAllow: /\n'}
+                if url == candidates[0]['url'] and html is not None:
+                    return {'status': 'ok', 'body': html, 'retrieved_at': '2026-11-21'}
+                return {'status': 'unavailable', 'http_status': 403}
+
+        result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
+        work_result: dict[str, Any] = result['assets'][key]['work_result']
+        return work_result
+
+    def test_numbered_series_aliases_use_verified_pages_at_the_normal_entry_point(self) -> None:
+        from html import escape
+
+        base = 'https://www.bedetheque.com/album/index/i/'
+        cases = (
+            ('Big Bull', 'Big Bull (Imperia)', '101', '406430', 'Un collier de coquillages'),
+            ('Garry', 'Garry (Imperia) (2e série)', '418', '157436', "L'enfer de Tulagi"),
+        )
+        for alias, canonical, number, ref, title in cases:
+            with self.subTest(alias=alias):
+                url = base + ref
+                row = {'source': 'bedetheque', 'edition_ref': ref, 'url': url, 'title': title,
+                       'series': canonical, 'number': number, 'score': 90,
+                       'provenance': {'method': 'bdnex-sitemap-1'}}
+                html = (f'<link rel="canonical" href="{url}"><h1><a>{escape(canonical)}</a></h1>'
+                        f'<meta itemprop="name" content="{escape(canonical + " - " + title)}">'
+                        f'<meta itemprop="alternativeheadline" content="Tome {number}">'
+                        '<meta itemprop="genre" content="Franco-Belge"><span itemprop="publisher">Imperia</span>')
+                work = self.numbered_alias_result(f'{alias} - T{number}.cbz', [row], html)
+                self.assertEqual(work['status'], 'identified')
+                self.assertEqual(work['work']['series'], canonical)
+                self.assertEqual(work['work']['title'], title)
+                self.assertEqual(work['work']['publisher'], 'Imperia')
+                self.assertEqual(work['evidence']['provenance']['series'][0]['value'], alias)
+                self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
+
+    def test_numbered_series_aliases_refuse_unverified_or_conflicting_candidates(self) -> None:
+        base = 'https://www.bedetheque.com/album/index/i/'
+        ref = '406430'
+        url = base + ref
+        row = {'source': 'bedetheque', 'edition_ref': ref, 'url': url, 'title': 'Un collier de coquillages',
+               'series': 'Big Bull Imperia', 'number': '101', 'provenance': {'method': 'bdnex-sitemap-1'}}
+        filename = 'Big Bull - T101.cbz'
+        identity = ('<h1><a>Big Bull (Imperia)</a></h1>'
+                    '<meta itemprop="name" content="Big Bull (Imperia) - Un collier de coquillages">'
+                    '<meta itemprop="alternativeheadline" content="Tome 101">')
+        html = f'<link rel="canonical" href="{url}">' + identity
+        cases = (
+            ('unknown alias', 'Akim - T101.cbz', [{**row, 'series': 'Akim Color'}], html, None),
+            ('wrong issue', 'Big Bull - T102.cbz', [row], html, None),
+            ('two candidates', filename, [row, {**row, 'edition_ref': '999', 'url': base + '999'}], html, None),
+            ('competing Garry series', 'Garry - T101.cbz',
+             [{**row, 'series': 'Garry Impéria 2e série'},
+              {**row, 'series': 'Garry (Soleil)', 'edition_ref': '999', 'url': base + '999'}], html, None),
+            ('403', filename, [row], None, 'unavailable'),
+            ('no page reference', filename, [row], identity, 'reference_mismatch'),
+            ('wrong page reference', filename, [row], html.replace(url, base + '999'), 'reference_mismatch'),
+            ('wrong page series', filename, [row], html.replace('Big Bull (Imperia)', 'Big Bull Extra'), 'reference_mismatch'),
+            ('wrong page issue', filename, [row], html.replace('Tome 101', 'Tome 102'), 'reference_mismatch'),
+            ('conflicting title', 'Big Bull - T101 - Une autre histoire.cbz', [row], html, 'parsed'),
+        )
+        for label, name, candidates, body, attempt in cases:
+            with self.subTest(label=label):
+                work = self.numbered_alias_result(name, candidates, body)
+                self.assertEqual(work['status'], 'no_match')
+                self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': attempt}] if attempt else [])
+
     def test_exact_page_contradiction_survives_public_discovery_fallback(self) -> None:
         from copy import deepcopy
         key = 'a'*64
