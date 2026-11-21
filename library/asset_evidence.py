@@ -8,7 +8,7 @@ from typing import Any
 from library.primitives import LibraryError
 
 
-def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:
+def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool = True) -> dict[str, Any]:
     asset = state['assets'][asset_id]
     if asset.get('sha256') != asset_id:
         raise LibraryError('Evidence asset hash mismatch')
@@ -46,6 +46,8 @@ def bind_evidence(state: dict[str, Any], asset_id: str) -> dict[str, Any]:
         name = origin.get('member') if origin.get('parent_origin') else origin.get('path')
         if isinstance(name, str):
             label(PurePosixPath(name).stem, 'origin:' + oid)
+    if not include_capture:
+        return result
     for source, hint in asset.get('captured_hints', {}).items():
         if not isinstance(hint, dict):
             continue

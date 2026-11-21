@@ -43,8 +43,19 @@ def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
     signature = digest({'asset': key, 'work': work, 'overrides': asset.get('overrides', {})})
     work_title = (work or {}).get('title')
     series_fallback = work.get('series') if work and not work_title else None
-    leaf = slug((str(fields.get('number', '')).zfill(4) + ' - ' if fields.get('number') else '') +
-                str(fields.get('title') or series_fallback or 'À identifier')) + '--' + key + '--' + signature[:12]
+    series, number, title = fields.get('series'), fields.get('number'), fields.get('title')
+    if work:
+        parts = [series, 'T' + str(number).zfill(2) if number is not None and number != '' else None]
+        if title != series:
+            parts.append(title)
+        label = ' - '.join(str(part) for part in parts if part) or 'À identifier'
+    else:
+        label = (str(number).zfill(4) + ' - ' if number else '') + str(title or 'À identifier')
+    safe_label = slug(label)
+    if work:
+        # Leave room under the filesystem's byte limit for both identity suffixes.
+        safe_label = safe_label.encode()[:160].decode(errors='ignore').rstrip(' .-')
+    leaf = safe_label + '--' + key + '--' + signature[:12]
     family = str(fields.get('family')) if fields.get('family') in ('BD', 'Manga', 'Comics') else 'Unknown family'
     target = str(Path('classified') / family / slug(fields.get('series') or fields.get('title')) / leaf) if work else str(Path('holding') / leaf)
     return {'status': status, 'signature': signature, 'target': target, 'fields': work or {},

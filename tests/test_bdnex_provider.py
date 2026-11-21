@@ -196,6 +196,59 @@ class ProtocolTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
+    def test_bookys_heading_fallback_needs_independent_file_evidence(self) -> None:
+        from copy import deepcopy
+
+        key = 'a'*64
+        source = 'https://www7.bookys-ebooks.com/bandes-dessinees/1-nains'
+        candidate = {'source': 'bedetheque', 'edition_ref': '123',
+                     'url': 'https://www.bedetheque.com/BD-Nains-123.html', 'title': 'Redwin de la Forge',
+                     'series': 'Nains', 'number': '1', 'score': 100}
+        heading = 'Nains - Tome 1 - Redwin de la Forge'
+
+        for embedded, parent, page_title, expected_paths, identified in (
+            ({'Title': candidate['title']}, None, heading, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
+            ({}, None, heading, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], False),
+            ({}, 'bundle', heading, ['scan.cbz'], False),
+            ({}, None, 'Nains - Tomes 1-3', ['scan.cbz'], False),
+        ):
+            with self.subTest(embedded=embedded, parent=parent, page_title=page_title):
+                state = {'assets': {key: {'sha256': key, 'origins': ['o'], 'embedded': embedded,
+                    'captured_hints': {source: {'title': page_title}}}},
+                    'origins': {'o': {'sha256': key, 'path': 'scan.cbz', 'member': 'scan.cbz',
+                                      'parent_origin': parent, 'source': source}}}
+
+                class Snapshot:
+                    def result_set(self, *args: Any) -> dict[str, Any]:
+                        return deepcopy(state)
+
+                class Local:
+                    def __init__(self) -> None:
+                        self.paths: list[str] = []
+
+                    def match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+                        self.paths.extend(item['path'] for item in inputs)
+                        return {'status': 'ok', 'candidates': [candidate] if 'T01' in self.paths[-1] else []}
+
+                class Public:
+                    def __init__(self) -> None:
+                        self.bdnex = Local()
+                        self.events: list[dict[str, Any]] = []
+
+                    def get(self, url: str) -> dict[str, Any]:
+                        return {'status': 'unavailable'}
+
+                    def discover(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                        return {}
+
+                    def resolve_discovery(self, *args: Any) -> list[dict[str, Any]]:
+                        return []
+
+                providers = Public()
+                result = prepare_enrichment(Snapshot(), key, providers, [])  # type: ignore[arg-type]
+                self.assertEqual(providers.bdnex.paths, expected_paths)
+                self.assertEqual(result['assets'][key]['work_result']['status'] == 'identified', identified)
+
     def numbered_alias_result(self, filename: str, candidates: list[dict[str, Any]],
                               html: str | None) -> dict[str, Any]:
         from copy import deepcopy

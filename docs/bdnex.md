@@ -11,6 +11,10 @@ with scores of at least 70, or at least 60 when the volume and the series words 
 checks. A score does not establish identity. Unknown fields stay unknown.
 Concordant references use existing exact-page enrichment. Uncertain results
 and service outages fall back to the existing public providers.
+If the original lookup cannot identify a directly downloaded Bookys album,
+Booksys can try its captured heading as one extra logical name. The heading
+must supply a series and issue. Candidates from that search require agreement
+with evidence from the file before they can enter identity validation.
 Already identified assets do not trigger new BDneX requests. Existing metadata
 scheduling supplies progressive replay. No bulk replay is started by index refresh.
 
