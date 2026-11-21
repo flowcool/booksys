@@ -98,16 +98,16 @@ class BusinessStages:
             events = [event for event in self.providers.events[start:]
                       if not (event.get('dependency') == 'bdnex'
                               and asset.get('work_result', {}).get('status') == 'identified')]
-            cooldowns = [event for event in events if 'cooldown_until' in event]
-            attempted = [event for event in events if 'cooldown_until' not in event]
+            cooldowns = [event for event in events if event.get('reason') == 'BDneX cooldown']
+            other_events = [event for event in events if event.get('reason') != 'BDneX cooldown']
             temporary = any(event.get('status') == 'unavailable' and (event.get('http_status', 0) == 429
                 or event.get('http_status', 0) >= 500 or 'reason' in event and event['reason'] != 'Request budget exhausted')
-                for event in attempted)
-            budget_exhausted = any(event.get('reason') == 'Request budget exhausted' for event in attempted)
+                for event in other_events)
+            budget_exhausted = any(event.get('reason') == 'Request budget exhausted' for event in other_events)
             outcome = ('defer' if budget_exhausted else 'retry' if temporary
                        else 'defer' if cooldowns else 'done')
             from booksys_core.diagnostics import provider_diagnostic
-            diagnostic_events = cooldowns if outcome == 'defer' and not budget_exhausted else attempted
+            diagnostic_events = cooldowns if outcome == 'defer' and not budget_exhausted else other_events
             diagnostic = provider_diagnostic(diagnostic_events, deferred=budget_exhausted) if outcome != 'done' else {}
             consumed_recovery = (task.input_revision.removeprefix('recovery:')
                                  if task.input_revision.startswith('recovery:')
@@ -115,7 +115,7 @@ class BusinessStages:
             asset['stage_metadata'] = {'evidence': evidence_version(asset), 'at': instant(now),
                                       'evaluation': task.input_revision, 'outcome': outcome, 'method': task.method}
             failures = {str(event['dependency']): datetime.fromisoformat(event['retrieved_at']).timestamp()
-                        for event in attempted if event.get('status') == 'unavailable'
+                        for event in other_events if event.get('status') == 'unavailable'
                         and (event.get('http_status', 0) == 429 or event.get('http_status', 0) >= 500 or 'reason' in event)
                         and event.get('dependency') and event.get('retrieved_at')}
             if consumed_recovery:
@@ -126,8 +126,8 @@ class BusinessStages:
                 asset['stage_metadata']['next_at'] = instant(now + timedelta(seconds=WEEK))
             prepared = self.catalog.prepare(state)
             if outcome == 'defer':
-                due = max((datetime.fromtimestamp(event['cooldown_until'], timezone.utc)
-                           for event in cooldowns), default=now)
+                client = self.providers.bdnex
+                due = client.cooldown_deadline() if cooldowns and client is not None else now
                 if budget_exhausted:
                     due = max(due, datetime.now(timezone.utc) + timedelta(seconds=30))
                     if self.providers.admission is not None:

@@ -23,7 +23,7 @@ class MetadataDeferDeadlineTests(unittest.TestCase):
 
         first, second = 'a' * 64, 'b' * 64
         client = BDneXClient('http://127.0.0.1:1', 'offline-token')
-        providers = SimpleNamespace(events=[], admission=None)
+        providers = SimpleNamespace(events=[], admission=None, bdnex=client)
         catalog = SimpleNamespace(prepare=lambda state: None)
         stage = BusinessStages(catalog, Path('.'), Path('.'), providers)
         now = datetime.fromtimestamp(1000, timezone.utc)
@@ -42,7 +42,7 @@ class MetadataDeferDeadlineTests(unittest.TestCase):
 
         with (
             patch('library.bdnex.build_opener') as opener,
-            patch('library.bdnex.time.monotonic', side_effect=[100, 101, 102, 102, 102]),
+            patch('library.bdnex.time.monotonic', side_effect=[100, 101, 102, 102, 102, 102]),
             patch('library.bdnex.time.time', return_value=1000),
             patch('library.metadata.prepare_enrichment', side_effect=enrich),
             patch('library.business_stages.evidence_version', return_value='test-evidence'),
