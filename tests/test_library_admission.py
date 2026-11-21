@@ -4,13 +4,31 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from library.admission import AdmissionPublisher
+from library.admission import AdmissionPublisher, projection
 from library.publication import Capacity
 from library.readers import sha256
 from test_library_publish import setup_library
 
 
 class AdmissionTests(unittest.TestCase):
+
+    def test_classified_volume_uses_series_as_display_title_only_when_untitled(self):
+        key = 'a' * 64
+        for title in (None, 'La première course'):
+            with self.subTest(title=title):
+                work = {'series': 'Joe Bar Team', 'number': 4}
+                if title:
+                    work['title'] = title
+                state = {'assets': {key: {'work_result': {'status': 'identified', 'work': work}}}}
+                desired = projection(state, key)
+                expected_display = title or 'Joe Bar Team'
+                self.assertEqual(desired['status'], 'classified')
+                self.assertTrue(Path(desired['target']).name.startswith(f'0004 - {expected_display}--'))
+                self.assertEqual(desired['fiche_title'], expected_display)
+                self.assertEqual(desired['fields'].get('title'), title)
+        holding = projection({'assets': {key: {}}}, key)
+        self.assertTrue(holding['target'].startswith('holding/À identifier--'))
+        self.assertEqual(holding['fiche_title'], 'À identifier')
 
     def test_scoped_recovery_on_postgresql(self):
         from library.operational_state import CopyOperations
