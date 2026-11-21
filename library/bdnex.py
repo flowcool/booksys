@@ -29,6 +29,33 @@ class BDneXClient:
         self.retry_at = 0.0
 
     def match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+        result = self._match(asset, inputs)
+        if result['status'] != 'ok' or result['candidates']:
+            return result
+
+        # A scan prefix can hide a candidate. Try its basename without the prefix
+        # only after the original request is empty, within the three-name budget.
+        paths = {item['path'] for item in inputs}
+        variants: list[dict[str, Any]] = []
+        for item in inputs:
+            if len(inputs) + len(variants) == 3:
+                break
+            folder, separator, filename = item['path'].rpartition('/')
+            path = folder + separator + re.sub(r'^zz(?=[a-zÀ-ÿ])', '', filename, flags=re.I)
+            if path not in paths:
+                variants.append({**item, 'path': path})
+                paths.add(path)
+        if not variants:
+            return result
+
+        fallback = self._match(asset, variants)
+        receipt = {'original_request': result['request']}
+        if 'match_counts' in result:
+            receipt['original_match_counts'] = result['match_counts']
+        fallback['prefix_fallback'] = receipt
+        return fallback
+
+    def _match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
         if time.monotonic() < self.retry_at:
             return {'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'}
         try:

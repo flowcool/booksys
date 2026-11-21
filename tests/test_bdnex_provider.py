@@ -19,6 +19,49 @@ from library.work_identity import evaluate_work
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_scan_prefix_fallback_uses_spare_slots_only_after_an_empty_match(self) -> None:
+        hint = {'Series': 'Navy', 'Number': '149'}
+        original = {'path': 'Navy/ZzNavy - 149.cbz', 'embedded': hint}
+        alternate = {'path': 'Navy/Navy - 149.cbz', 'embedded': hint}
+        mirror = {'path': 'ZzFolder/Mirror.cbz', 'embedded': hint}
+        other = {'path': 'Other.cbz', 'embedded': hint}
+        candidate = {'source': 'bedetheque', 'edition_ref': '123',
+                     'url': 'https://www.bedetheque.com/BD-Navy-123.html',
+                     'title': 'Prise de guerre', 'series': 'Navy', 'number': '149', 'score': 80}
+        received: list[dict[str, Any]] = []
+        original_matches = False
+
+        def match(request: dict[str, Any]) -> dict[str, Any]:
+            received.append(request)
+            found = original_matches or request['inputs'] == [alternate]
+            return {'index': 'b'*64, 'candidates': [candidate] if found else []}
+
+        server = HTTPServer(('127.0.0.1', 0), handler('test-secret', match))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
+
+        fallback = client.match('a'*64, [original, mirror])
+        self.assertEqual([r['inputs'] for r in received], [[original, mirror], [alternate]])
+        self.assertEqual([r['edition_ref'] for r in fallback['candidates']], ['123'])
+        from library.bdnex_protocol import digest
+        self.assertEqual(fallback['request'], digest(received[1]))
+        self.assertEqual(fallback['prefix_fallback']['original_request'], digest(received[0]))
+
+        for inputs in ([original, alternate], [original, mirror, other]):
+            with self.subTest(inputs=inputs):
+                received.clear()
+                self.assertEqual(client.match('a'*64, inputs)['candidates'], [])
+                self.assertEqual([r['inputs'] for r in received], [inputs])
+
+        original_matches = True
+        received.clear()
+        successful = client.match('a'*64, [original])
+        self.assertEqual([r['edition_ref'] for r in successful['candidates']], ['123'])
+        self.assertEqual([r['inputs'] for r in received], [[original]])
+        self.assertNotIn('prefix_fallback', successful)
+
     def test_invalid_logical_path_does_not_block_the_next_asset(self) -> None:
         received: list[dict[str, Any]] = []
 
