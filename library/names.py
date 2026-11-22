@@ -12,7 +12,12 @@ from typing import Any
 
 from library._vendor.comictagger_filenameparser import FileNameParser
 
-METHOD = 'comictagger-fa11a345-legacy-french-shapes-3'
+METHOD = 'comictagger-fa11a345-legacy-french-shapes-5'
+
+
+def is_volume_title(value: str) -> bool:
+    """A bare volume caption supplies no album title."""
+    return re.fullmatch(r'(?:Tome|Volume|Vol|T)\.?\s*\d+|#\s*\d+', value.strip(), re.I) is not None
 
 
 def parse_name(value: str) -> dict[str, Any]:
@@ -59,9 +64,11 @@ def parse_name(value: str) -> dict[str, Any]:
     parser.parse_filename(match[1] + ' #' + match[2] + '.cbz')
     if not parser.series or not parser.issue:
         return {}
+    # ComicTagger drops parenthetical phrases. Keep qualified series labels,
+    # as for explicit issue markers, rather than asserting a different series.
     series = (re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', match[1]).strip()
-              if explicit_issue else parser.series)
+              if explicit_issue or re.search(r'\([^)]*\)', match[1]) else parser.series)
     result: dict[str, Any] = {'series': series, 'number': parser.issue}
-    if match[3] and not encoded and not dotted and not re.fullmatch(r'(?:Tome|Volume)\s+\d+', match[3], re.I):
+    if match[3] and not encoded and not dotted and not is_volume_title(match[3]):
         result['title'] = match[3].strip()
     return result

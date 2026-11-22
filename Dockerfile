@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev l
     && rm -rf /var/lib/apt/lists/* \
     && test -f /opt/python/include/python3.14/Python.h \
     && pip install --no-cache-dir uv==0.9.9 \
-    && CC=gcc LDSHARED='gcc -shared' uv sync --frozen --no-dev --no-install-project --python /opt/python/bin/python3.14
+    && CC=gcc LDSHARED='gcc -shared' uv sync --frozen --no-dev --no-install-project --no-build-package opencv-python-headless --no-build-package numpy --python /opt/python/bin/python3.14
 
 FROM python:3.14-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS application
 ARG BOOKSYS_REVISION

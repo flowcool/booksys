@@ -16,6 +16,7 @@ from library.catalog import Catalog
 from library.primitives import LibraryError, now, lock
 
 from booksys_core.network_admission import RollingBudget
+from library.cover_transport import fetch_binary
 
 if TYPE_CHECKING:
     from library.bdnex import BDneXClient
@@ -77,9 +78,11 @@ def http_fetch(url: str) -> tuple[int, str]:
 
 class Providers:
     def __init__(self, cache: Path, *, fetch: Fetch = http_fetch, interval: float = 1,
-                 budget: int = 12, shared: Path | None = None):
+                 budget: int = 12, shared: Path | None = None,
+                 binary_fetch: Callable[[str], tuple[int, bytes]] = fetch_binary):
         self.cache, self.fetch, self.interval, self.budget = cache, fetch, interval, budget
         self.shared = shared
+        self.binary_fetch = binary_fetch
         from booksys_core.network_admission import configured_budget
         self.admission = configured_budget('provider')
         if self.admission is None and shared is not None:
@@ -91,39 +94,52 @@ class Providers:
         from library.bdnex import configured_client
         self.bdnex = configured_client()
 
-    def get(self, url: str) -> dict[str, Any]:
+    def get(self, url: str, *, binary: bool = False) -> dict[str, Any]:
         if self.shared is None:
-            result = self._get(url)
+            result = self._get(url, binary=binary)
         else:
             with lock(self.shared / 'library-network.lock'):
-                result = self._get(url)
+                result = self._get(url, binary=binary)
         result = {**result, 'dependency': urlsplit(url).hostname}
         self.events.append({key: result[key] for key in ('status', 'http_status', 'reason', 'dependency', 'retrieved_at', 'expires', 'exception_type', 'failure_reason') if key in result})
         return result
 
-    def _get(self, url: str) -> dict[str, Any]:
+    def get_binary(self, url: str) -> dict[str, Any]:
+        from library.french_metadata import BASE, reference_url
+        from library.french_source import robots_allowed
+        url = reference_url(url)
+        policy = self.get(BASE + '/robots.txt')
+        if policy['status'] != 'ok' or 'user-agent:' not in policy.get('body', '').lower():
+            return {'status': 'unavailable', 'reason': 'Robots policy unavailable'}
+        if not robots_allowed(policy['body'], url):
+            return {'status': 'robots_disallowed', 'reason': 'Robots policy disallows cover'}
+        return self.get(url, binary=True)
+
+    def _get(self, url: str, *, binary: bool = False) -> dict[str, Any]:
         parts = urlsplit(url)
         if (parts.scheme != 'https' or parts.hostname not in
                 ('openlibrary.org', 'catalogue.bnf.fr', 'www.bedetheque.com')
                 or parts.username or parts.password or parts.port):
             raise LibraryError('Unqualified provider URL')
-        cached=self._cache.get(url)
+        cache_key = 'cover-binary-v1:' + url if binary else url
+        cached=self._cache.get(cache_key)
         if cached is not None and cached['expires']>time.time():
             return cached
         if self.admission is None and self.budget <= 0:
             return {'status': 'unavailable', 'reason': 'Request budget exhausted', 'url': url}
         if self.admission is None:
-            time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
+            spacing = max(self.interval, 6.3) if parts.hostname == 'www.bedetheque.com' else self.interval
+            time.sleep(max(0, spacing - (time.monotonic() - self.last_request)))
         try:
-            self.charge()
+            self.charge(public=parts.hostname == 'www.bedetheque.com')
         except LibraryError as exc:
             return {'status': 'unavailable', 'reason': str(exc), 'url': url}
         self.last_request = time.monotonic()
         try:
-            context = REDIRECT_CHARGE.set(self.charge)
+            context = REDIRECT_CHARGE.set(lambda: self.charge(public=parts.hostname == 'www.bedetheque.com'))
             budget_context = PROVIDER_BUDGET.set(self.admission)
             try:
-                status, body = self.fetch(url)
+                status, body = self.binary_fetch(url) if binary else self.fetch(url)
             finally:
                 REDIRECT_CHARGE.reset(context)
                 PROVIDER_BUDGET.reset(budget_context)
@@ -146,10 +162,10 @@ class Providers:
             DependencyRecovery(self.admission.path.parent/'dependency-readiness.yaml').observe(
                 str(parts.hostname), available=(response_status not in (0, 429)
                     and response_status < 500), at=time.time(), url=url)
-        self._cache.retain(url,result)
+        self._cache.retain(cache_key,result)
         return result
 
-    def charge(self) -> None:
+    def charge(self, *, public: bool = False) -> None:
         if self.admission is None and self.budget <= 0:
             raise LibraryError('Request budget exhausted')
         if self.admission is not None:
@@ -157,16 +173,22 @@ class Providers:
             from booksys_core.errors import CollectionError
             try:
                 admission = self.admission
-                admission.debit()
+                if public:
+                    admission.debit(minimum_spacing=max(self.interval, 6.3))
+                else:
+                    admission.debit()
             except BudgetWait as exc:
                 # Redirects debit the same budget. Wait only for a short pacing
                 # gap. A window limit or remote deadline still defers the task.
                 delay = exc.due - time.time()
-                if not 0 < delay <= self.interval:
+                if not 0 < delay <= max(self.interval, 6.3 if public else 0):
                     raise LibraryError('Request budget exhausted') from exc
                 time.sleep(delay)
                 try:
-                    admission.debit()
+                    if public:
+                        admission.debit(minimum_spacing=max(self.interval, 6.3))
+                    else:
+                        admission.debit()
                 except BudgetWait as retry:
                     raise LibraryError('Request budget exhausted') from retry
                 except CollectionError as retry:
@@ -335,36 +357,60 @@ def _search_bookys_heading(state: dict[str, Any], asset_id: str, client: BDneXCl
 
 
 def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
-           references: list[tuple[str, str]]) -> dict[str, Any]:
+           references: list[tuple[str, str]], *, reception: Path | None = None) -> dict[str, Any]:
     state = store.result_set('identify', {'assets': [asset_id]})
     asset = state['assets'][asset_id]
-    from library.work_enrichment import enrich_work
+    # Automatic cycles preserve accepted identities and their original evidence.
+    # This also protects tasks already queued before a metadata method update.
+    if not references and asset.get('work_result', {}).get('status') == 'identified':
+        return state
+    from library.origins import resolve_asset
+    cover_source = (lambda: resolve_asset(store, reception, state, asset_id)) if reception is not None else None
+    from library.bdnex import identity_for, inputs_for
+    from library.bdnex_protocol import digest
+    from library.work_enrichment import apply_bdnex_decision, enrich_work
     local_candidates = []
     exact_page_attempts: list[dict[str, str]] = []
     client = getattr(providers, 'bdnex', None)
+    inputs = inputs_for(state, asset_id) if client is not None or asset.get('bdnex', {}).get('decision_input') else []
+    identity = identity_for(state, asset_id) if inputs else {}
+    decision_input = digest({'inputs': inputs, 'identity': identity})
     if (asset.get('work_result', {}).get('status') == 'identified'
             and asset.get('bdnex', {}).get('status') == 'ok'):
         # Retry enrichment from retained proposals without querying BDneX again.
         # Re-evaluate against current asset evidence before retaining identity.
-        local_candidates = asset['bdnex']['candidates']
-        heading_candidates = asset['bdnex'].get('bookys_heading_fallback', {}).get('candidates', [])
+        retained = asset['bdnex']
+        if 'decision_input' in retained:
+            if retained['decision_input'] == decision_input:
+                if not references and apply_bdnex_decision(state, asset_id, providers, retained, cover_source=cover_source):
+                    return state
+            else:
+                # Changed file evidence requires a new provider decision.
+                asset.pop('bdnex')
+                asset.pop('work_result')
+        local_candidates = asset.get('bdnex', {}).get('candidates', [])
+        heading_candidates = asset.get('bdnex', {}).get('bookys_heading_fallback', {}).get('candidates', [])
         if heading_candidates:
             local_candidates = [*local_candidates, *_corroborated_heading_candidates(state, asset_id, heading_candidates)]
         enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
-                    exact_page_attempts=exact_page_attempts)
+                    exact_page_attempts=exact_page_attempts, cover_source=cover_source)
         if asset['work_result']['status'] == 'identified' and not references:
             return state
         local_candidates = asset['work_result']['candidates']
     if client is not None and asset.get('work_result', {}).get('status') != 'identified':
-        from library.bdnex import inputs_for
-        inputs = inputs_for(state, asset_id)
         if inputs:
-            response = client.match(asset_id, inputs)
+            response = client.match(asset_id, inputs, identity=identity)
+            if 'decision' in response:
+                response = {**response, 'decision_input': decision_input}
             asset['bdnex'] = response
             if response['status'] == 'ok':
-                local_candidates = response['candidates']
+                if not references and apply_bdnex_decision(state, asset_id, providers, response, cover_source=cover_source):
+                    return state
+                decision = response.get('decision', {})
+                insufficient = not references and decision.get('reason') == 'insufficient'
+                local_candidates = [] if insufficient else response['candidates']
                 enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
-                            exact_page_attempts=exact_page_attempts)
+                            exact_page_attempts=exact_page_attempts, cover_source=cover_source)
                 if asset['work_result']['status'] == 'identified' and not references:
                     return state
                 # Exact-page assertions replace sparse sitemap rows even when
@@ -375,13 +421,13 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                     extra = _search_bookys_heading(state, asset_id, client, providers, inputs)
                     if extra:
                         enrich_work(state, asset_id, providers, [*local_candidates, *extra],
-                                    discovery=False, hydrate=True, exact_page_attempts=exact_page_attempts)
+                                    discovery=False, hydrate=True, exact_page_attempts=exact_page_attempts, cover_source=cover_source)
                         if asset['work_result']['status'] == 'identified' and not references:
                             return state
                         local_candidates = asset['work_result']['candidates']
             else:
                 providers.events.append({**response, 'retrieved_at': now()})
-    enrich_work(state, asset_id, providers, local_candidates, exact_page_attempts=exact_page_attempts)
+    enrich_work(state, asset_id, providers, local_candidates, exact_page_attempts=exact_page_attempts, cover_source=cover_source)
     if asset['work_result']['status'] == 'identified' and not references:
         return state
     # All external work happens on the snapshot, outside catalogue locks.
@@ -442,7 +488,7 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                     candidates.append(response['candidate'])
         candidates = list({(candidate['source'], candidate['edition_ref']): candidate
                            for candidate in candidates}.values())
-    enrich_work(state, asset_id, providers, candidates, exact_page_attempts=exact_page_attempts)
+    enrich_work(state, asset_id, providers, candidates, exact_page_attempts=exact_page_attempts, cover_source=cover_source)
     return state
 
 

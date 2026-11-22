@@ -32,7 +32,7 @@ def normalized(value: Any, field: str = '') -> Any:
     text = text.replace('œ', 'oe').replace('’', "'")
     if field in ('title', 'series'):
         text = re.sub(r"\s*\((?:le|la|les|l'|un|une|des)\)\s*$", '', text)
-        text = re.sub(r"^(?:le |la |les |l'|un |une |des )", '', text)
+        text = re.sub(r"^(?:(?:le|la|les|un|une|des)[ .]+|l')", '', text)
     return ' '.join(re.findall(r'\w+', text))
 
 

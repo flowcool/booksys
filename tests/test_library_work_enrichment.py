@@ -42,7 +42,9 @@ class WorkEnrichmentTests(unittest.TestCase):
 
     def test_exact_page_author_can_explain_a_filename_suffix(self):
         result = self.match_naruto('Naruto - 1 - Masashi Kishimoto.cbz')
-        self.assertEqual(result['work'].get('title'), 'Naruto Uzumaki')
+        self.assertEqual(result['status'], 'review')
+        self.assertEqual(result['work'], {})
+        self.assertEqual(result['reason_code'], 'cover_canonical_cover_unavailable')
         self.assertTrue(any(entry['value'] == 'Masashi Kishimoto'
                             for entry in result['evidence']['provenance']['title']))
 

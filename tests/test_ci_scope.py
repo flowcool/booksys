@@ -72,7 +72,7 @@ class EventScopeTests(unittest.TestCase):
 
     def test_shared_library_module_rebuilds_application_and_reader(self):
         (self.root / "library").mkdir()
-        (self.root / "library/work_identity.py").write_text("# synthetic shared runtime module\n")
+        (self.root / "library/work_enrichment.py").write_text("# synthetic shared runtime module\n")
         self.assertEqual(self.run_event("pull_request", self.pr(self.commit())),
                          {"worker": "true", "library": "true", "byparr": "false", "bdnex": "false"})
 
@@ -83,10 +83,15 @@ class EventScopeTests(unittest.TestCase):
                                  {"worker": False, "library": False, "byparr": False, "bdnex": True})
 
     def test_bdnex_shared_modules_keep_application_and_reader(self):
-        for path in ("library/__init__.py", "library/bdnex_protocol.py"):
+        for path in ("library/__init__.py", "library/bdnex_protocol.py", "library/work_identity.py"):
             with self.subTest(path=path):
                 self.assertEqual(scope([path]),
                                  {"worker": True, "library": True, "byparr": False, "bdnex": True})
+
+    def test_cover_native_paths_select_worker_and_library(self):
+        for path in ("library/cover_sift.py", "tests/test_library_cover_guard.py", "tests/probes/worker.py", "tests/probes/library.py"):
+            with self.subTest(path=path):
+                self.assertEqual(scope([path]), {"worker": True, "library": True, "byparr": False, "bdnex": False})
 
     def test_unknown_path_selects_all_four_slices(self):
         self.assertEqual(scope(["unknown.file"]),

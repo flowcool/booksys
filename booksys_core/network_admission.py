@@ -107,9 +107,9 @@ class RollingBudget:
             return float(due)
 
     # Keep native API starts below the pinned pyLoad ceiling of 100 per 60 seconds per client IP; this policy allows 90.
-    def debit(self, *, timestamp: float | None = None) -> None:
+    def debit(self, *, timestamp: float | None = None, minimum_spacing: float = 0) -> None:
         stamp = time.time() if timestamp is None else timestamp
-        if not math.isfinite(stamp) or stamp < 0:
+        if not math.isfinite(stamp) or stamp < 0 or not math.isfinite(minimum_spacing) or minimum_spacing < 0:
             raise CollectionError('Invalid request time')
         with self._transaction(write=True) as value:
             if value.get('review_block', False):
@@ -117,7 +117,7 @@ class RollingBudget:
             if stamp < value['last']:
                 raise BudgetWait(value['last'])
             starts = [s for s in value['starts'] if s > stamp - value['period']]
-            due = max(value['not_before'], value['last'] + value['spacing'] if value['starts'] else 0)
+            due = max(value['not_before'], value['last'] + max(value['spacing'], minimum_spacing) if value['starts'] else 0)
             if len(starts) >= value['requests']:
                 due = max(due, min(starts) + value['period'])
             if stamp < due:

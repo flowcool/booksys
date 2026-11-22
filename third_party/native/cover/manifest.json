@@ -1,0 +1,118 @@
+{
+  "notices": [
+    {
+      "path": "third_party/native/cover/opencv-python-headless/LICENSE-3RD-PARTY.txt",
+      "sha256": "0e8fac55c2f5bff939c1e7aae1fa2799e1cece5fd0857d8e5fafeb46562aafc9",
+      "package": "opencv-python-headless",
+      "version": "4.13.0.92"
+    },
+    {
+      "path": "third_party/native/cover/opencv-python-headless/LICENSE.txt",
+      "sha256": "09d719058e782ac7bc71ba21c944e1136cde2bb957c0e888121f0218d6b5f02c",
+      "package": "opencv-python-headless",
+      "version": "4.13.0.92"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/LICENSE.txt",
+      "sha256": "4860083caa0de2ac3292ca98bd074bd8f45d8b32624e37b1e70a240bff61e488",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt",
+      "sha256": "fbc539f47d0cf83bc61378080fb873d5c14630126cacbfe754035c3926daa5ec",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING",
+      "sha256": "3f2c1ffa76383a55ae0aac01c9737cd70050dff63e1f026694fbe9d662573c98",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/_core/src/highway/LICENSE",
+      "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/_core/src/multiarray/dragon4_LICENSE.txt",
+      "sha256": "f7b14309e5f54e5022b26448eefd419988ada2aec01d3c1162d84a0ea8f21f2c",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md",
+      "sha256": "211e7d737d6179a08f791ebb0a99897ce7cd2457410c542876d125576edfe910",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/_core/src/umath/svml/LICENSE",
+      "sha256": "c17011467b4fe6e20fbfbeda4df09e58c2bca5480a063e55735a4000a379aad9",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/fft/pocketfft/LICENSE.md",
+      "sha256": "a85ca13fdf90160b64a0698215868c13b74d835ad0a4e2ba44713b8c5058a056",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/linalg/lapack_lite/LICENSE.txt",
+      "sha256": "a14cc25e10d40a3aa705b7de2fb764a6535d8ee9b2db4e1724900585457dfd55",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/ma/LICENSE",
+      "sha256": "05f3b88351988ecfad10abe92c0c50e5875c6452d5009a0084cc291551ffcca6",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/random/LICENSE.md",
+      "sha256": "103166b62b80443afb9eb3488e052ea06be0cff566b908f199e561fde49af19f",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/random/src/distributions/LICENSE.md",
+      "sha256": "469778be8f33d54e1bcaab28c281cc472916d2d273f835e55bc487d30503face",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/random/src/mt19937/LICENSE.md",
+      "sha256": "0e111337b25494a773106695f0e799f642b8567aaacca4f116a74a8177179156",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/random/src/pcg64/LICENSE.md",
+      "sha256": "e7d4f4fb20358f314210a892ae17351e04993813646f697ec387385ca2a36918",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/random/src/philox/LICENSE.md",
+      "sha256": "6f5828a57223d4cc7f8ea505a2623e7b978b242752c1515e355f46ba2cec1800",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/random/src/sfc64/LICENSE.md",
+      "sha256": "9d4098846018319cd68e228ee6220361787f73bccbf00237a85e4fc9621b998f",
+      "package": "numpy",
+      "version": "2.4.6"
+    },
+    {
+      "path": "third_party/native/cover/numpy/licenses/numpy/random/src/splitmix64/LICENSE.md",
+      "sha256": "268b0ca06759d31ea3ca68dd35f20e877916e927b1c2a835e4592a3c4354b1f9",
+      "package": "numpy",
+      "version": "2.4.6"
+    }
+  ]
+}

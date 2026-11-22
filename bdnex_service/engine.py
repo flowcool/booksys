@@ -1,6 +1,7 @@
 """Reuse the pinned native matcher with an immutable SQLite sitemap snapshot."""
 from __future__ import annotations
 
+from collections import defaultdict
 from contextvars import ContextVar
 import hashlib
 from pathlib import Path
@@ -9,7 +10,8 @@ import sqlite3
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from library.bdnex_protocol import validate_candidates
+from library.bdnex_protocol import STRONG_SCORE, bedetheque_album_id, validate_candidates
+from library.work_identity import normalized
 
 _hints: ContextVar[dict[str, str]] = ContextVar('embedded_hints', default={})
 MIN_SCORE = 70
@@ -95,7 +97,14 @@ class Engine:
             if not terminal:
                 raise ValueError('Missing terminal sitemap')
             self.source = VolumeFirstBedetheque(cache)
-            self.count = len(self.source.catalogue())
+            catalogue = self.source.catalogue()
+            self.count = len(catalogue)
+            self.numbered: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            self.albums = {candidate.source_id: candidate for candidate in catalogue}
+            for candidate in catalogue:
+                series, separator, _ = candidate.url.split('/BD-', 1)[-1].partition('-Tome-')
+                if separator and candidate.volume is not None:
+                    self.numbered[str(candidate.volume)].append((series, candidate.source_id))
             self.index = revision.hexdigest()
         finally:
             cache.close()
@@ -107,8 +116,27 @@ class Engine:
         from bdnex.importer.bedetheque.sitemap import query_tokens
         rows: dict[str, dict[str, Any]] = {}
         native = filtered = 0
+        web_refs: set[str] = set()
+
+        def add(candidate: Any, score: float) -> None:
+            info = self.source.partial_info(candidate)
+            row = {'source': 'bedetheque', 'edition_ref': info.source_id,
+                   'url': info.url, 'title': info.title,
+                   'series': info.series.name if info.series else None,
+                   'number': str(info.volume) if info.volume is not None else None, 'score': score}
+            if info.source_id not in rows or rows[info.source_id]['score'] < score:
+                rows[info.source_id] = row
+
         for item in request['inputs']:
-            token = _hints.set(item['embedded'])
+            hints = dict(item['embedded'])
+            ref = bedetheque_album_id(hints.get('Web'))
+            if ref is not None and ref in self.albums:
+                web_refs.add(ref)
+                add(self.albums[ref], 100)
+            # Upstream repairs loose URLs. Only canonical Web hints are allowed here.
+            if not ref:
+                hints.pop('Web', None)
+            token = _hints.set(hints)
             try:
                 matches = find_matches(self.source, item['path'], limit=5)
             finally:
@@ -123,14 +151,82 @@ class Engine:
                             or not words or not words <= set(match.candidate.name.split())):
                         filtered += 1
                         continue
-                info = self.source.partial_info(match.candidate)
-                row = {'source': 'bedetheque', 'edition_ref': info.source_id,
-                       'url': info.url, 'title': info.title,
-                       'series': info.series.name if info.series else None,
-                       'number': str(info.volume) if info.volume is not None else None, 'score': match.score}
                 # URL slugs do not prove language, integral status or family.
-                if info.source_id not in rows or rows[info.source_id]['score'] < match.score:
-                    rows[info.source_id] = row
-        candidates = sorted(rows.values(), key=lambda row: row['score'], reverse=True)
-        return {'index': self.index, 'candidates': validate_candidates(candidates),
-                'match_counts': {'native': native, 'filtered': filtered}}
+                add(match.candidate, match.score)
+        identity = request.get('identity', {})
+        if len(identity.get('series', [])) == len(identity.get('number', [])) == 1:
+            series = identity['series'][0]
+            number = identity['number'][0]
+            for slug, ref in self.numbered.get(number, ()):
+                label = normalized(slug, 'series')
+                if label == series or label.startswith(series + ' '):
+                    add(self.albums[ref], MIN_AGREEING_SCORE)
+        candidates = sorted(rows.values(), key=lambda row: row['score'], reverse=True)[:15]
+        result = {'index': self.index, 'candidates': validate_candidates(candidates),
+                  'match_counts': {'native': native, 'filtered': filtered}}
+        if 'identity' in request and candidates:
+            if len(web_refs) == 1:
+                # This is a proposal. The worker checks every file conflict and
+                # hydrates this exact album before any Web exemption.
+                result['decision'] = {'status': 'selected', 'reason': 'strong', 'edition_ref': next(iter(web_refs))}
+            elif web_refs:
+                result['decision'] = {'status': 'review', 'reason': 'conflicting_file_evidence'}
+            else:
+                result['decision'] = self.decide(candidates, identity)
+        return result
+
+    def decide(self, candidates: list[dict[str, Any]], identity: dict[str, list[str]]) -> dict[str, str]:
+        if any(len(values) > 1 for values in identity.values()):
+            return {'status': 'review', 'reason': 'conflicting_file_evidence'}
+        number = next(iter(identity.get('number', [])), None)
+        series = next(iter(identity.get('series', [])), None)
+        title = next(iter(identity.get('title', [])), None)
+        year = next(iter(identity.get('year', [])), None)
+
+        def agrees(row: dict[str, Any]) -> bool:
+            row_series = normalized(row.get('series') or '', 'series')
+            row_title = normalized(row.get('title') or '', 'title')
+            if row.get('number') and (identity.get('integral') == ['true']
+                                      or (number and normalized(row['number'], 'number') != number)):
+                return False
+            if series and row_series.startswith(series + ' '):
+                dates = re.findall(r'\b(?:18|19|20)\d{2}\b', row_series[len(series):])
+                if dates and ((year and year not in dates) or (
+                        not year and (not title or row_title != title))):
+                    return False
+            if title and row_title and row_title != row_series and row_title != title:
+                return False
+            return not series or not row_series or row_series == series or row_series.startswith(series + ' ') or (
+                bool(title) and row_title == title
+            )
+
+        compatible = [row for row in candidates if agrees(row)]
+        strong = [row for row in compatible if row['score'] >= STRONG_SCORE]
+
+        refs: set[str] = set()
+        if series and number:
+            for slug, ref in self.numbered.get(number, ()):
+                label = normalized(slug, 'series')
+                if label == series or label.startswith(series + ' '):
+                    refs.add(ref)
+        distinct_series = {normalized(slug, 'series') for slug, ref in self.numbered.get(number or '', ())
+                           if ref in refs}
+        if len(distinct_series) > 1:
+            return {'status': 'review', 'reason': 'ambiguous'}
+        if len(strong) > 1 or (len(refs) > 1 and not (
+            len(strong) == 1 and title and normalized(strong[0].get('title') or '', 'title') == title
+        )):
+            return {'status': 'review', 'reason': 'ambiguous'}
+        if len(strong) == 1:
+            return {'status': 'selected', 'reason': 'strong', 'edition_ref': strong[0]['edition_ref']}
+        if series and number and len(refs) == 1:
+            for row in compatible:
+                label = normalized(row.get('series') or '', 'series')
+                if (row['edition_ref'] not in refs or not row.get('number')
+                        or not (label == series or label.startswith(series + ' '))):
+                    continue
+                dated_variant = re.search(r'\b(?:18|19|20)\d{2}\b', label[len(series):])
+                if dated_variant and not year and normalized(row.get('title') or '', 'title') not in identity.get('title', []):
+                    break
+                return {'status': 'selected', 'reason': 'numbered', 'edition_ref': row['edition_ref']}
+        return {'status': 'review', 'reason': 'insufficient'}

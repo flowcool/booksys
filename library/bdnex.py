@@ -12,7 +12,10 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from urllib.parse import urlsplit
 
-from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates, valid_match_counts
+from library.bdnex_protocol import (
+    PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates,
+    validate_decision, valid_match_counts,
+)
 from library.names import parse_name
 
 
@@ -30,8 +33,9 @@ class BDneXClient:
         self.endpoint, self.token, self.timeout = endpoint.rstrip('/'), token, timeout
         self.retry_at = 0.0
 
-    def match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
-        result = self._match(asset, inputs)
+    def match(self, asset: str, inputs: list[dict[str, Any]], *,
+              identity: dict[str, list[str]] | None = None) -> dict[str, Any]:
+        result = self._match(asset, inputs, identity)
         if result['status'] != 'ok' or result['candidates']:
             return result
 
@@ -50,7 +54,7 @@ class BDneXClient:
         if not variants:
             return result
 
-        fallback = self._match(asset, variants)
+        fallback = self._match(asset, variants, identity)
         receipt = {'original_request': result['request']}
         if 'match_counts' in result:
             receipt['original_match_counts'] = result['match_counts']
@@ -61,11 +65,15 @@ class BDneXClient:
         remaining = max(self.retry_at - time.monotonic(), 0)
         return datetime.fromtimestamp(time.time() + remaining, timezone.utc)
 
-    def _match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    def _match(self, asset: str, inputs: list[dict[str, Any]],
+               identity: dict[str, list[str]] | None) -> dict[str, Any]:
         if time.monotonic() < self.retry_at:
             return {'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'}
         try:
-            request = validate_request({'schema': 1, 'asset': asset, 'inputs': inputs})
+            request = {'schema': 1, 'asset': asset, 'inputs': inputs}
+            if identity is not None:
+                request['identity'] = identity
+            validate_request(request)
             body = json.dumps(request).encode()
             if len(body) > MAX_BODY:
                 raise ValueError('BDneX request too large')
@@ -84,6 +92,8 @@ class BDneXClient:
                     or result.get('engine') != PIN or not re.fullmatch('[a-f0-9]{64}', str(result.get('index', '')))):
                 raise ValueError('Invalid BDneX binding')
             rows = validate_candidates(result['candidates'])
+            if 'decision' in result:
+                validate_decision(result['decision'], rows)
             if not valid_match_counts(result.get('match_counts'), len(rows)):
                 result.pop('match_counts', None)
             for row in rows:
@@ -108,6 +118,24 @@ def configured_client() -> BDneXClient | None:
     # Misconfiguration is a deployment error, never silently disable an enabled provider.
     token = Path(os.environ['BOOKSYS_BDNEX_TOKEN_FILE']).read_text().strip()
     return BDneXClient(endpoint, token)
+
+
+def identity_for(state: dict[str, Any], key: str) -> dict[str, list[str]]:
+    from library.asset_evidence import bind_evidence
+    from library.work_identity import asset_assertions, normalized
+
+    fields: dict[str, set[str]] = {}
+    evidence = bind_evidence(state, key)
+    for assertion in asset_assertions(evidence):
+        field = assertion['field']
+        value = str(normalized(assertion['value'], field)).lower()
+        if value:
+            fields.setdefault(field, set()).add(value if len(value) <= 512 else '#' + digest(value))
+    for label in evidence['labels']:
+        for year in re.findall(r'\(((?:18|19|20)\d{2})\)', label):
+            fields.setdefault('year', set()).add(year)
+    # Two distinct values suffice to report conflicting file evidence.
+    return {field: sorted(choices)[:2] for field, choices in fields.items()}
 
 
 def inputs_for(state: dict[str, Any], key: str) -> list[dict[str, Any]]:

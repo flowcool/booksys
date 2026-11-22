@@ -8,8 +8,18 @@ from typing import Any
 
 PIN = '9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33'
 MIN_CANDIDATE_SCORE = 60
+STRONG_SCORE = 90
+IDENTITY_KEYS = frozenset({'title', 'series', 'number', 'integral', 'year'})
 MAX_BODY = 16384
 MAX_RESPONSE = 65536
+
+
+def bedetheque_album_id(value: Any) -> str | None:
+    """Accept only canonical HTTPS album URLs, without URL repair or suffixes."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r'https://www\.bedetheque\.com/BD-[^/\s?#]+-([1-9][0-9]*)\.html', value)
+    return match[1] if match else None
 
 
 def digest(value: Any) -> str:
@@ -37,6 +47,14 @@ def validate_request(value: Any) -> dict[str, Any]:
             raise ValueError('Invalid hints')
         if any(not isinstance(v, str) or len(v) > 2048 for v in hints.values()):
             raise ValueError('Invalid hint value')
+    identity = value.get('identity', {})
+    if not isinstance(identity, dict) or identity.keys() - IDENTITY_KEYS:
+        raise ValueError('Invalid identity hints')
+    for hints in identity.values():
+        if not isinstance(hints, list) or not 1 <= len(hints) <= 2 or any(
+            not isinstance(hint, str) or not 1 <= len(hint) <= 512 for hint in hints
+        ) or len(set(hints)) != len(hints):
+            raise ValueError('Invalid identity hint values')
     return value
 
 
@@ -60,6 +78,20 @@ def validate_candidates(rows: Any) -> list[dict[str, Any]]:
                 raise ValueError('Invalid candidate field')
     return rows
 
+
+
+def validate_decision(decision: Any, rows: list[dict[str, Any]]) -> None:
+    if isinstance(decision, dict):
+        reason = decision.get('reason')
+        if (decision.keys() == {'status', 'reason'} and decision['status'] == 'review' and rows
+                and reason in ('ambiguous', 'insufficient', 'conflicting_file_evidence')):
+            return
+        if (decision.keys() == {'status', 'reason', 'edition_ref'} and decision['status'] == 'selected'
+                and reason in ('strong', 'numbered')):
+            chosen = [row for row in rows if row['edition_ref'] == decision['edition_ref']]
+            if len(chosen) == 1 and (reason != 'strong' or chosen[0]['score'] >= STRONG_SCORE):
+                return
+    raise ValueError('Invalid BDneX decision')
 
 
 def valid_match_counts(counts: Any, candidate_count: int) -> bool:

@@ -1,22 +1,71 @@
-# BDneX candidate provider
+# BDneX identification
 
 The metadata worker can query a private BDneX service before public discovery.
 Set `BOOKSYS_BDNEX_URL` and `BOOKSYS_BDNEX_TOKEN_FILE` in the metadata role.
 Leave the URL unset to keep the existing providers only.
 The token file must be readable by the worker and service users.
 
-The worker sends at most three logical names and existing ComicInfo hints.
-It sends no archives or absolute storage paths. BDneX proposes candidates
-with scores of at least 70, or at least 60 when the volume and the series words agree. Booksys keeps its existing identity and admission
-checks. A score does not establish identity. Unknown fields stay unknown.
-Concordant references use existing exact-page enrichment. Uncertain results
-and service outages fall back to the existing public providers.
+The worker sends up to three logical names, ComicInfo hints and normalized
+identity hints bound to the file. The service returns candidates at 70 or
+above. It also returns candidates at 60 or above when the volume and series
+words agree. A unique strong candidate at 90 or above can select the reference.
+Below 90, the service can select a candidate when the series and volume point
+to one reference in the full sitemap. A dated series variant needs title
+agreement. Competing references and conflicting file evidence go to review.
+
+A selected BDneX reference is a proposal. The finalizer checks contradictions first.
+These include file fields, the embedded Web work, primary credits and dated series.
+No cover or exemption can override a contradiction.
+It then checks exemptions in this order: embedded Web, informative asset title,
+explicit primary creator. Otherwise, it requires cover confirmation.
+A failed page or cover request leaves the proposal in review.
+Classification and admission require the completed identity decision.
+
+ComicInfo `Web` is asset-bound evidence only for canonical
+`https://www.bedetheque.com/BD-...-<id>.html` URLs. Other hosts, loose URLs,
+query strings, fragments and malformed IDs are rejected.
+An indexed Web album becomes the proposal even when native matching returns
+another album or no album. The worker still hydrates and checks that exact page.
+Web exemption requires the same work and no conflicting file fields.
+Compare normalized series, number and title from the album slugs. Keep both IDs
+in `web_comparisons`; different edition IDs alone do not conflict. A retained
+edition card resolves through its parser-bound album URL and edition-record ID.
+A Web URL for that same album uses the current candidate slug, so a stale name
+in the Web URL does not create a conflict. Unresolved slugs remain in review.
+A differing known series, number or title is a work conflict. Missing fields
+cannot prove a contradiction.
+The receipt records `basis` as `web`, `title`, `creator` or `cover`.
+
+The service also retrieves exact series/number proposals from the full sitemap.
+The normalized file series must equal the slug series or its whole-word prefix.
+The remaining slug words are decorations. Several distinct series mean review.
+This retrieval uses no archive or image access. These proposals reach the same
+finalizer. A missing slug title supplies no title agreement; it needs another
+exemption or a passing cover. A different informative title keeps its veto.
+The existing discovery path handles empty results, insufficient evidence and service outages.
+Candidate-only responses from older service images retain their existing path.
 If the original lookup cannot identify a directly downloaded Bookys album,
 Booksys can try its captured heading as one extra logical name. The heading
 must supply a series and issue. Candidates from that search require agreement
 with evidence from the file before they can enter identity validation.
-Already identified assets do not trigger new BDneX requests. Existing metadata
-scheduling supplies progressive replay. No bulk replay is started by index refresh.
+Already identified assets keep their work result and evidence in automatic cycles.
+Metadata scheduling excludes them, even after a method or evidence revision change.
+Already queued metadata tasks return the accepted result before any provider call.
+Explicit reference requests retain their enrichment path. The cover guard applies
+to new automatic acceptances. It does not start a bulk replay of accepted work.
+
+Cover confirmation uses `bdnex-9de29a73-sift-height600-ratio06-v1` and the
+provisional threshold 40. It preserves the upstream 600-pixel height and ratio
+0.6. The proposed 1024-pixel long-edge variant changed the retained-lot yield
+from 20/31 to 12/31, so it is not used. Covers never choose another reference.
+The worker stores the receipt in `work_result.evidence.cover_confirmation`.
+The reader child validates the first manifest member and both archive/member
+hashes. PDFs without an exemption remain in review until calibrated.
+The child has resource limits. It has no new filesystem or network sandbox.
+Before rollback to a worker without this guard, pause metadata acceptance.
+Keep it paused until a guarded worker is restored. Deployment tooling is outside
+this local change. Private input retention and exact-image release checks remain
+activation prerequisites.
 
 ## Private service
 
@@ -39,7 +88,8 @@ Do not add a second refresh scheduler.
 `POST /v1/match` requires Bearer authentication. The client binds the response
 to the asset, input digest and pinned engine. Requests are limited to 16 KiB;
 responses to 64 KiB. The timeout is five seconds, with a 60-second local
-cooldown after failure. Redirects and ambient HTTP proxies are disabled.
+cooldown after failure. A request can carry optional identity hints. The service
+can return a decision tied to a reference in its candidate list. Redirects and ambient HTTP proxies are disabled.
 
 Rollback: unset `BOOKSYS_BDNEX_URL` and restart the metadata role. Existing
 providers continue. Retain the service index and original archives.
@@ -62,9 +112,10 @@ issue markers and repeated issue captions retain the series name and its
 qualifiers. Conflicting issue numbers and mixed volume/issue shapes stay
 unqualified. Original archive names and bytes remain unchanged.
 
-The retained 516-file replay increases identity concordance from 112 to 153,
-with all 112 prior identities retained. This measures offline concordance
-against retained references, not independently verified accuracy for every gain.
+The earlier filename-only qualification retained 112 prior identities in a
+516-file replay. That result predates the cover/Web finalizer. It does not prove
+retention under the current policy. Frozen replays must count missing page and
+cover proof as review and report every lost prior identity.
 The metadata method change uses existing progressive replay; no bulk reset.
 
 A standalone title may contain one informative word when its file name and

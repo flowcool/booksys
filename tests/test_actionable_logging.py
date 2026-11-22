@@ -43,7 +43,7 @@ class ActionableLoggingTests(unittest.TestCase):
                                       budget=0 if outcome == 'defer' else 100)
                 catalog = SimpleNamespace(prepare=lambda state: None)
                 stages = BusinessStages(catalog, root, root, providers)
-                def enrich(*args):
+                def enrich(*args, **kwargs):
                     providers.get('https://www.bedetheque.com/synthetic')
                     return {'assets': {'asset': {}}}
                 events = []
