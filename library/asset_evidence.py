@@ -5,6 +5,7 @@ from pathlib import PurePosixPath
 import re
 from typing import Any
 
+from library.names import is_volume_title
 from library.primitives import LibraryError
 
 
@@ -34,6 +35,8 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
     for xml_name, field in (('Title', 'title'), ('Series', 'series'), ('Number', 'number')):
         value = embedded.get(xml_name)
         if isinstance(value, str) and value.strip():
+            if field == 'title' and is_volume_title(value):
+                continue
             result[field] = value.strip()
             result['provenance'][field] = [{'value': value.strip(),
                 'source': 'embedded:' + asset_id, 'scope': 'asset'}]
