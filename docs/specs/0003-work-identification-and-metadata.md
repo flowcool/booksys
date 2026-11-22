@@ -67,6 +67,8 @@ ComicInfo fields into each CBZ. Preserve ISBN centrally even if a chosen codec
 cannot represent it. Verify the codec/schema pair before adding GTIN or changing
 ComicInfo version. Komga's future import behaviour must be tested separately.
 
+An automatic Bedetheque identification based on series and issue number requires cover confirmation when asset-bound evidence supplies no concordant informative album title or explicit primary creator. Apply this rule to BDneX decisions and their enrichment and discovery fallbacks. Compare the first page in the validated reading order with the cover of the eligible album reference. The images cannot select or rank references, resolve identity contradictions, or establish an edition. Record both image digests, the method, the calibrated threshold and the result. A missing, unreadable, unavailable or timed-out cover check leaves the identity in review. Use the existing public-provider cache, robots policy, shared request budget and sequential pacing. No alternate-cover search is permitted. The release threshold requires a frozen, independently labelled calibration and validation lot.
+
 ## Reuse boundaries
 
 Qualify the reusable Bedetheque parser from MIT-licensed cbzforge and the archive,

@@ -13,7 +13,7 @@ class MetadataDeferDeadlineTests(unittest.TestCase):
         from library.metadata import Providers
         providers = object.__new__(Providers)
         providers.shared, providers.events = None, []
-        providers._get = lambda url:{'status':'unavailable','reason':'Request budget exhausted','expires':1234}
+        providers._get = lambda url, **kwargs:{'status':'unavailable','reason':'Request budget exhausted','expires':1234}
         providers.get('https://openlibrary.org/books/OL1M.json')
         self.assertEqual(providers.events[0]['expires'], 1234)
 
@@ -30,7 +30,7 @@ class MetadataDeferDeadlineTests(unittest.TestCase):
         other_events = []
         result = 'no_match'
 
-        def enrich(store, asset, providers, references):
+        def enrich(store, asset, providers, references, **kwargs):
             response = client.match(asset, [{'path': 'Example 01.cbz', 'embedded': {}}])
             providers.events.extend([dict(response, retrieved_at=now.isoformat()), *other_events])
             return {'assets': {asset: {'work_result': {'status': result}}}}

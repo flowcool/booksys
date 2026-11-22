@@ -93,7 +93,7 @@ class BusinessStages:
         if task.stage == 'metadata':
             start = len(self.providers.events)
             from library.metadata import prepare_enrichment
-            state = prepare_enrichment(self.catalog, task.entity, self.providers, [])
+            state = prepare_enrichment(self.catalog, task.entity, self.providers, [], reception=self.reception)
             asset = state['assets'][task.entity]
             events = [event for event in self.providers.events[start:]
                       if not (event.get('dependency') == 'bdnex'

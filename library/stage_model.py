@@ -13,7 +13,7 @@ from library.primitives import LibraryError, digest
 QUEUES = ('collection', 'intake', 'metadata', 'copies', 'routing', 'retirement')
 # Bump only the method whose useful evidence or unsuccessful outcomes changed.
 # Repository revisions and process restarts are deliberately absent.
-METHODS = dict(metadata='metadata-step-v3-names', copies='admission-step-v2-nfs',
+METHODS = dict(metadata='metadata-step-v4-cover', copies='admission-step-v2-nfs',
                intake='intake-step-v1', collection='collection-step-v4-pass-window', routing='routing-step-v1',
                retirement='retirement-step-v2-entry-wait', manual='manual-apply-v1')
 

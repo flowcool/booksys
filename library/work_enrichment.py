@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from library.asset_evidence import bind_evidence
+from library.cover_confirmation import CoverSource, finalize
 from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
@@ -104,9 +105,22 @@ def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any])
             entry.update(scope='discovery', creator_reference=reference['url'])
 
 
+def bind_cover(rows: list[dict[str, Any]], selected: dict[str, Any]) -> None:
+    """Only the checked canonical album owns its page cover, never edition cards."""
+    canonical = rows[0]
+    if (canonical.get('edition_ref') == selected.get('edition_ref')
+            and canonical.get('provenance', {}).get('canonical_album_ref') == selected.get('edition_ref')
+            and canonical.get('url') == selected.get('url') and canonical.get('cover_url')):
+        canonical['cover_binding'] = {'album_id': selected['edition_ref'], 'album_url': selected['url'],
+                                      'cover_url': canonical['cover_url']}
+    canonical['candidate_lineage'] = selected.get('candidate_lineage', {
+        key: selected.get(key) for key in ('source', 'edition_ref', 'url', 'provenance')})
+
+
 def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 extra: list[dict[str, Any]] | None = None, *, discovery: bool = True,
-                hydrate: bool = False, exact_page_attempts: list[dict[str, str]] | None = None) -> None:
+                hydrate: bool = False, exact_page_attempts: list[dict[str, str]] | None = None,
+                cover_source: CoverSource | None = None) -> None:
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
     queries: list[str] = []
@@ -162,6 +176,7 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 continue
             page_attempt['status'] = 'parsed'
             canonical = page_candidates[0]
+            bind_cover(page_candidates, row)
             if early_reference:
                 if (canonical['edition_ref'] != row['edition_ref']
                         or numbered_work(canonical) != numbered_work(row)
@@ -204,7 +219,9 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                     attempts.append({'url': row['url'], 'status': response.status, 'reason': response.reason})
                     continue
                 editions = parse_album_editions(response.body, row['url'], response.retrieved_at)
-                candidates.extend(item.to_match_candidate() for item in editions)
+                page_rows = [item.to_match_candidate() for item in editions]
+                bind_cover(page_rows, row)
+                candidates.extend(page_rows)
             truncated = truncated or found.truncated
         except LibraryError as exc:
             attempts.append({'status': 'unexpected_response', 'reason': str(exc)})
@@ -223,10 +240,22 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     if any(event.get('reason') == 'Request budget exhausted'
            for event in getattr(providers, 'events', [])[event_start:]):
         result['source_status'] = 'budget_exhausted'
-    save_work_result(asset, result)
+    save_work_result(asset, result, providers, cover_source)
 
 
-def save_work_result(asset: dict[str, Any], result: dict[str, Any]) -> None:
+def save_work_result(asset: dict[str, Any], result: dict[str, Any], providers: Any = None,
+                     cover_source: CoverSource | None = None) -> None:
+    finalize(asset, result, providers, cover_source)
+    previous = asset.get('work_result', {})
+    prior_receipt = previous.get('evidence', {}).get('cover_confirmation')
+    if (result['status'] != 'identified' and prior_receipt
+            and prior_receipt.get('result') == 'review'
+            and 'cover_confirmation' not in result.get('evidence', {})):
+        result.update(status='review', reason=previous['reason'],
+                      reason_code=previous.get('reason_code', 'cover_confirmation_unavailable'), work={})
+        result.setdefault('evidence', {})['cover_confirmation'] = prior_receipt
+        result['candidates'] = list({(row.get('source'), row.get('edition_ref')): row
+            for row in [*previous.get('candidates', []), *result.get('candidates', [])]}.values())
     if result['status'] == 'identified':
         assertions = []
         for row in result['concordant_candidates']:
@@ -242,7 +271,7 @@ def save_work_result(asset: dict[str, Any], result: dict[str, Any]) -> None:
 
 
 def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
-                        response: dict[str, Any]) -> bool:
+                        response: dict[str, Any], *, cover_source: CoverSource | None = None) -> bool:
     decision = response.get('decision', {})
     if decision.get('status') not in ('selected', 'review') or decision.get('reason') == 'insufficient':
         return False
@@ -274,7 +303,14 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
                     status = 'reference_mismatch'
                 else:
                     status = 'parsed'
+                    bind_cover(editions, selected)
                     row = dict(selected)
+                    row.pop('cover_binding', None)
+                    if 'cover_binding' in canonical:
+                        row['cover_binding'] = canonical['cover_binding']
+                    row['candidate_lineage'] = canonical['candidate_lineage']
+                    # Keep source identity contradictions visible to the finalizer.
+                    row['canonical_identity'] = {field: canonical.get(field) for field in WORK_FIELDS}
                     for field in WORK_FIELDS:
                         value = canonical.get(field)
                         if present(value) and all(
@@ -295,5 +331,8 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
                          'url': selected['url'], 'score': selected['score'],
                          'decision': decision['reason'], **selected.get('provenance', {})}],
         )
-    save_work_result(asset, result)
+    if decision['status'] == 'selected' and status != 'parsed':
+        # A retained pre-guard page is not current authority after a failed fetch.
+        row.pop('cover_binding', None)
+    save_work_result(asset, result, providers, cover_source)
     return True

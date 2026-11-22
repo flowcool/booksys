@@ -72,6 +72,22 @@ with tempfile.TemporaryDirectory() as directory:
     buffer = io.BytesIO()
     image.save(buffer, format='PNG')
     png = buffer.getvalue()
+    from library.cover_confirmation import compare
+    from library import decode
+    decode.WORK_ROOT = str(root)
+    import random
+    from PIL import ImageDraw
+    textured = Image.new('RGB', (400, 600), 'white')
+    draw = ImageDraw.Draw(textured)
+    rng = random.Random(71)
+    for _ in range(500):
+        x, y = rng.randrange(380), rng.randrange(580)
+        draw.rectangle((x, y, x+10, y+10), fill=tuple(rng.randrange(256) for _ in range(3)))
+    native_buffer = io.BytesIO()
+    textured.save(native_buffer, format='PNG')
+    native_receipt = compare(native_buffer.getvalue(), native_buffer.getvalue())
+    assert native_receipt['result'] == 'pass' and native_receipt['score'] >= 95, native_receipt
+    assert native_receipt['opencv'] == '4.13.0' and native_receipt['numpy'] == '2.4.6', native_receipt
     cbz, cbr, pdf = (root / ('synthetic' + suffix) for suffix in ('.cbz', '.cbr', '.pdf'))
     with zipfile.ZipFile(cbz, 'w') as archive:
         archive.writestr('001.png', png)

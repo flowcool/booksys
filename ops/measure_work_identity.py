@@ -19,6 +19,36 @@ from library.work_enrichment import enrich_work
 from library.work_identity import normalized
 
 
+def replay_details(inputs: Path, output: Path) -> int:
+    """Replay frozen result evidence only; never open archives, network or DB."""
+    from library.work_enrichment import save_work_result
+    from library.work_identity import evaluate_work
+    rows = []
+    for raw in json.loads(inputs.read_text())['rows']:
+        previous = raw.get('work_result') or {}
+        evidence = copy.deepcopy(previous.get('evidence', {}))
+        evidence.pop('cover_confirmation', None)
+        proposed = evaluate_work(evidence, previous.get('candidates', []))
+        proposed['evidence'] = evidence
+        before = proposed['status']
+        asset = {'sha256': raw['id']}
+        save_work_result(asset, proposed)
+        receipt = proposed['evidence'].get('cover_confirmation', {})
+        rows.append({'asset': raw['id'], 'recorded': raw['status'], 'proposed': before,
+                     'status': proposed['status'], 'reason': proposed['reason'],
+                     'cover_result': receipt.get('result'), 'cover_reason': receipt.get('reason')})
+    report = {'mode': 'frozen evidence replay; absent archive/cover inputs remain review; no DB/network',
+        'inputs_sha256': hashlib.sha256(inputs.read_bytes()).hexdigest(), 'asset_count': len(rows),
+        'recorded': dict(Counter(row['recorded'] for row in rows)),
+        'proposed': dict(Counter(row['proposed'] for row in rows)),
+        'statuses': dict(Counter(row['status'] for row in rows)),
+        'cover_results': dict(Counter(row['cover_result'] for row in rows if row['cover_result'])), 'rows': rows}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+    print(json.dumps({key: value for key, value in report.items() if key != 'rows'}))
+    return 0
+
+
 def snapshot_state(assets: dict[str, Any]) -> dict[str, Any]:
     state: dict[str, Any] = {'assets': {}, 'origins': {}}
     for key, raw in assets.items():
@@ -43,10 +73,15 @@ def snapshot_state(assets: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--inputs', type=Path, required=True)
-    parser.add_argument('--references', type=Path, required=True)
-    parser.add_argument('--labels', type=Path, required=True)
+    parser.add_argument('--frozen-details', action='store_true')
+    parser.add_argument('--references', type=Path)
+    parser.add_argument('--labels', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    if args.frozen_details:
+        return replay_details(args.inputs, args.output)
+    if args.references is None or args.labels is None:
+        parser.error('--references and --labels are required unless --frozen-details is set')
     inputs = json.loads(args.inputs.read_text())
     state = snapshot_state(inputs['assets'])
     references = {}

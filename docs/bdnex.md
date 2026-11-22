@@ -13,17 +13,28 @@ Below 90, the service can select a candidate when the series and volume point
 to one reference in the full sitemap. A dated series variant needs title
 agreement. Competing references and conflicting file evidence go to review.
 
-Booksys records the selected identity and uses the exact page for enrichment.
-A missing or invalid page leaves the selected reference in place. The existing
-classification and admission checks still apply. The existing discovery path
-handles empty results, insufficient evidence and service outages. Candidate-only
-responses from older service images retain their existing path.
+A selected BDneX reference is a proposal. When file evidence supplies no concordant informative title or primary creator, identification requires cover confirmation. A failed page or cover request leaves that proposal in review. Classification and admission require the completed identity decision.
+The existing discovery path handles empty results, insufficient evidence and service outages.
+Candidate-only responses from older service images retain their existing path.
 If the original lookup cannot identify a directly downloaded Bookys album,
 Booksys can try its captured heading as one extra logical name. The heading
 must supply a series and issue. Candidates from that search require agreement
 with evidence from the file before they can enter identity validation.
 Already identified assets do not trigger new BDneX requests. Existing metadata
 scheduling supplies progressive replay. No bulk replay is started by index refresh.
+
+Cover confirmation uses `bdnex-9de29a73-sift-height600-ratio06-v1` and the
+provisional threshold 40. It preserves the upstream 600-pixel height and ratio
+0.6. The proposed 1024-pixel long-edge variant changed the retained-lot yield
+from 20/31 to 12/31, so it is not used. Covers never choose another reference.
+The worker stores the receipt in `work_result.evidence.cover_confirmation`.
+The reader child validates the first manifest member and both archive/member
+hashes. PDFs without a title/creator exemption remain in review until calibrated.
+The child has resource limits. It has no new filesystem or network sandbox.
+Before rollback to a worker without this guard, pause metadata acceptance.
+Keep it paused until a guarded worker is restored. Deployment tooling is outside
+this local change. Private input retention and exact-image release checks remain
+activation prerequisites.
 
 ## Private service
 

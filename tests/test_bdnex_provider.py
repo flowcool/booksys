@@ -196,7 +196,7 @@ class ProtocolTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
-    def test_bdnex_selection_survives_unavailable_enrichment(self) -> None:
+    def test_bdnex_selection_preserves_review_when_file_series_conflicts(self) -> None:
         from copy import deepcopy
 
         key = 'a' * 64
@@ -234,8 +234,9 @@ class IdentityTests(unittest.TestCase):
 
         result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
         work = result['assets'][key]['work_result']
-        self.assertEqual(work['status'], 'identified')
-        self.assertEqual(work['work']['title'], 'London')
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['work'], {})
+        self.assertEqual(work['reason_code'], 'cover_identity_conflict')
         self.assertEqual(work['provenance'][0]['edition_ref'], '123')
         self.assertEqual(work['exact_page_attempts'], [{'edition_ref': '123', 'status': 'unavailable'}])
 
@@ -348,10 +349,11 @@ class IdentityTests(unittest.TestCase):
                         f'<meta itemprop="alternativeheadline" content="Tome {number}">'
                         '<meta itemprop="genre" content="Franco-Belge"><span itemprop="publisher">Imperia</span>')
                 work = self.numbered_alias_result(f'{alias} - T{number}.cbz', [row], html)
-                self.assertEqual(work['status'], 'identified')
-                self.assertEqual(work['work']['series'], canonical)
-                self.assertEqual(work['work']['title'], title)
-                self.assertEqual(work['work']['publisher'], 'Imperia')
+                self.assertEqual(work['status'], 'review')
+                self.assertEqual(work['work'], {})
+                self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
+                self.assertEqual(work['concordant_candidates'][0]['series'], canonical)
+                self.assertEqual(work['concordant_candidates'][0]['title'], title)
                 self.assertEqual(work['evidence']['provenance']['series'][0]['value'], alias)
                 self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
 
@@ -525,7 +527,7 @@ class IdentityTests(unittest.TestCase):
 
         result = prepare_enrichment(Snapshot(), key, Offline(), [])  # type: ignore[arg-type]
         work = result['assets'][key]['work_result']
-        self.assertEqual(work['status'], 'identified')
-        self.assertIsNone(work['work'].get('language'))
-        self.assertIsNone(work['work']['family'])
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['work'], {})
+        self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
         self.assertEqual(work['concordant_candidates'][0]['score'], 89)

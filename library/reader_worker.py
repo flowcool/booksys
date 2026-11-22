@@ -232,6 +232,25 @@ def main() -> None:
     path, suffix = Path(sys.argv[1]), sys.argv[2]
     operation = sys.argv[3]
     work = Path(sys.argv[4])
+    if operation == 'cover_compare':
+        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+        resource.setrlimit(resource.RLIMIT_AS, (768 * 1024**2, 768 * 1024**2))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        result: dict[str, Any] = {'status': 'pending', 'cover_reason': 'unreadable_image'}
+        try:
+            from library.cover_sift import similarity
+            original = path.read_bytes()
+            request = json.loads(sys.stdin.buffer.read(8 * 1024**2))
+            reference = base64.b64decode(request['reference'], validate=True)
+            if len(original) > MAX_MEMBER or len(reference) > 5 * 1024**2:
+                raise ValueError('Cover byte limit exceeded')
+            result = {'status': 'compared', **similarity(original, reference),
+                      'input_sha256': hashlib.sha256(original).hexdigest(),
+                      'reference_sha256': hashlib.sha256(reference).hexdigest()}
+        except Exception:
+            pass  # Resource failure or invalid input is review, never archive rejection.
+        print(json.dumps(result, allow_nan=False))
+        return
     if operation == 'bundle':
         request = json.loads(sys.stdin.buffer.read(2 * 1024**2))
         from library.bundle_worker import main as worker
@@ -255,7 +274,28 @@ def main() -> None:
         if suffix != real:
             output = {'status': 'pending', 'reason': 'Suffix and actual format differ'}
         else:
-            if transform:
+            if operation == 'first_page':
+                from library.reader_inputs import sha256
+                request = json.loads(sys.stdin.buffer.read(2 * 1024**2))
+                expected = request['member']
+                if suffix == '.pdf':
+                    raise PendingFile('PDF cover comparison is not calibrated')
+                if (request['asset_sha256'] != file_hash.hexdigest()
+                        or request['reader_policy'] != READER_POLICY):
+                    raise PendingFile('Cover archive hash or policy drift')
+                destination = work / 'first-page.img'
+                def first_member(name: str, data: bytes) -> None:
+                    if name == expected['name']:
+                        if hashlib.sha256(data).hexdigest() != expected['sha256']:
+                            raise PendingFile('Cover member hash drift')
+                        destination.write_bytes(data)
+                inspected = inspect_archive(path, suffix, sink=first_member)
+                if (inspected['status'] != 'validated' or not destination.is_file()
+                        or inspected['page_manifest'][0] != expected
+                        or sha256(path) != request['asset_sha256']):
+                    raise PendingFile('Cover first-page manifest or archive drift')
+                output = {'status': 'extracted', 'member': expected}
+            elif transform:
                 from library.xmlmetadata import validate_xml
                 request = json.loads(sys.stdin.buffer.read(2 * 1024**2))
                 xml = base64.b64decode(request['comicinfo'], validate=True)

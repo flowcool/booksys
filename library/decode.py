@@ -32,15 +32,17 @@ def run(operation: str, source: Path, payload: dict[str, Any] | None = None,
     source = source.absolute()
     before = fingerprint(source)
     # Bound decoding wall time, including slow input reads (plus 1 s per 2 MiB of source); the process group is killed on expiry.
-    timeout = {'validate': 45, 'bundle': 180,
+    timeout = {'validate': 45, 'first_page': 45, 'cover_compare': 15, 'bundle': 180,
                'transform': 1800 if source.suffix.lower() == '.pdf' else 60}[operation]
     work = Path(tempfile.mkdtemp(dir=WORK_ROOT))
     try:
         process = subprocess.Popen([sys.executable, '-m', 'library.reader_worker', str(source), source.suffix.lower(), operation, str(work)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=_limits,
-            env={'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(work), 'TMPDIR': str(work)})
+            env={'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(work), 'TMPDIR': str(work),
+                 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'})
         try:
-            stdout, _ = process.communicate(json.dumps(payload or {}).encode(), timeout=timeout + before[2] // (2 * 1024**2))
+            stdout, _ = process.communicate(json.dumps(payload or {}).encode(),
+                timeout=timeout + (0 if operation == 'cover_compare' else before[2] // (2 * 1024**2)))
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
@@ -51,6 +53,8 @@ def run(operation: str, source: Path, payload: dict[str, Any] | None = None,
             detail = (f'signal {-process.returncode}' if process.returncode < 0
                       else f'exit code {process.returncode}')
             raise LibraryError(f'Decoder failed ({detail})')
+        if operation == 'cover_compare' and len(stdout) > 64 * 1024:
+            raise LibraryError('Comparison output exceeds limit')
         outcome = json.loads(stdout)
         if not isinstance(outcome, dict):
             raise LibraryError('Decoder returned an invalid result')

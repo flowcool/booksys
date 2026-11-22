@@ -88,6 +88,11 @@ class EventScopeTests(unittest.TestCase):
                 self.assertEqual(scope([path]),
                                  {"worker": True, "library": True, "byparr": False, "bdnex": True})
 
+    def test_cover_native_paths_select_worker_and_library(self):
+        for path in ("library/cover_sift.py", "tests/test_library_cover_guard.py", "tests/probes/worker.py", "tests/probes/library.py"):
+            with self.subTest(path=path):
+                self.assertEqual(scope([path]), {"worker": True, "library": True, "byparr": False, "bdnex": False})
+
     def test_unknown_path_selects_all_four_slices(self):
         self.assertEqual(scope(["unknown.file"]),
                          {"worker": True, "library": True, "byparr": True, "bdnex": True})

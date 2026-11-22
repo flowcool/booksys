@@ -48,6 +48,22 @@ with tempfile.TemporaryDirectory() as directory:
     decode.WORK_ROOT = str(root)
     buffer = io.BytesIO()
     Image.new('RGB', (32, 32), 'white').save(buffer, format='PNG')
+    from library.cover_confirmation import compare
+    from library import decode
+    decode.WORK_ROOT = str(root)
+    import random
+    from PIL import ImageDraw
+    textured = Image.new('RGB', (400, 600), 'white')
+    draw = ImageDraw.Draw(textured)
+    rng = random.Random(71)
+    for _ in range(500):
+        x, y = rng.randrange(380), rng.randrange(580)
+        draw.rectangle((x, y, x+10, y+10), fill=tuple(rng.randrange(256) for _ in range(3)))
+    native_buffer = io.BytesIO()
+    textured.save(native_buffer, format='PNG')
+    native_receipt = compare(native_buffer.getvalue(), native_buffer.getvalue())
+    assert native_receipt['result'] == 'pass' and native_receipt['score'] >= 95, native_receipt
+    assert native_receipt['opencv'] == '4.13.0' and native_receipt['numpy'] == '2.4.6', native_receipt
     cbr, pdf = root / 'synthetic.cbr', root / 'synthetic.pdf'
     cbr.write_bytes(rar_bytes('001.png', buffer.getvalue()))
     # A vector page exercises both pdfimages and the pdftoppm fallback.
