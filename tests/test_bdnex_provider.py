@@ -257,11 +257,12 @@ class IdentityTests(unittest.TestCase):
                      'series': 'Nains', 'number': '1', 'score': 100}
         heading = 'Nains - Tome 1 - Redwin de la Forge'
 
-        for embedded, parent, page_title, expected_paths, identified in (
-            ({'Title': candidate['title']}, None, heading, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
-            ({}, None, heading, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], False),
-            ({}, 'bundle', heading, ['scan.cbz'], False),
-            ({}, None, 'Nains - Tomes 1-3', ['scan.cbz'], False),
+        for embedded, parent, page_title, page_available, expected_paths, identified in (
+            ({'Title': candidate['title']}, None, heading, True, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
+            ({'Title': candidate['title']}, None, heading, False, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], False),
+            ({}, None, heading, True, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], False),
+            ({}, 'bundle', heading, True, ['scan.cbz'], False),
+            ({}, None, 'Nains - Tomes 1-3', True, ['scan.cbz'], False),
         ):
             with self.subTest(embedded=embedded, parent=parent, page_title=page_title):
                 state = {'assets': {key: {'sha256': key, 'origins': ['o'], 'embedded': embedded,
@@ -287,7 +288,12 @@ class IdentityTests(unittest.TestCase):
                         self.events: list[dict[str, Any]] = []
 
                     def get(self, url: str) -> dict[str, Any]:
-                        return {'status': 'unavailable'}
+                        if not page_available:
+                            return {'status': 'unavailable'}
+                        return {'status': 'ok', 'body': 'User-agent: *\nAllow: /' if url.endswith('robots.txt') else (
+                            '<link rel="canonical" href="https://www.bedetheque.com/BD-Nains-123.html">'
+                            '<h1><a>Nains</a></h1><meta itemprop="name" content="Nains - Redwin de la Forge">'
+                            '<meta itemprop="alternativeheadline" content="Tome 1">')}
 
                     def discover(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                         return {}
@@ -529,5 +535,5 @@ class IdentityTests(unittest.TestCase):
         work = result['assets'][key]['work_result']
         self.assertEqual(work['status'], 'review')
         self.assertEqual(work['work'], {})
-        self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
+        self.assertEqual(work['reason_code'], 'cover_page_unavailable')
         self.assertEqual(work['concordant_candidates'][0]['score'], 89)

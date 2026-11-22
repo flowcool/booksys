@@ -13,7 +13,28 @@ Below 90, the service can select a candidate when the series and volume point
 to one reference in the full sitemap. A dated series variant needs title
 agreement. Competing references and conflicting file evidence go to review.
 
-A selected BDneX reference is a proposal. When file evidence supplies no concordant informative title or primary creator, identification requires cover confirmation. A failed page or cover request leaves that proposal in review. Classification and admission require the completed identity decision.
+A selected BDneX reference is a proposal. The finalizer checks contradictions first.
+These include file fields, the embedded Web album ID, primary credits and dated series.
+No cover or exemption can override a contradiction.
+It then checks exemptions in this order: embedded Web, informative asset title,
+explicit primary creator. Otherwise, it requires cover confirmation.
+A failed page or cover request leaves the proposal in review.
+Classification and admission require the completed identity decision.
+
+ComicInfo `Web` is asset-bound evidence only for canonical
+`https://www.bedetheque.com/BD-...-<id>.html` URLs. Other hosts, loose URLs,
+query strings, fragments and malformed IDs are rejected.
+An indexed Web album becomes the proposal even when native matching returns
+another album or no album. The worker still hydrates and checks that exact page.
+Web exemption requires the same album ID and no conflicting file fields.
+The receipt records `basis` as `web`, `title`, `creator` or `cover`.
+
+The service also retrieves exact series/number proposals from the full sitemap.
+The normalized file series must equal the slug series or its whole-word prefix.
+The remaining slug words are decorations. Several distinct series mean review.
+This retrieval uses no archive or image access. These proposals reach the same
+finalizer. A missing slug title supplies no title agreement; it needs another
+exemption or a passing cover. A different informative title keeps its veto.
 The existing discovery path handles empty results, insufficient evidence and service outages.
 Candidate-only responses from older service images retain their existing path.
 If the original lookup cannot identify a directly downloaded Bookys album,
@@ -29,7 +50,7 @@ provisional threshold 40. It preserves the upstream 600-pixel height and ratio
 from 20/31 to 12/31, so it is not used. Covers never choose another reference.
 The worker stores the receipt in `work_result.evidence.cover_confirmation`.
 The reader child validates the first manifest member and both archive/member
-hashes. PDFs without a title/creator exemption remain in review until calibrated.
+hashes. PDFs without an exemption remain in review until calibrated.
 The child has resource limits. It has no new filesystem or network sandbox.
 Before rollback to a worker without this guard, pause metadata acceptance.
 Keep it paused until a guarded worker is restored. Deployment tooling is outside
@@ -81,9 +102,10 @@ issue markers and repeated issue captions retain the series name and its
 qualifiers. Conflicting issue numbers and mixed volume/issue shapes stay
 unqualified. Original archive names and bytes remain unchanged.
 
-The retained 516-file replay increases identity concordance from 112 to 153,
-with all 112 prior identities retained. This measures offline concordance
-against retained references, not independently verified accuracy for every gain.
+The earlier filename-only qualification retained 112 prior identities in a
+516-file replay. That result predates the cover/Web finalizer. It does not prove
+retention under the current policy. Frozen replays must count missing page and
+cover proof as review and report every lost prior identity.
 The metadata method change uses existing progressive replay; no bulk reset.
 
 A standalone title may contain one informative word when its file name and

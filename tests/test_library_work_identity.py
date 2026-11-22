@@ -9,6 +9,11 @@ def reference(**values):
 
 
 class WorkIdentityTests(unittest.TestCase):
+    def test_dotted_leading_article_agrees_with_album_title(self):
+        result = evaluate_work({'title': 'Le.roi.assassin', 'asset_bound': True},
+                               [reference(title='Le Roi assassin')])
+        self.assertEqual(result['status'], 'identified')
+
     def test_standalone_title_bound_to_file_identifies_without_an_edition(self):
         result = evaluate_work({'title': 'Grand Voyage (Le)', 'asset_bound': True}, [reference()])
         self.assertEqual(result['status'], 'identified')

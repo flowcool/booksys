@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import math
+import re
 from pathlib import Path
 import tempfile
 import time
@@ -11,11 +12,55 @@ from collections.abc import Callable
 from typing import Any
 
 from library import decode
+from library.bdnex_protocol import bedetheque_album_id
 from library.cover_sift import METHOD, THRESHOLD, FUNCTION_VERSION, PREPROCESSING
 from library.primitives import LibraryError, digest
-from library.work_identity import asset_assertions, creator_names, informative, normalized, present, evaluate_work
+from library.work_identity import (
+    NUMBERED_SERIES_ALIASES, asset_assertions, creator_names, informative, normalized, present,
+)
 
 CoverSource = Callable[[], Path]
+
+
+def identity_conflict(evidence: dict[str, Any], row: dict[str, Any], *, indexed: bool) -> bool:
+    """Check structured contradictions; absent album titles remain unconfirmed.
+
+    An index prefix is retrieval evidence only. It grants no exemption and cannot
+    absorb a different numbered series or a contradictory date/title/number.
+    """
+    assertions = asset_assertions(evidence)
+    fields = {a['field'] for a in assertions}
+    bound: dict[str, Any] = {}
+    for field in fields:
+        values = {normalized(a['value'], field) for a in assertions if a['field'] == field}
+        if len(values) > 1:
+            return True
+        bound[field] = next(iter(values))
+    series = normalized(row.get('series') or '', 'series')
+    title = normalized(row.get('title') or '', 'title')
+    for field, value in bound.items():
+        candidate = row.get(field)
+        if not present(candidate):
+            continue
+        other = normalized(candidate, field)
+        if field == 'title':
+            if not informative(value) or not informative(candidate) or title == series:
+                continue
+        elif field == 'series' and value != other:
+            prefix = indexed and other.startswith(value + ' ')
+            alias = (NUMBERED_SERIES_ALIASES.get(value) == other
+                     and row.get('field_provenance', {}).get('series', {}).get('file_series_alias') == value)
+            dated = re.fullmatch(re.escape(value) + r' (?:19|20)\d{2}', other)
+            if ((prefix or alias or dated) and present(bound.get('number'))
+                    and bound['number'] == normalized(row.get('number'), 'number')):
+                continue
+        if value != other:
+            return True
+    file_years = {year for label in evidence.get('labels', [])
+                  for year in re.findall(r'\(((?:18|19|20)\d{2})\)', label)}
+    suffix = series[len(bound.get('series', '')):] if series.startswith(bound.get('series', '')) else ''
+    dates = set(re.findall(r'\b(?:18|19|20)\d{2}\b', suffix))
+    return bool(dates and file_years and dates != file_years)
 
 
 def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
@@ -34,7 +79,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     receipt: dict[str, Any] = {'version': 1, 'asset_sha256': asset['sha256'],
         'method': METHOD, 'function_version': FUNCTION_VERSION, 'preprocessing': PREPROCESSING,
         'opencv': None, 'numpy': None, 'threshold': THRESHOLD, 'score': None, 'result': 'review',
-        'reason': 'reference_not_eligible', 'member': None, 'input_sha256': None,
+        'reason': 'reference_not_eligible', 'basis': None, 'member': None, 'input_sha256': None,
         'reference_sha256': None, 'normalized_input_sha256': None,
         'normalized_reference_sha256': None}
 
@@ -47,9 +92,10 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     if evidence.get('asset') != asset['sha256'] or evidence.get('asset_bound') is not True:
         review('asset_binding_missing')
         return
-    # Preserve the pure evaluator's conflicts, dated-series and title veto rules.
-    checked = evaluate_work(evidence, rows)
-    if checked['status'] != 'identified':
+    indexed = all(row.get('provenance', {}).get('method') == 'bdnex-sitemap-1'
+                  or (row.get('candidate_lineage', {}).get('provenance') or {}).get('method') == 'bdnex-sitemap-1'
+                  for row in rows)
+    if any(identity_conflict(evidence, row, indexed=indexed) for row in rows):
         review('identity_conflict')
         return
     if evidence.get('discovery_truncated') or evidence.get('identity_conflicts'):
@@ -58,10 +104,17 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     references = {(row.get('source'), row.get('edition_ref'), row.get('url')) for row in rows}
     row = rows[0]
     canonical = row.get('canonical_identity')
-    if canonical and evaluate_work(evidence, [canonical])['status'] != 'identified':
+    if canonical and identity_conflict(evidence, canonical, indexed=indexed):
         review('identity_conflict')
         return
     receipt.update(album_id=row.get('edition_ref'), album_url=row.get('url'))
+    web = [a for a in evidence.get('provenance', {}).get('web', [])
+           if a.get('scope') == 'asset' and a.get('source') == 'embedded:' + asset['sha256']
+           and bedetheque_album_id(a.get('value'))]
+    if any(bedetheque_album_id(a['value']) != candidate.get('edition_ref')
+           for a in web for candidate in rows):
+        review('web_conflict')
+        return
     assertions = asset_assertions(evidence)
     # All title assertions must agree. Repeated series labels are not album titles.
     titles = [a for a in assertions if a['field'] == 'title' and informative(a['value'])
@@ -84,8 +137,21 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
                 return
         if names and names == credits[role]:
             credit_basis.extend(entries)
+    # Page failure blocks every exemption, including retained title/Web evidence.
+    page_statuses = [a['status'] for a in result.get('exact_page_attempts', [])
+                     if a.get('edition_ref') == row.get('edition_ref')]
+    if any(status != 'parsed' for status in page_statuses):
+        review('page_' + page_statuses[-1])
+        return
+    if web:
+        if not page_statuses and row.get('provenance', {}).get('canonical_album_ref') != row.get('edition_ref'):
+            review('page_unavailable')
+            return
+        receipt.update(result='exempt', reason='asset_web', basis='web', assertions=web)
+        return
     if title_agrees or credit_basis:
         receipt.update(result='exempt', reason='asset_title' if title_agrees else 'asset_creator',
+                       basis='title' if title_agrees else 'creator',
                        assertions=titles if title_agrees else credit_basis)
         return
     if len(references) != 1:
@@ -153,6 +219,8 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
             receipt.update(compared)
         if receipt['result'] != 'pass':
             review(receipt['reason'])
+        else:
+            receipt['basis'] = 'cover'
     except (LibraryError, OSError, ValueError, KeyError, TypeError):
         review('confirmation_unavailable')
 

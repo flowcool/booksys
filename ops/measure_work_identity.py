@@ -23,11 +23,19 @@ def replay_details(inputs: Path, output: Path) -> int:
     """Replay frozen result evidence only; never open archives, network or DB."""
     from library.work_enrichment import save_work_result
     from library.work_identity import evaluate_work
+    from library.asset_evidence import bind_evidence
     rows = []
     for raw in json.loads(inputs.read_text())['rows']:
         previous = raw.get('work_result') or {}
         evidence = copy.deepcopy(previous.get('evidence', {}))
         evidence.pop('cover_confirmation', None)
+        # The frozen payload predates Web/primary-role binding. Bind only the
+        # retained exact asset's embedded values; do not invent missing pages.
+        bound = bind_evidence({'assets': {raw['id']: {'sha256': raw['id'],
+            'embedded': raw.get('embedded', {}), 'origins': []}}, 'origins': {}}, raw['id'])
+        for field in ('web', 'writer', 'penciller'):
+            if field in bound['provenance']:
+                evidence.setdefault('provenance', {})[field] = bound['provenance'][field]
         proposed = evaluate_work(evidence, previous.get('candidates', []))
         proposed['evidence'] = evidence
         before = proposed['status']
@@ -36,13 +44,22 @@ def replay_details(inputs: Path, output: Path) -> int:
         receipt = proposed['evidence'].get('cover_confirmation', {})
         rows.append({'asset': raw['id'], 'recorded': raw['status'], 'proposed': before,
                      'status': proposed['status'], 'reason': proposed['reason'],
-                     'cover_result': receipt.get('result'), 'cover_reason': receipt.get('reason')})
+                     'cover_result': receipt.get('result'), 'cover_reason': receipt.get('reason'),
+                     'basis': receipt.get('basis'),
+                     'different_work': (previous.get('status') == proposed['status'] == 'identified'
+                         and any(normalized(proposed['work'].get(field, ''), field) != normalized(value, field)
+                                 for field, value in previous.get('work', {}).items()
+                                 if field in ('title', 'series', 'number', 'integral')))})
     report = {'mode': 'frozen evidence replay; absent archive/cover inputs remain review; no DB/network',
         'inputs_sha256': hashlib.sha256(inputs.read_bytes()).hexdigest(), 'asset_count': len(rows),
         'recorded': dict(Counter(row['recorded'] for row in rows)),
         'proposed': dict(Counter(row['proposed'] for row in rows)),
         'statuses': dict(Counter(row['status'] for row in rows)),
-        'cover_results': dict(Counter(row['cover_result'] for row in rows if row['cover_result'])), 'rows': rows}
+        'cover_results': dict(Counter(row['cover_result'] for row in rows if row['cover_result'])),
+        'identified_by_basis': dict(Counter(row['basis'] for row in rows if row['status'] == 'identified')),
+        'prior_identified_retained': sum(row['recorded'] == row['status'] == 'identified' for row in rows),
+        'prior_identified_lost': sum(row['recorded'] == 'identified' and row['status'] != 'identified' for row in rows),
+        'different_work': sum(row['different_work'] for row in rows), 'rows': rows}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps({key: value for key, value in report.items() if key != 'rows'}))

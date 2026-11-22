@@ -14,6 +14,14 @@ MAX_BODY = 16384
 MAX_RESPONSE = 65536
 
 
+def bedetheque_album_id(value: Any) -> str | None:
+    """Accept only canonical HTTPS album URLs, without URL repair or suffixes."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r'https://www\.bedetheque\.com/BD-[^/\s?#]+-([1-9][0-9]*)\.html', value)
+    return match[1] if match else None
+
+
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
 

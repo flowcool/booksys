@@ -11,6 +11,40 @@ from bdnex_service.engine import Engine, SitemapCache, validate_xml
 
 @unittest.skipUnless(importlib.util.find_spec('bdnex'), 'Pinned engine lives in the separate container')
 class EngineTests(unittest.TestCase):
+    def test_decorated_lookup_and_web_proposal_without_native_hits(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            cache = SitemapCache(path, writable=True)
+            albums = ['Navy-Imperia-Tome-100-900100', 'Akim-1re-serie-Tome-296-900296',
+                      'Bob-et-Bobette-3e-Serie-Rouge-Tome-8-900008', 'Jim-Canada-Imperia-Tome-36-900036',
+                      'Archie-Editions-Tome-4-900004', 'Archie-Autre-serie-Tome-4-900014',
+                      'Lady-Travel-Tome-2-Miss-Travel-215240']
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', sitemap_urls()[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', sitemap_urls()[1],
+                            b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            for series, number, ref in [('navy', '100', '900100'), ('akim', '296', '900296'),
+                    ('bob et bobette', '8', '900008'), ('jim canada', '36', '900036')]:
+                with self.subTest(series=series):
+                    result = engine.match({'inputs': [{'path': 'unrelated.cbz', 'embedded': {}}],
+                        'identity': {'series': [series], 'number': [number]}})
+                    self.assertEqual(result['decision'], {'status': 'selected', 'reason': 'numbered', 'edition_ref': ref})
+            result = engine.match({'inputs': [{'path': 'unrelated.cbz', 'embedded': {}}],
+                'identity': {'series': ['archie'], 'number': ['4']}})
+            self.assertEqual(result['decision'], {'status': 'review', 'reason': 'ambiguous'})
+            web = 'https://www.bedetheque.com/BD-Lady-Travel-Tome-2-Miss-Travel-215240.html'
+            result = engine.match({'inputs': [{'path': 'Navy T100.cbz', 'embedded': {'Web': web}}],
+                'identity': {'series': ['lady travel'], 'number': ['1'], 'title': ['miss travel']}})
+            self.assertEqual(result['decision']['edition_ref'], '215240')
+            for value in (web.replace('www.bedetheque.com', 'evil.example'), web + '?x=1',
+                          web + '#x', web.replace('215240', 'not-an-id'), web.replace('215240', '999999')):
+                result = engine.match({'inputs': [{'path': 'unrelated.cbz', 'embedded': {'Web': value}}], 'identity': {}})
+                self.assertEqual(result['candidates'], [], value)
+
     def test_numbered_choice_uses_the_full_index_and_accepts_a_lower_score(self) -> None:
         from bdnex.importer.bedetheque.sitemap import sitemap_urls
 
@@ -50,6 +84,9 @@ class EngineTests(unittest.TestCase):
             })
             self.assertIn('900201', [row['edition_ref'] for row in response['candidates']])
             self.assertEqual(response['decision'], {'status': 'review', 'reason': 'insufficient'})
+            dated = next(row for row in response['candidates'] if row['edition_ref'] == '900201')
+            self.assertEqual(engine.decide([{**dated, 'score': 100}], {'series': ['example'], 'number': ['1']}),
+                             {'status': 'review', 'reason': 'insufficient'})
 
 
     def test_high_score_without_volume_survives_many_wanted_albums(self) -> None:
