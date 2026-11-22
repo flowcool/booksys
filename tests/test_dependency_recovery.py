@@ -85,7 +85,7 @@ class DependencyRecoveryTests(unittest.TestCase):
             recovery.observe('catalogue.bnf.fr', available=True, at=AT.timestamp()+11)
             stages.discover(tasks, now=AT+timedelta(seconds=12), keys=[key])
             from library.work_actor import WorkActor
-            def cached_failure(catalog, asset_id, providers, references):
+            def cached_failure(catalog, asset_id, providers, references, **kwargs):
                 providers.events.append({'dependency': 'catalogue.bnf.fr', 'status': 'unavailable',
                                          'http_status': 503, 'retrieved_at': AT.isoformat()})
                 return catalog.working_set('identify', {'assets': [asset_id]})
