@@ -23,6 +23,7 @@ class EngineTests(unittest.TestCase):
                 'Akim-1re-serie-aventures-voyages-Tome-297-Titre-long-900297',
                 'Archie-Editions-Tome-4-Anniversaire-900004',
                 'Archie-Autre-serie-Tome-4-Aventure-900014',
+                'Example-2016-Tome-1-Return-900201',
             ]
             xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
                 f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums
@@ -43,6 +44,13 @@ class EngineTests(unittest.TestCase):
                 'identity': {'series': ['archie'], 'number': ['4']},
             })
             self.assertEqual(response['decision'], {'status': 'review', 'reason': 'ambiguous'})
+            response = engine.match({
+                'inputs': [{'path': 'Example - T01 - Return.cbz', 'embedded': {}}],
+                'identity': {'series': ['example'], 'number': ['1'], 'title': ['return'], 'year': ['1987']},
+            })
+            self.assertIn('900201', [row['edition_ref'] for row in response['candidates']])
+            self.assertEqual(response['decision'], {'status': 'review', 'reason': 'insufficient'})
+
 
     def test_high_score_without_volume_survives_many_wanted_albums(self) -> None:
         from bdnex.importer.bedetheque.sitemap import sitemap_urls

@@ -9,7 +9,7 @@ from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
 from library.names import METHOD as NAME_METHOD
 from library.work_identity import (
-    NUMBERED_SERIES_ALIASES, IDENTITY_FIELDS, WORK_FIELDS, asset_assertions, evaluate_work, classify_work,
+    NUMBERED_SERIES_ALIASES, WORK_FIELDS, asset_assertions, evaluate_work, classify_work,
     informative, known_work_value, normalized, present,
 )
 
@@ -264,7 +264,9 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
         status = page.status
         if status == 'ok':
             try:
-                canonical = parse_album_editions(page.body, selected['url'], page.retrieved_at)[0].to_match_candidate()
+                editions = [edition.to_match_candidate() for edition in
+                            parse_album_editions(page.body, selected['url'], page.retrieved_at)]
+                canonical = editions[0]
             except LibraryError:
                 status = 'unexpected_response'
             else:
@@ -272,9 +274,18 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
                     status = 'reference_mismatch'
                 else:
                     status = 'parsed'
-                    identity = {field: selected[field] for field in IDENTITY_FIELDS if present(selected.get(field))}
-                    row = {**selected, **canonical, **identity,
-                           'provenance': {**selected.get('provenance', {}), **canonical['provenance']}}
+                    row = dict(selected)
+                    for field in WORK_FIELDS:
+                        value = canonical.get(field)
+                        if present(value) and all(
+                            normalized(edition.get(field), field) == normalized(value, field)
+                            for edition in editions
+                        ):
+                            if not present(selected.get(field)) or normalized(selected[field], field) == normalized(value, field):
+                                row[field] = value
+                                field_source = canonical.get('field_provenance', {}).get(field)
+                                if field_source:
+                                    row.setdefault('field_provenance', {})[field] = field_source
         result['attempts'] = [{'url': selected['url'], 'status': status, 'reason': page.reason}]
         result['exact_page_attempts'] = [{'edition_ref': selected['edition_ref'], 'status': status}]
         result.update(

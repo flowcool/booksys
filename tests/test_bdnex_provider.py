@@ -214,7 +214,9 @@ class IdentityTests(unittest.TestCase):
 
         class Local:
             def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-                return {'status': 'ok', 'candidates': [candidate], 'decision': decision}
+                choice = ({'status': 'review', 'reason': 'conflicting_file_evidence'}
+                          if kwargs['identity'].get('number') == ['2', '3'] else decision)
+                return {'status': 'ok', 'candidates': [candidate], 'decision': choice}
 
         class Public:
             bdnex = Local()
@@ -236,6 +238,13 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(work['work']['title'], 'London')
         self.assertEqual(work['provenance'][0]['edition_ref'], '123')
         self.assertEqual(work['exact_page_attempts'], [{'edition_ref': '123', 'status': 'unavailable'}])
+
+        state['assets'][key] = result['assets'][key]
+        state['assets'][key]['origins'].append('new')
+        state['origins']['new'] = {'sha256': key, 'path': 'Example - T03 - London.cbz'}
+        updated = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
+        self.assertEqual(updated['assets'][key]['work_result']['status'], 'review')
+
 
     def test_bookys_heading_fallback_needs_independent_file_evidence(self) -> None:
         from copy import deepcopy

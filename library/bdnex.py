@@ -125,11 +125,15 @@ def identity_for(state: dict[str, Any], key: str) -> dict[str, list[str]]:
     from library.work_identity import asset_assertions, normalized
 
     fields: dict[str, set[str]] = {}
-    for assertion in asset_assertions(bind_evidence(state, key)):
+    evidence = bind_evidence(state, key)
+    for assertion in asset_assertions(evidence):
         field = assertion['field']
         value = str(normalized(assertion['value'], field)).lower()
         if value:
             fields.setdefault(field, set()).add(value if len(value) <= 512 else '#' + digest(value))
+    for label in evidence['labels']:
+        for year in re.findall(r'\(((?:18|19|20)\d{2})\)', label):
+            fields.setdefault('year', set()).add(year)
     # Two distinct values suffice to report conflicting file evidence.
     return {field: sorted(choices)[:2] for field, choices in fields.items()}
 

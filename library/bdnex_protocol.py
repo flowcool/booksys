@@ -9,7 +9,7 @@ from typing import Any
 PIN = '9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33'
 MIN_CANDIDATE_SCORE = 60
 STRONG_SCORE = 90
-IDENTITY_KEYS = frozenset({'title', 'series', 'number', 'integral'})
+IDENTITY_KEYS = frozenset({'title', 'series', 'number', 'integral', 'year'})
 MAX_BODY = 16384
 MAX_RESPONSE = 65536
 

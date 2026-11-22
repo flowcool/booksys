@@ -151,13 +151,27 @@ class Engine:
             return {'status': 'review', 'reason': 'conflicting_file_evidence'}
         number = next(iter(identity.get('number', [])), None)
         series = next(iter(identity.get('series', [])), None)
-        compatible = [row for row in candidates if not row.get('number') or (
-            identity.get('integral') != ['true'] and
-            (number is None or normalized(row['number'], 'number') == number)
-        )]
+        title = next(iter(identity.get('title', [])), None)
+        year = next(iter(identity.get('year', [])), None)
+
+        def agrees(row: dict[str, Any]) -> bool:
+            row_series = normalized(row.get('series') or '', 'series')
+            row_title = normalized(row.get('title') or '', 'title')
+            if row.get('number') and (identity.get('integral') == ['true']
+                                      or (number and normalized(row['number'], 'number') != number)):
+                return False
+            if year and series and row_series.startswith(series + ' '):
+                dates = re.findall(r'\b(?:18|19|20)\d{2}\b', row_series[len(series):])
+                if dates and year not in dates:
+                    return False
+            if title and row_title and row_title != row_series and row_title != title:
+                return False
+            return not series or not row_series or row_series == series or row_series.startswith(series + ' ') or (
+                bool(title) and row_title == title
+            )
+
+        compatible = [row for row in candidates if agrees(row)]
         strong = [row for row in compatible if row['score'] >= STRONG_SCORE]
-        if len(strong) == 1:
-            return {'status': 'selected', 'reason': 'strong', 'edition_ref': strong[0]['edition_ref']}
 
         refs: set[str] = set()
         if series and number:
@@ -165,15 +179,20 @@ class Engine:
                 label = normalized(slug, 'series')
                 if label == series or label.startswith(series + ' '):
                     refs.add(ref)
-            if len(refs) == 1:
-                for row in compatible:
-                    label = normalized(row.get('series') or '', 'series')
-                    if (row['edition_ref'] not in refs or not row.get('number')
-                            or not (label == series or label.startswith(series + ' '))):
-                        continue
-                    dated_variant = re.search(r'\b(?:18|19|20)\d{2}\b', label[len(series):])
-                    if dated_variant and normalized(row.get('title') or '', 'title') not in identity.get('title', []):
-                        break
-                    return {'status': 'selected', 'reason': 'numbered', 'edition_ref': row['edition_ref']}
-        reason = 'ambiguous' if len(strong) > 1 or len(refs) > 1 else 'insufficient'
-        return {'status': 'review', 'reason': reason}
+        if len(strong) > 1 or (len(refs) > 1 and not (
+            len(strong) == 1 and title and normalized(strong[0].get('title') or '', 'title') == title
+        )):
+            return {'status': 'review', 'reason': 'ambiguous'}
+        if len(strong) == 1:
+            return {'status': 'selected', 'reason': 'strong', 'edition_ref': strong[0]['edition_ref']}
+        if series and number and len(refs) == 1:
+            for row in compatible:
+                label = normalized(row.get('series') or '', 'series')
+                if (row['edition_ref'] not in refs or not row.get('number')
+                        or not (label == series or label.startswith(series + ' '))):
+                    continue
+                dated_variant = re.search(r'\b(?:18|19|20)\d{2}\b', label[len(series):])
+                if dated_variant and not year and normalized(row.get('title') or '', 'title') not in identity.get('title', []):
+                    break
+                return {'status': 'selected', 'reason': 'numbered', 'edition_ref': row['edition_ref']}
+        return {'status': 'review', 'reason': 'insufficient'}

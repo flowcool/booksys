@@ -50,6 +50,8 @@ def handler(token: str, match: Callable[[dict[str, Any]], dict[str, Any]]) -> ty
             try:
                 result = match(request)
                 rows = validate_candidates(result['candidates'])
+                if 'decision' in result:
+                    validate_decision(result['decision'], rows)
                 payload = {**result, 'schema': 1, 'asset': request['asset'], 'request': digest(request), 'engine': PIN}
                 if not valid_match_counts(payload.get('match_counts'), len(rows)):
                     payload.pop('match_counts', None)

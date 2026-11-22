@@ -338,18 +338,30 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
            references: list[tuple[str, str]]) -> dict[str, Any]:
     state = store.result_set('identify', {'assets': [asset_id]})
     asset = state['assets'][asset_id]
+    from library.bdnex import identity_for, inputs_for
+    from library.bdnex_protocol import digest
     from library.work_enrichment import apply_bdnex_decision, enrich_work
     local_candidates = []
     exact_page_attempts: list[dict[str, str]] = []
     client = getattr(providers, 'bdnex', None)
+    inputs = inputs_for(state, asset_id) if client is not None or asset.get('bdnex', {}).get('decision_input') else []
+    identity = identity_for(state, asset_id) if inputs else {}
+    decision_input = digest({'inputs': inputs, 'identity': identity})
     if (asset.get('work_result', {}).get('status') == 'identified'
             and asset.get('bdnex', {}).get('status') == 'ok'):
         # Retry enrichment from retained proposals without querying BDneX again.
         # Re-evaluate against current asset evidence before retaining identity.
-        if not references and apply_bdnex_decision(state, asset_id, providers, asset['bdnex']):
-            return state
-        local_candidates = asset['bdnex']['candidates']
-        heading_candidates = asset['bdnex'].get('bookys_heading_fallback', {}).get('candidates', [])
+        retained = asset['bdnex']
+        if 'decision_input' in retained:
+            if retained['decision_input'] == decision_input:
+                if not references and apply_bdnex_decision(state, asset_id, providers, retained):
+                    return state
+            else:
+                # Changed file evidence requires a new provider decision.
+                asset.pop('bdnex')
+                asset.pop('work_result')
+        local_candidates = asset.get('bdnex', {}).get('candidates', [])
+        heading_candidates = asset.get('bdnex', {}).get('bookys_heading_fallback', {}).get('candidates', [])
         if heading_candidates:
             local_candidates = [*local_candidates, *_corroborated_heading_candidates(state, asset_id, heading_candidates)]
         enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
@@ -358,10 +370,10 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
             return state
         local_candidates = asset['work_result']['candidates']
     if client is not None and asset.get('work_result', {}).get('status') != 'identified':
-        from library.bdnex import identity_for, inputs_for
-        inputs = inputs_for(state, asset_id)
         if inputs:
-            response = client.match(asset_id, inputs, identity=identity_for(state, asset_id))
+            response = client.match(asset_id, inputs, identity=identity)
+            if 'decision' in response:
+                response = {**response, 'decision_input': decision_input}
             asset['bdnex'] = response
             if response['status'] == 'ok':
                 if not references and apply_bdnex_decision(state, asset_id, providers, response):
