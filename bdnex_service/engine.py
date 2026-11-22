@@ -1,6 +1,7 @@
 """Reuse the pinned native matcher with an immutable SQLite sitemap snapshot."""
 from __future__ import annotations
 
+from collections import defaultdict
 from contextvars import ContextVar
 import hashlib
 from pathlib import Path
@@ -9,7 +10,8 @@ import sqlite3
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from library.bdnex_protocol import validate_candidates
+from library.bdnex_protocol import STRONG_SCORE, validate_candidates
+from library.work_identity import normalized
 
 _hints: ContextVar[dict[str, str]] = ContextVar('embedded_hints', default={})
 MIN_SCORE = 70
@@ -95,7 +97,13 @@ class Engine:
             if not terminal:
                 raise ValueError('Missing terminal sitemap')
             self.source = VolumeFirstBedetheque(cache)
-            self.count = len(self.source.catalogue())
+            catalogue = self.source.catalogue()
+            self.count = len(catalogue)
+            self.numbered: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            for candidate in catalogue:
+                series, separator, _ = candidate.url.split('/BD-', 1)[-1].partition('-Tome-')
+                if separator and candidate.volume is not None:
+                    self.numbered[str(candidate.volume)].append((series, candidate.source_id))
             self.index = revision.hexdigest()
         finally:
             cache.close()
@@ -132,5 +140,40 @@ class Engine:
                 if info.source_id not in rows or rows[info.source_id]['score'] < match.score:
                     rows[info.source_id] = row
         candidates = sorted(rows.values(), key=lambda row: row['score'], reverse=True)
-        return {'index': self.index, 'candidates': validate_candidates(candidates),
-                'match_counts': {'native': native, 'filtered': filtered}}
+        result = {'index': self.index, 'candidates': validate_candidates(candidates),
+                  'match_counts': {'native': native, 'filtered': filtered}}
+        if 'identity' in request and candidates:
+            result['decision'] = self.decide(candidates, request['identity'])
+        return result
+
+    def decide(self, candidates: list[dict[str, Any]], identity: dict[str, list[str]]) -> dict[str, str]:
+        if any(len(values) > 1 for values in identity.values()):
+            return {'status': 'review', 'reason': 'conflicting_file_evidence'}
+        number = next(iter(identity.get('number', [])), None)
+        series = next(iter(identity.get('series', [])), None)
+        compatible = [row for row in candidates if not row.get('number') or (
+            identity.get('integral') != ['true'] and
+            (number is None or normalized(row['number'], 'number') == number)
+        )]
+        strong = [row for row in compatible if row['score'] >= STRONG_SCORE]
+        if len(strong) == 1:
+            return {'status': 'selected', 'reason': 'strong', 'edition_ref': strong[0]['edition_ref']}
+
+        refs: set[str] = set()
+        if series and number:
+            for slug, ref in self.numbered.get(number, ()):
+                label = normalized(slug, 'series')
+                if label == series or label.startswith(series + ' '):
+                    refs.add(ref)
+            if len(refs) == 1:
+                for row in compatible:
+                    label = normalized(row.get('series') or '', 'series')
+                    if (row['edition_ref'] not in refs or not row.get('number')
+                            or not (label == series or label.startswith(series + ' '))):
+                        continue
+                    dated_variant = re.search(r'\b(?:18|19|20)\d{2}\b', label[len(series):])
+                    if dated_variant and normalized(row.get('title') or '', 'title') not in identity.get('title', []):
+                        break
+                    return {'status': 'selected', 'reason': 'numbered', 'edition_ref': row['edition_ref']}
+        reason = 'ambiguous' if len(strong) > 1 or len(refs) > 1 else 'insufficient'
+        return {'status': 'review', 'reason': reason}

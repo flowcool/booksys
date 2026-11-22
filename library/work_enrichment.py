@@ -9,7 +9,8 @@ from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
 from library.names import METHOD as NAME_METHOD
 from library.work_identity import (
-    NUMBERED_SERIES_ALIASES, asset_assertions, evaluate_work, classify_work, informative, normalized,
+    NUMBERED_SERIES_ALIASES, IDENTITY_FIELDS, WORK_FIELDS, asset_assertions, evaluate_work, classify_work,
+    informative, known_work_value, normalized, present,
 )
 
 COMPETING_NUMBERED_SERIES = {'garry': frozenset({
@@ -222,6 +223,10 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     if any(event.get('reason') == 'Request budget exhausted'
            for event in getattr(providers, 'events', [])[event_start:]):
         result['source_status'] = 'budget_exhausted'
+    save_work_result(asset, result)
+
+
+def save_work_result(asset: dict[str, Any], result: dict[str, Any]) -> None:
     if result['status'] == 'identified':
         assertions = []
         for row in result['concordant_candidates']:
@@ -234,3 +239,50 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
         result['work'].update({k: classification[k] for k in ('family', 'genres', 'adult', 'recommended_age')})
         result['field_conflicts'].update(classification['field_conflicts'])
     asset['work_result'] = result
+
+
+def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
+                        response: dict[str, Any]) -> bool:
+    decision = response.get('decision', {})
+    if decision.get('status') not in ('selected', 'review') or decision.get('reason') == 'insufficient':
+        return False
+    asset = state['assets'][key]
+    evidence = bind_evidence(state, key)
+    candidates = response['candidates']
+    result: dict[str, Any] = {
+        'status': 'review', 'reason': 'BDneX found no decisive reference', 'work': {},
+        'field_conflicts': {}, 'provenance': [], 'candidates': candidates, 'concordant_candidates': [],
+        'evidence': evidence, 'attempts': [], 'exact_page_attempts': [], 'updated_at': now(),
+        'bdnex_decision': decision,
+    }
+    if decision['status'] == 'selected':
+        selected = next(row for row in candidates if row['edition_ref'] == decision['edition_ref'])
+        previous = asset.get('work_result', {})
+        retained = previous.get('concordant_candidates', []) if previous.get('bdnex_decision') == decision else []
+        row = retained[0] if retained else selected
+        page = FrenchSource(providers).get(selected['url'])
+        status = page.status
+        if status == 'ok':
+            try:
+                canonical = parse_album_editions(page.body, selected['url'], page.retrieved_at)[0].to_match_candidate()
+            except LibraryError:
+                status = 'unexpected_response'
+            else:
+                if canonical['provenance'].get('canonical_album_ref') != selected['edition_ref']:
+                    status = 'reference_mismatch'
+                else:
+                    status = 'parsed'
+                    identity = {field: selected[field] for field in IDENTITY_FIELDS if present(selected.get(field))}
+                    row = {**selected, **canonical, **identity,
+                           'provenance': {**selected.get('provenance', {}), **canonical['provenance']}}
+        result['attempts'] = [{'url': selected['url'], 'status': status, 'reason': page.reason}]
+        result['exact_page_attempts'] = [{'edition_ref': selected['edition_ref'], 'status': status}]
+        result.update(
+            status='identified', reason='BDneX selected one reference', concordant_candidates=[row],
+            work={field: row[field] for field in WORK_FIELDS if known_work_value(field, row.get(field))},
+            provenance=[{'source': selected['source'], 'edition_ref': selected['edition_ref'],
+                         'url': selected['url'], 'score': selected['score'],
+                         'decision': decision['reason'], **selected.get('provenance', {})}],
+        )
+    save_work_result(asset, result)
+    return True

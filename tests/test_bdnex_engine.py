@@ -11,6 +11,39 @@ from bdnex_service.engine import Engine, SitemapCache, validate_xml
 
 @unittest.skipUnless(importlib.util.find_spec('bdnex'), 'Pinned engine lives in the separate container')
 class EngineTests(unittest.TestCase):
+    def test_numbered_choice_uses_the_full_index_and_accepts_a_lower_score(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            cache = SitemapCache(path, writable=True)
+            urls = sitemap_urls()
+            albums = [
+                'Akim-1re-serie-aventures-voyages-Tome-296-La-colere-du-tigre-900296',
+                'Akim-1re-serie-aventures-voyages-Tome-297-Titre-long-900297',
+                'Archie-Editions-Tome-4-Anniversaire-900004',
+                'Archie-Autre-serie-Tome-4-Aventure-900014',
+            ]
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums
+            ) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', urls[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', urls[1], b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            response = engine.match({
+                'inputs': [{'path': 'Akim - 296.cbz', 'embedded': {}}],
+                'identity': {'series': ['akim'], 'number': ['296']},
+            })
+            self.assertLess(response['candidates'][0]['score'], 70)
+            self.assertEqual(response.get('decision'),
+                             {'status': 'selected', 'edition_ref': '900296', 'reason': 'numbered'})
+            response = engine.match({
+                'inputs': [{'path': 'Archie - 4.cbz', 'embedded': {}}],
+                'identity': {'series': ['archie'], 'number': ['4']},
+            })
+            self.assertEqual(response['decision'], {'status': 'review', 'reason': 'ambiguous'})
+
     def test_high_score_without_volume_survives_many_wanted_albums(self) -> None:
         from bdnex.importer.bedetheque.sitemap import sitemap_urls
         with tempfile.TemporaryDirectory() as folder:
@@ -119,6 +152,13 @@ class EngineTests(unittest.TestCase):
                     [{'path': 'Nains T01.cbz', 'embedded': {}}])
                 self.assertEqual(response['status'], 'ok')
                 self.assertEqual(response['index'], old_index)
+                response = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'secret').match(
+                    'a'*64, [{'path': 'does-not-exist.cbz', 'embedded': {
+                        'Web': 'https://www.bedetheque.com/BD-Nains-Tome-1-Redwin-de-la-Forge-245127.html'}}],
+                    identity={},
+                )
+                self.assertEqual(response['decision'],
+                                 {'status': 'selected', 'edition_ref': '245127', 'reason': 'strong'})
             finally:
                 server.shutdown()
                 server.server_close()

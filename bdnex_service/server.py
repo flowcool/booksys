@@ -6,7 +6,7 @@ import json
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable
 
-from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates, valid_match_counts
+from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates, validate_decision, valid_match_counts
 
 
 def handler(token: str, match: Callable[[dict[str, Any]], dict[str, Any]]) -> type[BaseHTTPRequestHandler]:

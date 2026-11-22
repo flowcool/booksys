@@ -1,16 +1,23 @@
-# BDneX candidate provider
+# BDneX identification
 
 The metadata worker can query a private BDneX service before public discovery.
 Set `BOOKSYS_BDNEX_URL` and `BOOKSYS_BDNEX_TOKEN_FILE` in the metadata role.
 Leave the URL unset to keep the existing providers only.
 The token file must be readable by the worker and service users.
 
-The worker sends at most three logical names and existing ComicInfo hints.
-It sends no archives or absolute storage paths. BDneX proposes candidates
-with scores of at least 70, or at least 60 when the volume and the series words agree. Booksys keeps its existing identity and admission
-checks. A score does not establish identity. Unknown fields stay unknown.
-Concordant references use existing exact-page enrichment. Uncertain results
-and service outages fall back to the existing public providers.
+The worker sends up to three logical names, ComicInfo hints and normalized
+identity hints bound to the file. The service returns candidates at 70 or
+above. It also returns candidates at 60 or above when the volume and series
+words agree. A unique strong candidate at 90 or above can select the reference.
+Below 90, the service can select a candidate when the series and volume point
+to one reference in the full sitemap. A dated series variant needs title
+agreement. Competing references and conflicting file evidence go to review.
+
+Booksys records the selected identity and uses the exact page for enrichment.
+A missing or invalid page leaves the selected reference in place. The existing
+classification and admission checks still apply. The existing discovery path
+handles empty results, insufficient evidence and service outages. Candidate-only
+responses from older service images retain their existing path.
 If the original lookup cannot identify a directly downloaded Bookys album,
 Booksys can try its captured heading as one extra logical name. The heading
 must supply a series and issue. Candidates from that search require agreement
@@ -39,7 +46,8 @@ Do not add a second refresh scheduler.
 `POST /v1/match` requires Bearer authentication. The client binds the response
 to the asset, input digest and pinned engine. Requests are limited to 16 KiB;
 responses to 64 KiB. The timeout is five seconds, with a 60-second local
-cooldown after failure. Redirects and ambient HTTP proxies are disabled.
+cooldown after failure. A request can carry optional identity hints. The service
+can return a decision tied to a reference in its candidate list. Redirects and ambient HTTP proxies are disabled.
 
 Rollback: unset `BOOKSYS_BDNEX_URL` and restart the metadata role. Existing
 providers continue. Retain the service index and original archives.

@@ -338,7 +338,7 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
            references: list[tuple[str, str]]) -> dict[str, Any]:
     state = store.result_set('identify', {'assets': [asset_id]})
     asset = state['assets'][asset_id]
-    from library.work_enrichment import enrich_work
+    from library.work_enrichment import apply_bdnex_decision, enrich_work
     local_candidates = []
     exact_page_attempts: list[dict[str, str]] = []
     client = getattr(providers, 'bdnex', None)
@@ -346,6 +346,8 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
             and asset.get('bdnex', {}).get('status') == 'ok'):
         # Retry enrichment from retained proposals without querying BDneX again.
         # Re-evaluate against current asset evidence before retaining identity.
+        if not references and apply_bdnex_decision(state, asset_id, providers, asset['bdnex']):
+            return state
         local_candidates = asset['bdnex']['candidates']
         heading_candidates = asset['bdnex'].get('bookys_heading_fallback', {}).get('candidates', [])
         if heading_candidates:
@@ -356,13 +358,17 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
             return state
         local_candidates = asset['work_result']['candidates']
     if client is not None and asset.get('work_result', {}).get('status') != 'identified':
-        from library.bdnex import inputs_for
+        from library.bdnex import identity_for, inputs_for
         inputs = inputs_for(state, asset_id)
         if inputs:
-            response = client.match(asset_id, inputs)
+            response = client.match(asset_id, inputs, identity=identity_for(state, asset_id))
             asset['bdnex'] = response
             if response['status'] == 'ok':
-                local_candidates = response['candidates']
+                if not references and apply_bdnex_decision(state, asset_id, providers, response):
+                    return state
+                decision = response.get('decision', {})
+                insufficient = not references and decision.get('reason') == 'insufficient'
+                local_candidates = [] if insufficient else response['candidates']
                 enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
                             exact_page_attempts=exact_page_attempts)
                 if asset['work_result']['status'] == 'identified' and not references:

@@ -196,6 +196,47 @@ class ProtocolTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
+    def test_bdnex_selection_survives_unavailable_enrichment(self) -> None:
+        from copy import deepcopy
+
+        key = 'a' * 64
+        candidate = {'source': 'bedetheque', 'edition_ref': '123',
+                     'url': 'https://www.bedetheque.com/BD-Example-English-Tome-2-123.html',
+                     'series': 'Example English', 'number': '2', 'title': 'London', 'score': 94}
+        state = {'assets': {key: {'sha256': key, 'origins': ['o'],
+                                 'embedded': {'Series': 'Example', 'Number': '2', 'Title': 'London'}}},
+                 'origins': {'o': {'sha256': key, 'path': 'Example - T02 - London.cbz'}}}
+        decision = {'status': 'selected', 'edition_ref': '123', 'reason': 'strong'}
+
+        class Snapshot:
+            def result_set(self, *args: Any) -> dict[str, Any]:
+                return deepcopy(state)
+
+        class Local:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                return {'status': 'ok', 'candidates': [candidate], 'decision': decision}
+
+        class Public:
+            bdnex = Local()
+
+            def get(self, url: str) -> dict[str, Any]:
+                if url.endswith('/robots.txt'):
+                    return {'status': 'ok', 'body': 'User-agent: *\nAllow: /\n'}
+                return {'status': 'unavailable', 'http_status': 503}
+
+            def discover(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                return {}
+
+            def resolve_discovery(self, discovery: dict[str, Any]) -> list[dict[str, Any]]:
+                return []
+
+        result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
+        work = result['assets'][key]['work_result']
+        self.assertEqual(work['status'], 'identified')
+        self.assertEqual(work['work']['title'], 'London')
+        self.assertEqual(work['provenance'][0]['edition_ref'], '123')
+        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': '123', 'status': 'unavailable'}])
+
     def test_bookys_heading_fallback_needs_independent_file_evidence(self) -> None:
         from copy import deepcopy
 
@@ -226,7 +267,7 @@ class IdentityTests(unittest.TestCase):
                     def __init__(self) -> None:
                         self.paths: list[str] = []
 
-                    def match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+                    def match(self, asset: str, inputs: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
                         self.paths.extend(item['path'] for item in inputs)
                         return {'status': 'ok', 'candidates': [candidate] if 'T01' in self.paths[-1] else []}
 
@@ -262,7 +303,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 return {'status': 'ok', 'candidates': candidates}
 
         class Public:
@@ -347,7 +388,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 return {'status': 'ok', 'candidates': [{'source': 'bedetheque', 'edition_ref': '123',
                     'url': 'https://www.bedetheque.com/BD-Old-title-123.html', 'title': 'Old title', 'score': 100}]}
 
@@ -400,7 +441,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 raise AssertionError('Identified assets are excluded from local replay')
 
         class Offline:
@@ -420,7 +461,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 return {'status': 'unavailable', 'dependency': 'bdnex', 'reason': 'Offline'}
 
         class Public:
@@ -457,7 +498,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 return {'status': 'ok', 'candidates': [{'source': 'bedetheque', 'edition_ref': '245127',
                     'url': 'https://www.bedetheque.com/BD-Nains-Tome-1-Redwin-de-la-Forge-245127.html',
                     'title': 'Redwin de la Forge', 'series': 'Nains', 'number': '1', 'score': 89}]}

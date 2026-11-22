@@ -3,7 +3,7 @@
 ARG BDNEX_IMAGE=booksys-bdnex-upstream:9de29a73
 FROM ${BDNEX_IMAGE}
 WORKDIR /opt/booksys-bdnex
-COPY library/__init__.py library/bdnex_protocol.py ./library/
+COPY library/__init__.py library/bdnex_protocol.py library/work_identity.py ./library/
 COPY bdnex_service ./bdnex_service/
 RUN python -c 'from importlib.metadata import version; assert version("bdnex") == "0.10.0"'
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
