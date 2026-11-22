@@ -14,7 +14,7 @@ to one reference in the full sitemap. A dated series variant needs title
 agreement. Competing references and conflicting file evidence go to review.
 
 A selected BDneX reference is a proposal. The finalizer checks contradictions first.
-These include file fields, the embedded Web album ID, primary credits and dated series.
+These include file fields, the embedded Web work, primary credits and dated series.
 No cover or exemption can override a contradiction.
 It then checks exemptions in this order: embedded Web, informative asset title,
 explicit primary creator. Otherwise, it requires cover confirmation.
@@ -26,7 +26,14 @@ ComicInfo `Web` is asset-bound evidence only for canonical
 query strings, fragments and malformed IDs are rejected.
 An indexed Web album becomes the proposal even when native matching returns
 another album or no album. The worker still hydrates and checks that exact page.
-Web exemption requires the same album ID and no conflicting file fields.
+Web exemption requires the same work and no conflicting file fields.
+Compare normalized series, number and title from the album slugs. Keep both IDs
+in `web_comparisons`; different edition IDs alone do not conflict. A retained
+edition card resolves through its parser-bound album URL and edition-record ID.
+A Web URL for that same album uses the current candidate slug, so a stale name
+in the Web URL does not create a conflict. Unresolved slugs remain in review.
+A differing known series, number or title is a work conflict. Missing fields
+cannot prove a contradiction.
 The receipt records `basis` as `web`, `title`, `creator` or `cover`.
 
 The service also retrieves exact series/number proposals from the full sitemap.
@@ -41,8 +48,11 @@ If the original lookup cannot identify a directly downloaded Bookys album,
 Booksys can try its captured heading as one extra logical name. The heading
 must supply a series and issue. Candidates from that search require agreement
 with evidence from the file before they can enter identity validation.
-Already identified assets do not trigger new BDneX requests. Existing metadata
-scheduling supplies progressive replay. No bulk replay is started by index refresh.
+Already identified assets keep their work result and evidence in automatic cycles.
+Metadata scheduling excludes them, even after a method or evidence revision change.
+Already queued metadata tasks return the accepted result before any provider call.
+Explicit reference requests retain their enrichment path. The cover guard applies
+to new automatic acceptances. It does not start a bulk replay of accepted work.
 
 Cover confirmation uses `bdnex-9de29a73-sift-height600-ratio06-v1` and the
 provisional threshold 40. It preserves the upstream 600-pixel height and ratio

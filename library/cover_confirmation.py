@@ -63,6 +63,53 @@ def identity_conflict(evidence: dict[str, Any], row: dict[str, Any], *, indexed:
     return bool(dates and file_years and dates != file_years)
 
 
+def work_slug(row: dict[str, Any]) -> str | None:
+    """Resolve a retained edition card through its parser-bound album URL.
+
+    Edition-record ids and canonical album ids use different namespaces. Never
+    reinterpret the former as the latter or fetch a page to repair absent proof.
+    """
+    url = row.get('url')
+    if bedetheque_album_id(url) is not None and bedetheque_album_id(url) == row.get('edition_ref'):
+        return str(url)
+    provenance = row.get('provenance', {})
+    if (row.get('edition_record') is True and provenance.get('edition_record_id') == row.get('edition_ref')
+            and url == 'https://www.bedetheque.com/album/index/i/' + str(row.get('edition_ref'))
+            and bedetheque_album_id(provenance.get('url'))):
+        return str(provenance['url'])
+    return None
+
+
+def slug_identity(url: str) -> dict[str, str]:
+    stem = url.split('/BD-', 1)[1].rsplit('-', 1)[0]
+    match = re.fullmatch(r'(.+)-Tome-([0-9]+)(?:-(.*))?', stem)
+    if match:
+        return {'series': normalized(match[1], 'series'), 'number': normalized(match[2], 'number'),
+                'title': normalized(match[3] or '', 'title')}
+    # Unstructured slugs can prove equality, but cannot locate a difference in
+    # series, number or title. Keep a differing unstructured slug unresolved.
+    return {'stem': normalized(stem)}
+
+
+def web_comparison(web: str, row: dict[str, Any]) -> dict[str, Any]:
+    candidate_url = work_slug(row)
+    same_album = candidate_url is not None and bedetheque_album_id(web) == bedetheque_album_id(candidate_url)
+    # A retained Web label can predate an index rename of this exact album.
+    # Resolve that id to the candidate's current slug before comparing works.
+    left = slug_identity(candidate_url if same_album and candidate_url else web)
+    right = slug_identity(candidate_url) if candidate_url else None
+    same = left == right
+    conflict = (right is not None and 'stem' not in left and 'stem' not in right
+                and any(left[field] and right[field] and left[field] != right[field]
+                        for field in ('series', 'number', 'title')))
+    return {'web_album_id': bedetheque_album_id(web), 'candidate_album_id': row.get('edition_ref'),
+            'web_url': web, 'candidate_url': row.get('url'), 'resolved_album_url': candidate_url,
+            'web_work': left, 'candidate_work': right,
+            'result': 'same_work' if same else 'different_work' if conflict else 'unresolved',
+            'basis': 'same_album_reference' if same_album else
+                     'normalized_index_slug' if candidate_url else 'missing_album_slug'}
+
+
 def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
              source: CoverSource | None = None) -> None:
     """Finalize every automatic Bedetheque proposal before classification.
@@ -111,8 +158,10 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     web = [a for a in evidence.get('provenance', {}).get('web', [])
            if a.get('scope') == 'asset' and a.get('source') == 'embedded:' + asset['sha256']
            and bedetheque_album_id(a.get('value'))]
-    if any(bedetheque_album_id(a['value']) != candidate.get('edition_ref')
-           for a in web for candidate in rows):
+    comparisons = [web_comparison(a['value'], candidate) for a in web for candidate in rows]
+    if comparisons:
+        receipt['web_comparisons'] = comparisons
+    if any(item['result'] == 'different_work' for item in comparisons):
         review('web_conflict')
         return
     assertions = asset_assertions(evidence)
@@ -144,6 +193,9 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         review('page_' + page_statuses[-1])
         return
     if web:
+        if any(item['result'] == 'unresolved' for item in comparisons):
+            review('web_unresolved')
+            return
         if not page_statuses and row.get('provenance', {}).get('canonical_album_ref') != row.get('edition_ref'):
             review('page_unavailable')
             return

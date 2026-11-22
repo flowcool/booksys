@@ -45,7 +45,7 @@ def replay_details(inputs: Path, output: Path) -> int:
         rows.append({'asset': raw['id'], 'recorded': raw['status'], 'proposed': before,
                      'status': proposed['status'], 'reason': proposed['reason'],
                      'cover_result': receipt.get('result'), 'cover_reason': receipt.get('reason'),
-                     'basis': receipt.get('basis'),
+                     'basis': receipt.get('basis'), 'cover_receipt': receipt,
                      'different_work': (previous.get('status') == proposed['status'] == 'identified'
                          and any(normalized(proposed['work'].get(field, ''), field) != normalized(value, field)
                                  for field, value in previous.get('work', {}).items()

@@ -360,6 +360,10 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
            references: list[tuple[str, str]], *, reception: Path | None = None) -> dict[str, Any]:
     state = store.result_set('identify', {'assets': [asset_id]})
     asset = state['assets'][asset_id]
+    # Automatic cycles preserve accepted identities and their original evidence.
+    # This also protects tasks already queued before a metadata method update.
+    if not references and asset.get('work_result', {}).get('status') == 'identified':
+        return state
     from library.origins import resolve_asset
     cover_source = (lambda: resolve_asset(store, reception, state, asset_id)) if reception is not None else None
     from library.bdnex import identity_for, inputs_for

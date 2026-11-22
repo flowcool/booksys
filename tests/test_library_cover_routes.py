@@ -56,6 +56,41 @@ class CoverRouteTests(unittest.TestCase):
                 apply_bdnex_decision(state, 'a'*64, providers, response)
                 self.assert_guarded(state)
 
+    def test_identified_asset_keeps_previous_evidence_after_method_bumps(self):
+        from datetime import datetime, timezone
+        from library.automatic import evidence_version
+        from library.business_stages import BusinessStages
+        from library.stage_model import METHODS, Obligation, Task
+
+        state, row, providers = self.setup_route()
+        key = 'a'*64
+        asset = state['assets'][key]
+        asset.update(status='validated', origins=['o'], bdnex={'status': 'ok', 'candidates': [row]})
+        state['origins']['o'] = {'availability': 'validated'}
+        previous = {'status': 'identified', 'work': {'series': 'Series', 'number': '2'},
+                    'evidence': {'asset': key, 'previous_method': 'pre-cover-guard'}}
+        asset['work_result'] = deepcopy(previous)
+        asset['automation'] = {'method': 'work-metadata-2026-11-22-v5-web-cover', 'evidence': 'old'}
+        asset['stage_metadata'] = {'method': 'metadata-step-v5-web-cover', 'evidence': 'old',
+                                  'evaluation': 'prior', 'outcome': 'done',
+                                  'next_at': '2026-11-01T00:00:00+00:00'}
+        at = datetime(2026, 11, 22, tzinfo=timezone.utc)
+        # The previous evidence revision differs. A method bump and an expired
+        # schedule still must not enqueue an already accepted identity.
+        self.assertNotEqual(asset['stage_metadata']['evidence'], evidence_version(asset))
+        self.assertNotIn('metadata', [o.stage for o in BusinessStages.obligations(state, key, now=at)])
+        # A task queued before the update also reaches the normal worker step.
+        # Use a detached catalogue adapter; no DB or provider is allowed.
+        snapshot = SimpleNamespace(result_set=lambda *a: deepcopy(state), prepare=lambda s: s)
+        providers.get = lambda *a: self.fail('Accepted identity must not fetch a page')
+        providers.bdnex = SimpleNamespace(match=lambda *a, **kw: self.fail('Must not query BDneX'))
+        obligation = Obligation('metadata', key, 'prior', METHODS['metadata'])
+        task = Task(obligation.key, 'metadata', key, 'prior', METHODS['metadata'], None, at.isoformat())
+        stages = BusinessStages(snapshot, Path('/unused'), Path('/unused'), providers)
+        completed = stages.execute(task, now=at)
+        self.assertEqual(completed.prepared['assets'][key]['work_result'], previous)
+        self.assertNotIn('metadata', [o.stage for o in completed.successors])
+
     def test_candidate_only_hydration_and_plain_series_number(self):
         for hydrate in (True, False):
             with self.subTest(hydrate=hydrate):
@@ -126,6 +161,9 @@ class CoverRouteTests(unittest.TestCase):
             snapshot = SimpleNamespace(result_set=lambda *a: deepcopy(state))
             with self.subTest(retained=retained), patch('library.work_enrichment.discover', return_value=DiscoveryResult('no_candidate')):
                 result = prepare_enrichment(snapshot, key, providers, [])
-                self.assert_guarded(result)
-                if not retained:
+                if retained:
+                    self.assertEqual(result['assets'][key]['work_result'], state['assets'][key]['work_result'])
+                    self.assertEqual(providers.bdnex.calls, 0)
+                else:
+                    self.assert_guarded(result)
                     self.assertEqual(providers.bdnex.calls, 2)

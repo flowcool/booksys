@@ -28,6 +28,86 @@ class WebIdentityTests(unittest.TestCase):
         self.assertEqual(result['evidence']['provenance']['web'][0]['source'], 'embedded:' + 'a'*64)
         providers.get_binary.assert_not_called()
 
+    def test_other_edition_of_same_work_uses_web_exemption(self):
+        state, row, providers, response = self.route(
+            'https://www.bedetheque.com/BD-Series-Tome-02-999.html')
+        apply_bdnex_decision(state, 'a'*64, providers, response)
+        result = state['assets']['a'*64]['work_result']
+        self.assertEqual(result['status'], 'identified', result)
+        receipt = result['evidence']['cover_confirmation']
+        self.assertEqual(receipt['basis'], 'web')
+        self.assertEqual(receipt['web_comparisons'][0]['web_album_id'], '999')
+        self.assertEqual(receipt['web_comparisons'][0]['candidate_album_id'], '123')
+        self.assertEqual(receipt['web_comparisons'][0]['result'], 'same_work')
+        providers.get_binary.assert_not_called()
+
+    def test_same_album_resolves_stale_web_slug_to_current_candidate_slug(self):
+        state, row, providers, response = self.route(
+            'https://www.bedetheque.com/BD-Old-Series-Name-Tome-2-123.html')
+        apply_bdnex_decision(state, 'a'*64, providers, response)
+        result = state['assets']['a'*64]['work_result']
+        self.assertEqual(result['status'], 'identified', result)
+        comparison = result['evidence']['cover_confirmation']['web_comparisons'][0]
+        self.assertEqual(comparison['basis'], 'same_album_reference')
+        providers.get_binary.assert_not_called()
+
+    def test_work_differences_win_over_title_creator_and_cover(self):
+        for slug in ('Other-Series-Tome-2', 'Series-Tome-3'):
+            with self.subTest(slug=slug):
+                state, row, providers, response = self.route(
+                    'https://www.bedetheque.com/BD-' + slug + '-999.html')
+                state['assets']['a'*64]['embedded'].update(Title='Informative Album', Writer='Jane Writer')
+                apply_bdnex_decision(state, 'a'*64, providers, response)
+                result = state['assets']['a'*64]['work_result']
+                self.assertEqual(result['reason_code'], 'cover_web_conflict', result)
+                providers.get_binary.assert_not_called()
+
+    def test_different_explicit_slug_titles_are_a_work_conflict(self):
+        state, row, providers, response = self.route(
+            'https://www.bedetheque.com/BD-Series-Tome-2-Other-Album-999.html')
+        row['url'] = 'https://www.bedetheque.com/BD-Series-Tome-2-Informative-Album-123.html'
+        original = providers.get
+        providers.get = lambda url: {**original(url), 'body': original(url)['body'].replace(
+            'BD-Series-Tome-2-123.html', 'BD-Series-Tome-2-Informative-Album-123.html')}
+        apply_bdnex_decision(state, 'a'*64, providers, response)
+        self.assertEqual(state['assets']['a'*64]['work_result']['reason_code'], 'cover_web_conflict')
+        providers.get_binary.assert_not_called()
+
+    def test_missing_slug_title_is_unresolved_and_cannot_use_title_exemption(self):
+        state, row, providers, response = self.route(
+            'https://www.bedetheque.com/BD-Series-Tome-2-Other-Album-999.html')
+        state['assets']['a'*64]['embedded']['Title'] = 'Informative Album'
+        apply_bdnex_decision(state, 'a'*64, providers, response)
+        result = state['assets']['a'*64]['work_result']
+        self.assertEqual(result['reason_code'], 'cover_web_unresolved', result)
+        providers.get_binary.assert_not_called()
+
+    def test_edition_record_resolves_offline_or_stays_unresolved(self):
+        from library.asset_evidence import bind_evidence
+        from library.work_enrichment import save_work_result
+        from copy import deepcopy
+        for resolved in (True, False):
+            with self.subTest(resolved=resolved):
+                state, row, providers, response = self.route(
+                    'https://www.bedetheque.com/BD-Series-Tome-2-999.html')
+                state['assets']['a'*64]['embedded']['Title'] = 'Informative Album'
+                row.update(url='https://www.bedetheque.com/album/index/i/123', edition_record=True)
+                if resolved:
+                    row['provenance'].update(edition_record_id='123',
+                        url='https://www.bedetheque.com/BD-Series-Tome-2-456.html')
+                result = {'status': 'identified', 'work': {}, 'field_conflicts': {},
+                    'concordant_candidates': [deepcopy(row)],
+                    'evidence': bind_evidence(state, 'a'*64),
+                    'exact_page_attempts': [{'edition_ref': '123', 'status': 'parsed'}]}
+                save_work_result(state['assets']['a'*64], result, providers)
+                receipt = result['evidence']['cover_confirmation']
+                self.assertEqual(result['status'], 'identified' if resolved else 'review', result)
+                self.assertEqual(receipt['web_comparisons'][0]['result'],
+                                 'same_work' if resolved else 'unresolved')
+                if not resolved:
+                    self.assertEqual(result['reason_code'], 'cover_web_unresolved')
+                providers.get_binary.assert_not_called()
+
     def test_page_failure_blocks_even_a_concordant_title(self):
         state, row, providers, response = self.route()
         state['assets']['a'*64]['embedded']['Title'] = 'Informative Album'
@@ -74,7 +154,7 @@ class WebIdentityTests(unittest.TestCase):
             state, row, providers, response = self.route('https://www.bedetheque.com/BD-Series-Tome-2-123.html')
             state['assets']['a'*64]['embedded']['Title'] = 'Informative Album'
             if mode == 'web':
-                state['assets']['a'*64]['embedded']['Web'] = row['url'].replace('123.html', '999.html')
+                state['assets']['a'*64]['embedded']['Web'] = row['url'].replace('Series-Tome-2-123', 'Other-Series-Tome-2-999')
             else:
                 original = providers.get
                 providers.get = lambda url: {**original(url), 'body': original(url)['body'].replace('123.html', '999.html')}
@@ -114,7 +194,7 @@ class WebIdentityTests(unittest.TestCase):
                 (canonical.replace('bedetheque.com', 'foreign.example'), 100, 'identified', 'cover'),
                 (canonical + '?x=1', 0, 'review', None),
                 (canonical.replace('123.html', 'bad.html'), 100, 'identified', 'cover'),
-                (canonical.replace('123.html', '999.html'), 100, 'review', None)):
+                (canonical.replace('123.html', '999.html'), 100, 'identified', 'web')):
             with self.subTest(web=web, score=score), tempfile.TemporaryDirectory() as directory:
                 state, row, providers, response = self.route(web)
                 providers.get_binary = Mock(return_value={'status': 'ok', 'body': b'reference'})

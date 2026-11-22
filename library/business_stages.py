@@ -79,7 +79,7 @@ class BusinessStages:
             due = datetime.fromtimestamp(legacy.get('next_attempt', 0), timezone.utc)
             changed = False
         method_changed = prior.get('method', METHODS['metadata']) != METHODS['metadata']
-        if changed or due <= now or method_changed:
+        if asset.get('work_result', {}).get('status') != 'identified' and (changed or due <= now or method_changed):
             revision = (prior['evaluation'] if not changed and (prior.get('outcome') in ('retry', 'defer') or method_changed) and prior.get('evaluation') else
                         digest({'evidence': evidence, 'evaluation': prior.get('next_at', '')}))
             result.append(Obligation('metadata', key, revision, METHODS['metadata'],

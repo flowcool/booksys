@@ -6,7 +6,7 @@ from typing import Any
 from library.primitives import digest
 
 
-METHOD = 'work-metadata-2026-11-22-v5-web-cover'
+METHOD = 'work-metadata-2026-11-22-v6-work-web-cover'
 WEEK = 7 * 86400
 
 
