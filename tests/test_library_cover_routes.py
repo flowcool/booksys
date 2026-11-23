@@ -35,6 +35,59 @@ class CoverRouteTests(unittest.TestCase):
                 return []
         return state, row, Public()
 
+    def test_numbered_comicinfo_title_requires_an_agreeing_issue(self):
+        from bdnex_service.engine import Engine
+
+        state, row, providers = self.setup_route()
+        key = 'a'*64
+        state['assets'][key]['embedded']['Title'] = 'Tome 02 - Informative Album'
+        state['assets'][key]['origins'] = ['o']
+        state['origins']['o'] = {'sha256': key, 'path': 'Series.cbz'}
+        row['score'] = 83
+        other = {**row, 'edition_ref': '124', 'number': '3', 'score': 85}
+        engine = Engine.__new__(Engine)
+        engine.numbered = {'2': [('Series', '123')], '3': [('Series', '124')]}
+        candidates = [other, row]
+
+        def match(*args, identity=None):
+            response = {'status': 'ok', 'candidates': candidates}
+            if identity is not None:
+                response['decision'] = engine.decide(candidates, identity)
+            return response
+
+        providers.bdnex = SimpleNamespace(match=match)
+        snapshot = SimpleNamespace(result_set=lambda *a: deepcopy(state))
+        with patch('library.work_enrichment.discover', return_value=DiscoveryResult('no_candidate')):
+            result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+            self.assertEqual(result['exact_page_attempts'], [{'edition_ref': '123', 'status': 'parsed'}])
+            self.assertEqual(result['status'], 'identified')
+            self.assertEqual(result['work']['title'], 'Informative Album')
+            self.assertEqual(result['evidence']['cover_confirmation']['reason'], 'asset_title')
+            embedded = state['assets'][key]['embedded']
+            self.assertEqual(embedded['Title'], 'Tome 02 - Informative Album')
+            self.assertEqual(result['evidence']['provenance']['title'][0]['raw_value'], embedded['Title'])
+
+            embedded['Title'] = 'Tome 03 - Informative Album'
+            result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+            self.assertEqual(result['exact_page_attempts'], [])
+            self.assertEqual(result['status'], 'no_match')
+
+            embedded['Title'] = 'Tome 02 - T03'
+            result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+            self.assertEqual(result['evidence']['title'], 'Tome 02 - T03')
+
+            embedded['Title'] = 'Tome 02 - Informative Album'
+            embedded.pop('Number')
+            source = 'https://www7.bookys-ebooks.com/bandes-dessinees/1-series'
+            state['origins']['o']['source'] = source
+            state['assets'][key]['captured_hints'] = {source: {'title': 'Series T02'}}
+            for hints in ({}, state['assets'][key]['captured_hints']):
+                with self.subTest(captured_issue=bool(hints)):
+                    state['assets'][key]['captured_hints'] = hints
+                    result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+                    self.assertEqual(result['exact_page_attempts'], [])
+                    self.assertEqual(result['status'], 'no_match')
+
     def assert_guarded(self, state):
         result = state['assets']['a'*64]['work_result']
         self.assertEqual(result['status'], 'review', result)
