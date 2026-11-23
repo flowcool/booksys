@@ -49,6 +49,27 @@ The running implementation is not evidence that this accepted change is delivere
     or useful new evidence. Reuse inspection and extraction results when their
     inputs and method remain valid. A temporary provider error uses bounded retry;
     it is not a contradiction, a missing record, or a permanent negative match.
+12. Periodical issues (operator decision, 23 November 2026). A closed list in data
+    names periodical titles: magazines published by issue, such as Fluide Glacial,
+    Fillette, Tintin Hebdoptimiste and Nouveau Tintin. An asset whose file evidence
+    names one listed title and one issue number is a periodical issue. Booksys does
+    not send it to BDneX or to album discovery. A Bedetheque album record is not
+    evidence for a periodical issue, even with the same number (for example a
+    Fluide Glacial recueil). The title and the issue number come from file evidence
+    with their provenance. The status is "periodical, named from file". It is
+    separate from "identified" and from "À identifier". The CBZ goes to a separate
+    `Périodiques` area, then title and issue. ComicInfo holds only `Series` and
+    `Number` from file evidence. Two titles or two issue numbers keep the asset in
+    review. Removal of a title from the list returns its assets to the normal
+    identification queue. A later periodical source needs a new decision.
+13. Dated series (operator decision, 23 November 2026). A Bedetheque series label
+    can hold a year, for example "Ajax 1e Série SFPI 1964". The file has no year. In
+    the whole numbered index, only this dated series matches the file series and
+    issue number. Then this one album may be read as a proposal. Identity requires
+    cover confirmation at the calibrated threshold. The title, `Web` and creator
+    exemptions do not apply to this case. A file year that differs from the series
+    year keeps the asset in review. Two or more dated series with this issue number
+    also keep it in review.
 
 ## Metadata and provenance
 
@@ -117,6 +138,10 @@ backup or production preparation is required for this lab.
   not cause a busy loop.
 - Work-level identification needs no invented edition data.
   The monitoring page exposes actual stage and reason.
+- Periodical issues never receive a Bedetheque album identity. Removal from the
+  list returns them to the queue. Dated-series proposals without cover
+  confirmation stay in review. Both rules are measured on a holdout lot with zero
+  wrong identifications.
 - Run relevant seam tests and type checks during work. Run one full integrated
   suite for the final candidate, complete independent review, then commit.
 - Record the exact lab candidate, operation plan, source preservation, readback and
