@@ -192,6 +192,19 @@ workflow changes does not retract already public source or images.
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
 - [GitHub package access and visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)
 
+## Periodical admission compatibility
+
+The catalogue adds a periodical admission record under `Périodiques`. Existing
+catalogue rows keep their format. PostgreSQL uses its existing text columns and
+needs no DDL or data conversion. Older readers and copy workers reject the new
+status or journal path. Upgrade the catalogue readers and copy workers before
+enabling the metadata worker that can emit these records. After the first
+periodical copy, keep compatible readers during recovery. A version-tag rollback
+alone cannot read the new admission records.
+
+The BDneX service and metadata worker must support the same proposal protocol.
+A pre-proposal worker rejects the new decisions.
+
 ## Before publishing a release
 
 Check these before creating the GitHub release; each one has already cost a failed publication.

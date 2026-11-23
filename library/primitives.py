@@ -84,6 +84,7 @@ def lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
 
 
 TABLES = ('assets', 'origins')
+ADMISSION_ROOTS = {'holding': 'holding', 'classified': 'classified', 'periodical': 'Périodiques'}
 
 
 def empty() -> dict[str, Any]:
@@ -119,9 +120,9 @@ def validate(state: Any) -> None:
         admission = asset.get('admission')
         if admission is not None:
             target = Path(str(admission.get('target', '')))
-            if (admission.get('status') not in ('holding', 'classified') or target.is_absolute()
-                    or '..' in target.parts or not target.parts
-                    or target.parts[0] != ('holding' if admission['status'] == 'holding' else 'classified')
+            status = admission.get('status')
+            if (not isinstance(status, str) or target.is_absolute() or '..' in target.parts or not target.parts
+                    or target.parts[0] != ADMISSION_ROOTS.get(status)
                     or not re.fullmatch('[0-9a-f]{32}', str(admission.get('operation', '')))
                     or not re.fullmatch('[0-9a-f]{64}', str(admission.get('signature', '')))
                     or set(admission.get('manifest', {})) != {'book.cbz', 'fiche.md'}

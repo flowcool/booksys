@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from library import decode
+from library.asset_evidence import file_years
 from library.bdnex_protocol import bedetheque_album_id
 from library.cover_sift import METHOD, THRESHOLD, FUNCTION_VERSION, PREPROCESSING
 from library.primitives import LibraryError, digest
@@ -56,11 +57,10 @@ def identity_conflict(evidence: dict[str, Any], row: dict[str, Any], *, indexed:
                 continue
         if value != other:
             return True
-    file_years = {year for label in evidence.get('labels', [])
-                  for year in re.findall(r'\(((?:18|19|20)\d{2})\)', label)}
+    years = file_years(evidence)
     suffix = series[len(bound.get('series', '')):] if series.startswith(bound.get('series', '')) else ''
     dates = set(re.findall(r'\b(?:18|19|20)\d{2}\b', suffix))
-    return bool(dates and file_years and dates != file_years)
+    return bool(dates and years and dates != years)
 
 
 def work_slug(row: dict[str, Any]) -> str | None:
@@ -192,6 +192,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     if any(status != 'parsed' for status in page_statuses):
         review('page_' + page_statuses[-1])
         return
+    require_cover = result.get('bdnex_decision', {}).get('reason') == 'dated_unique'
     if web:
         if any(item['result'] == 'unresolved' for item in comparisons):
             review('web_unresolved')
@@ -199,9 +200,10 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         if not page_statuses and row.get('provenance', {}).get('canonical_album_ref') != row.get('edition_ref'):
             review('page_unavailable')
             return
-        receipt.update(result='exempt', reason='asset_web', basis='web', assertions=web)
-        return
-    if title_agrees or credit_basis:
+        if not require_cover:
+            receipt.update(result='exempt', reason='asset_web', basis='web', assertions=web)
+            return
+    if not require_cover and (title_agrees or credit_basis):
         receipt.update(result='exempt', reason='asset_title' if title_agrees else 'asset_creator',
                        basis='title' if title_agrees else 'creator',
                        assertions=titles if title_agrees else credit_basis)

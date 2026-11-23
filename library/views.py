@@ -62,17 +62,20 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
         codes = sorted(printed_isbns(asset.get('printed', {}))[0])
         isbn = ', '.join(codes) or bounded(work.get('isbn') or asset.get('embedded', {}).get('ISBN'))
         admission = asset.get('admission', {})
-        classified = admission.get('status') == 'classified'
-        holding = admission.get('status') == 'holding'
+        publication = {'periodical': 'Périodiques', 'classified': 'classified',
+                       'holding': 'À identifier'}.get(admission.get('status'), 'pending')
+        periodical = work_result.get('status') == 'periodical'
+        series = (work_result['work']['series'] if periodical else
+                  overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series'))
         row = {'id': oid, 'source_id': digest(origin['source']), 'title': bounded(title), 'author': bounded(overrides.get('author') or work.get('author')),
-               'isbn': isbn, 'series': bounded(overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series')),
+               'isbn': isbn, 'series': bounded(series),
                'transfer': 'finished' if origin.get('transfer_status') == 0 else 'not finished (code ' + bounded(origin.get('transfer_status', 'unknown')) + ')',
                'intake': bounded(origin['availability']),
                'retirement': bounded(origin.get('retirement', 'live')),
                'ocr': bounded(asset.get('printed', {}).get('status') or
                               (asset.get('printed_attempts') or [{}])[-1].get('status', 'not attempted')),
-               'identity': 'contested' if asset.get('contested') else 'identified' if work else 'pending' if asset else 'not attempted',
-               'publication': 'classified' if classified else 'À identifier' if holding else 'pending', 'reason': operator_reason(reason),
+               'identity': 'contested' if asset.get('contested') else 'periodical' if periodical else 'identified' if work else 'pending' if asset else 'not attempted',
+               'publication': publication, 'reason': operator_reason(reason),
                'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
                'fiche': '/fiche/' + oid}
         if origin.get('retirement'):
@@ -83,7 +86,7 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
             row.update(title='Lot : ' + bounded(title), publication='not applicable', identity='not applicable', ocr='not applicable')
         elif origin.get('parent_origin'):
             row['title'] = 'Membre : ' + row['title']
-        row['status'] = 'rejected' if row['intake'] == 'rejected' else 'classified' if classified else 'À identifier' if holding else 'pending'
+        row['status'] = 'rejected' if row['intake'] == 'rejected' else publication
         rows.append(row)
         assertions = []
         for assertion in asset.get('assertions', [])[:30]:
@@ -142,7 +145,8 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
                       'next_cycle_at', 'stage', 'stage_started_at', 'error_source', 'reason', 'backlog', 'intake_backlog', 'assets', 'origins', 'published') if key in cycle},
             'rows': rows, 'counts': {'sources': len({r['source_id'] for r in rows}), 'origins': len(rows),
                 'classified_assets': sum(a.get('admission', {}).get('status') == 'classified' for a in state['assets'].values()),
-                'holding_assets': sum(a.get('admission', {}).get('status') == 'holding' for a in state['assets'].values())}, 'fiches': fiches}
+                'holding_assets': sum(a.get('admission', {}).get('status') == 'holding' for a in state['assets'].values()),
+                'periodical_assets': sum(a.get('admission', {}).get('status') == 'periodical' for a in state['assets'].values())}, 'fiches': fiches}
 
 
 def fiche_html(fiche: dict[str, Any]) -> str:

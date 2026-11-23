@@ -165,6 +165,65 @@ class CoverRouteTests(unittest.TestCase):
                     self.assertEqual(pages, [])
                     self.assertEqual(result['status'], expected)
 
+    def test_dated_unique_needs_a_cover_even_when_title_or_web_agrees(self):
+        from bdnex_service.engine import Engine
+        from library.bdnex import identity_for
+        from library.bdnex_protocol import validate_decision
+        from library.cover_confirmation import THRESHOLD
+        from library.readers import READER_POLICY
+        from tempfile import TemporaryDirectory
+        from hashlib import sha256
+        from zipfile import ZipFile
+
+        state, row, providers = self.setup_route()
+        row.update(series='Series 2011', score=99)
+        key = 'a' * 64
+        asset = state['assets'][key]
+        asset['embedded'].update(Title=row['title'], Web=row['url'])
+        original_get = providers.get
+        providers.get = lambda url: {**original_get(url), 'body': original_get(url)['body'].replace(
+            '<a>Series</a>', '<a>Series 2011</a>').replace('Series - Informative Album', 'Series 2011 - Informative Album')}
+        engine = Engine.__new__(Engine)
+        engine.numbered = {'2': [('Series-2011', '123')]}
+        decision = engine.decide([row], identity_for(state, key))
+        self.assertEqual(decision, {'status': 'proposed', 'reason': 'dated_unique', 'edition_ref': '123'})
+        validate_decision(decision, [row])
+        response = {'candidates': [row], 'decision': decision}
+
+        apply_bdnex_decision(state, key, providers, response)
+        self.assertEqual(asset['work_result']['reason_code'], 'cover_archive_unavailable')
+
+        cover = guard_tests.encoded(guard_tests.texture())
+        with TemporaryDirectory() as directory, patch('library.decode.WORK_ROOT', directory):
+            path = Path(directory) / 'input.cbz'
+            with ZipFile(path, 'w') as archive:
+                archive.writestr('cover.png', cover)
+            archive_hash = sha256(path.read_bytes()).hexdigest()
+            state['assets'] = {archive_hash: asset}
+            asset.update(sha256=archive_hash, reader_policy=READER_POLICY,
+                         page_manifest=[{'name': 'cover.png', 'sha256': sha256(cover).hexdigest(), 'size': len(cover)}])
+            providers.get_binary = lambda _: {'status': 'ok', 'body': guard_tests.encoded(guard_tests.texture(99))}
+            apply_bdnex_decision(state, archive_hash, providers, response, cover_source=lambda: path)
+            receipt = asset['work_result']['evidence']['cover_confirmation']
+            self.assertEqual(asset['work_result']['status'], 'review')
+            self.assertLess(receipt['score'], THRESHOLD)
+
+            providers.get_binary = lambda _: {'status': 'ok', 'body': cover}
+            apply_bdnex_decision(state, archive_hash, providers, response, cover_source=lambda: path)
+            self.assertEqual(asset['work_result']['status'], 'identified')
+            self.assertEqual(asset['work_result']['evidence']['cover_confirmation']['basis'], 'cover')
+
+        asset['embedded']['Year'] = '1955'
+        self.assertEqual(engine.decide([row], identity_for(state, archive_hash))['status'], 'review')
+        asset['embedded'].pop('Year')
+        asset['embedded']['Title'] = 'Conflicting Album'
+        self.assertEqual(engine.decide([row], identity_for(state, archive_hash))['status'], 'review')
+        asset['embedded'].pop('Title')
+        engine.numbered['2'].append(('Series-1955', '999'))
+        self.assertEqual(engine.decide([row], identity_for(state, archive_hash)), {
+            'status': 'review', 'reason': 'dated_ambiguous',
+        })
+
     def assert_guarded(self, state):
         result = state['assets']['a'*64]['work_result']
         self.assertEqual(result['status'], 'review', result)

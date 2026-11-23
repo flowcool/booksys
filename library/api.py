@@ -77,12 +77,13 @@ class PublicAPI:
                         for oid, origin, asset in db.execute('SELECT o.id,o.payload,a.payload FROM origins o '
                             'LEFT JOIN assets a ON a.id=o.asset_id ORDER BY o.id')]
                 source_count = db.execute('SELECT count(DISTINCT source_ref) FROM origins').fetchall()[0][0]
-                classified, holding = db.execute("SELECT count(*) FILTER (WHERE admission_status='classified'),"
-                    "count(*) FILTER (WHERE admission_status='holding') FROM assets").fetchall()[0]
+                classified, holding, periodicals = db.execute("SELECT count(*) FILTER (WHERE admission_status='classified'),"
+                    "count(*) FILTER (WHERE admission_status='holding'),"
+                    "count(*) FILTER (WHERE admission_status='periodical') FROM assets").fetchall()[0]
             return {'schema': 1, 'generated_at': now(), 'catalogue_revision': revision,
                     'cycle': self.cycle_view(), 'rows': rows,
                     'counts': {'sources': source_count, 'origins': len(rows),
-                               'classified_assets': classified, 'holding_assets': holding},
+                               'classified_assets': classified, 'holding_assets': holding, 'periodical_assets': periodicals},
                     'source': 'saved queue and catalogue snapshots; not live pyLoad'}
         if action in ('fiche', 'cover'):
             if set(payload) != {'id'} or not isinstance(payload['id'], str) or not re.fullmatch('[a-zA-Z0-9_-]{1,64}', payload['id']):

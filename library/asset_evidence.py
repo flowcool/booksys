@@ -10,6 +10,13 @@ from library.bdnex_protocol import bedetheque_album_id
 from library.primitives import LibraryError
 
 
+def file_years(evidence: dict[str, Any]) -> set[str]:
+    years = {str(claim['value']) for claim in evidence.get('provenance', {}).get('year', [])
+             if claim.get('scope') == 'asset'}
+    return years | {year for label in evidence.get('labels', [])
+                    for year in re.findall(r'\(((?:18|19|20)\d{2})\)', label)}
+
+
 def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool = True) -> dict[str, Any]:
     asset = state['assets'][asset_id]
     if asset.get('sha256') != asset_id:
@@ -38,6 +45,10 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
             result['provenance'].setdefault(field, []).append(entry)
 
     embedded = asset.get('embedded', {})
+    embedded_year = str(embedded.get('Year') or '')
+    if re.fullmatch(r'(?:18|19|20)\d{2}', embedded_year):
+        result['provenance']['year'] = [{'value': embedded_year, 'scope': 'asset',
+                                       'source': 'embedded:' + asset_id}]
     web = embedded.get('Web')
     if bedetheque_album_id(web):
         result['web'] = web
