@@ -31,6 +31,8 @@ def parse_name(value: str) -> dict[str, Any]:
         name = name.replace('.', ' ')
         name = re.split(r'\b(?:FRENCH|TRUEFRENCH|MULTi|RETAiL|COMiC|HYBRiD|iNTERNAL|eBook|SCAN|CBZ|CBR|PDF|DIGITAL|\d{4})\b', name, maxsplit=1, flags=re.I)[0].strip()
     name = name.replace('_', ' ')
+    name, release_tags = re.subn(r'\[(?:DIGITAL\b[^]]*|BD FR)\]|\((?:TONER|DIGITAL-\d+)\)',
+                                 ' ', name, flags=re.I)
     name = ' '.join(name.split())
     name = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', name)
     if (not name or len(name) > 500 or re.search(
@@ -70,5 +72,12 @@ def parse_name(value: str) -> dict[str, Any]:
               if explicit_issue or re.search(r'\([^)]*\)', match[1]) else parser.series)
     result: dict[str, Any] = {'series': series, 'number': parser.issue}
     if match[3] and not encoded and not dotted and not is_volume_title(match[3]):
-        result['title'] = match[3].strip()
+        title = re.sub(r'\s+[-–]\s+Mythic$', '', match[3].strip(), flags=re.I)
+        # Parentheses can also be part of the album title. Keep the original
+        # assertion for validation until exact album credits qualify the suffix.
+        suffix = re.fullmatch(r'(.+?)\s+\(([^()]+)\)', title) if release_tags else None
+        if suffix:
+            result.update(title=suffix[1], title_suffix_hint=suffix[2], raw_title=title)
+        else:
+            result['title'] = title
     return result

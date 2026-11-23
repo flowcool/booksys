@@ -28,9 +28,14 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
         result['provenance'].setdefault('labels', []).append(
             {'value': value, 'source': source, 'scope': 'asset'})
         from library.names import METHOD, parse_name
-        for field, parsed in parse_name(value).items():
-            result['provenance'].setdefault(field, []).append(
-                {'value': parsed, 'source': source, 'scope': 'asset', 'method': METHOD})
+        parsed = parse_name(value)
+        suffix = parsed.pop('title_suffix_hint', None)
+        raw_title = parsed.pop('raw_title', None)
+        for field, field_value in parsed.items():
+            entry = {'value': field_value, 'source': source, 'scope': 'asset', 'method': METHOD}
+            if field == 'title' and suffix:
+                entry.update(value=raw_title, title_suffix_hint=suffix, title_without_suffix=field_value)
+            result['provenance'].setdefault(field, []).append(entry)
 
     embedded = asset.get('embedded', {})
     web = embedded.get('Web')

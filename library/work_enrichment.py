@@ -1,6 +1,7 @@
 """Reference discovery, exact asset binding and work-level metadata orchestration."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from library.asset_evidence import bind_evidence
@@ -94,13 +95,23 @@ def exact_bdnex_reference(evidence: dict[str, Any], candidates: list[dict[str, A
     return [row], file_series
 
 
-def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any]) -> None:
+def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any],
+                            *, allow_bare_creator: bool = True) -> None:
     title = reference.get('title') or ''
     if not informative(title):
         return
     creators = {normalized(name) for field in ('writers', 'artists') for name in reference.get(field, [])}
     for entry in evidence['provenance'].get('title', []):
-        if (entry.get('method') == NAME_METHOD and normalized(entry['value']) in creators
+        if entry.get('method') != NAME_METHOD:
+            continue
+        hint = entry.get('title_suffix_hint')
+        if hint:
+            parts = {normalized(name) for name in re.split(r'[-,]', hint)}
+            if (normalized(entry['title_without_suffix'], 'title') == normalized(title, 'title')
+                    and (normalized(hint) in creators or parts <= creators)):
+                entry.update(value=entry['title_without_suffix'], raw_value=entry['value'],
+                             creator_reference=reference['url'])
+        elif (allow_bare_creator and normalized(entry['value']) in creators
                 and normalized(entry['value'], 'title') != normalized(title, 'title')):
             entry.update(scope='discovery', creator_reference=reference['url'])
 
@@ -305,6 +316,7 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
                 else:
                     status = 'parsed'
                     bind_cover(editions, selected)
+                    qualify_filename_titles(evidence, canonical, allow_bare_creator=False)
                     row = dict(selected)
                     row.pop('cover_binding', None)
                     if 'cover_binding' in canonical:

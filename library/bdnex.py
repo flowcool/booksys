@@ -128,6 +128,10 @@ def identity_for(state: dict[str, Any], key: str) -> dict[str, list[str]]:
     evidence = bind_evidence(state, key)
     for assertion in asset_assertions(evidence):
         field = assertion['field']
+        # Resolve a possible filename creator suffix after reading the exact
+        # album. The complete caption still applies during worker validation.
+        if field == 'title' and assertion.get('title_suffix_hint'):
+            continue
         value = str(normalized(assertion['value'], field)).lower()
         if value:
             fields.setdefault(field, set()).add(value if len(value) <= 512 else '#' + digest(value))
