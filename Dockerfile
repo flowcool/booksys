@@ -19,7 +19,7 @@ COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10
 COPY --from=dependencies /app/.venv /app/.venv
 # Keep user font caches out of the decoder output on read-only roots.
 RUN printf 'deb http://deb.debian.org/debian trixie non-free\n' > /etc/apt/sources.list.d/unrar.list \
-    && apt-get update && apt-get install -y --no-install-recommends unrar=1:7.1.8-1 poppler-utils=25.03.0-5+deb13u4 fonts-liberation=1:2.1.5-3 fontconfig=2.15.0-2.3 libpq5=17.12-0+deb13u1 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && apt-get update && apt-get install -y --no-install-recommends unrar=1:7.1.8-1 poppler-utils=25.03.0-5+deb13u4 fonts-liberation=1:2.1.5-3 fontconfig=2.15.0-2.3 libpq5=17.12-0+deb13u1 libgssapi-krb5-2=1.21.3-5+deb13u2 libk5crypto3=1.21.3-5+deb13u2 libkrb5-3=1.21.3-5+deb13u2 libkrb5support0=1.21.3-5+deb13u2 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
     && sed -i '/<cachedir prefix="xdg">fontconfig<\/cachedir>/d; /<cachedir>~\/.fontconfig<\/cachedir>/d' /etc/fonts/fonts.conf \
     && rm -rf /var/lib/apt/lists/*
 RUN /opt/python/bin/python3.14 -m pip uninstall --break-system-packages -y pip && python -m pip uninstall -y pip
