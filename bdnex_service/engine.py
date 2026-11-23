@@ -229,4 +229,18 @@ class Engine:
                 if dated_variant and not year and normalized(row.get('title') or '', 'title') not in identity.get('title', []):
                     break
                 return {'status': 'selected', 'reason': 'numbered', 'edition_ref': row['edition_ref']}
+        # An agreement outside the selection rules can only locate a page.
+        if number:
+            proposals = []
+            for row in compatible:
+                if not row.get('number') or normalized(row['number'], 'number') != number:
+                    continue
+                label = normalized(row.get('series') or '', 'series')
+                if (series and (label == series or label.startswith(series + ' '))) or (
+                        title and normalized(row.get('title') or '', 'title') == title):
+                    proposals.append(row['edition_ref'])
+            if len(proposals) == 1:
+                return {'status': 'proposed', 'reason': 'unique_agreement', 'edition_ref': proposals[0]}
+            if len(proposals) > 1:
+                return {'status': 'review', 'reason': 'ambiguous'}
         return {'status': 'review', 'reason': 'insufficient'}

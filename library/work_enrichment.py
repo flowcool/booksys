@@ -273,7 +273,8 @@ def save_work_result(asset: dict[str, Any], result: dict[str, Any], providers: A
 def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
                         response: dict[str, Any], *, cover_source: CoverSource | None = None) -> bool:
     decision = response.get('decision', {})
-    if decision.get('status') not in ('selected', 'review') or decision.get('reason') == 'insufficient':
+    decision_status = decision.get('status')
+    if decision_status not in ('selected', 'proposed', 'review') or decision.get('reason') == 'insufficient':
         return False
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
@@ -284,7 +285,7 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
         'evidence': evidence, 'attempts': [], 'exact_page_attempts': [], 'updated_at': now(),
         'bdnex_decision': decision,
     }
-    if decision['status'] == 'selected':
+    if decision_status in ('selected', 'proposed'):
         selected = next(row for row in candidates if row['edition_ref'] == decision['edition_ref'])
         previous = asset.get('work_result', {})
         retained = previous.get('concordant_candidates', []) if previous.get('bdnex_decision') == decision else []
@@ -324,15 +325,15 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
                                     row.setdefault('field_provenance', {})[field] = field_source
         result['attempts'] = [{'url': selected['url'], 'status': status, 'reason': page.reason}]
         result['exact_page_attempts'] = [{'edition_ref': selected['edition_ref'], 'status': status}]
+        if status != 'parsed':
+            # A retained pre-guard page is not current authority after a failed fetch.
+            row.pop('cover_binding', None)
         result.update(
-            status='identified', reason='BDneX selected one reference', concordant_candidates=[row],
+            status='identified', reason=f'BDneX {decision_status} one reference', concordant_candidates=[row],
             work={field: row[field] for field in WORK_FIELDS if known_work_value(field, row.get(field))},
             provenance=[{'source': selected['source'], 'edition_ref': selected['edition_ref'],
                          'url': selected['url'], 'score': selected['score'],
                          'decision': decision['reason'], **selected.get('provenance', {})}],
         )
-    if decision['status'] == 'selected' and status != 'parsed':
-        # A retained pre-guard page is not current authority after a failed fetch.
-        row.pop('cover_binding', None)
     save_work_result(asset, result, providers, cover_source)
     return True

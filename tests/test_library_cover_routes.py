@@ -88,6 +88,83 @@ class CoverRouteTests(unittest.TestCase):
                     self.assertEqual(result['exact_page_attempts'], [])
                     self.assertEqual(result['status'], 'no_match')
 
+    def test_unique_numbered_proposal_hydrates_one_album_before_confirmation(self):
+        from bdnex_service.engine import Engine
+        from library.bdnex_protocol import validate_decision
+
+        state, row, providers = self.setup_route()
+        key = 'a'*64
+        asset = state['assets'][key]
+        asset['origins'] = ['o']
+        state['origins']['o'] = {'sha256': key, 'path': 'Comic.cbz'}
+        row.update(score=83, url='https://www.bedetheque.com/BD-Series-Number-2-123.html')
+        engine = Engine.__new__(Engine)
+        engine.numbered = {}
+        other = {**row, 'edition_ref': '124', 'url': 'https://www.bedetheque.com/BD-Other-124.html',
+                 'series': 'Other Series'}
+        candidates = [row, other]
+        pages = []
+        title = 'Informative Album'
+        reference_url = row['url']
+
+        def get(url):
+            if url.endswith('/robots.txt'):
+                return {'status': 'ok', 'body': 'User-agent: *\nAllow: /'}
+            pages.append(url)
+            return {'status': 'ok', 'retrieved_at': '2026-11-22T00:00:00+00:00', 'body': (
+                f'<link rel="canonical" href="{reference_url}"><h1><a>Series</a></h1>'
+                f'<meta itemprop="name" content="Series - {title}">'
+                '<meta itemprop="alternativeheadline" content="Tome 2">'
+                '<img itemprop="image" src="https://www.bedetheque.com/media/123.jpg">')}
+
+        def match(*args, identity=None):
+            decision = engine.decide(candidates, identity or {})
+            validate_decision(decision, candidates)
+            return {'status': 'ok', 'candidates': candidates, 'decision': decision}
+
+        providers.get = get
+        providers.bdnex = SimpleNamespace(match=match)
+        snapshot = SimpleNamespace(result_set=lambda *a: deepcopy(state))
+        with patch('library.work_enrichment.discover', return_value=DiscoveryResult('no_candidate')):
+            result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+            self.assertEqual(pages, [row['url']])
+            self.assertEqual(result['bdnex_decision'], {
+                'status': 'proposed', 'reason': 'unique_agreement', 'edition_ref': '123',
+            })
+            self.assertEqual(result['exact_page_attempts'], [{'edition_ref': '123', 'status': 'parsed'}])
+            self.assertEqual(result['status'], 'review')
+            self.assertEqual(result['reason_code'], 'cover_archive_unavailable')
+
+            asset['embedded'] = {'Title': title, 'Number': '2'}
+            candidates[:] = [row, {**other, 'title': 'Other Album'}]
+            pages.clear()
+            result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+            self.assertEqual(pages, [row['url']])
+            self.assertEqual(result['status'], 'identified')
+            self.assertEqual(result['evidence']['cover_confirmation']['reason'], 'asset_title')
+
+            title = 'Conflicting Album'
+            pages.clear()
+            result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+            self.assertEqual(pages, [row['url']])
+            self.assertEqual(result['reason_code'], 'cover_identity_conflict')
+
+            for label, embedded, row_changes, expected in (
+                ('ambiguous', {'Series': 'Series', 'Number': '2'}, {'series': 'Series'}, 'review'),
+                ('dated', {'Series': 'Series', 'Number': '2'}, {'series': 'Series 2011'}, 'no_match'),
+                ('wrong number', {'Series': 'Series', 'Number': '3'}, {'series': 'Series'}, 'no_match'),
+                ('title veto', {'Series': 'Series', 'Number': '2', 'Title': 'Other Title'},
+                 {'series': 'Series'}, 'no_match'),
+            ):
+                with self.subTest(label=label):
+                    asset['embedded'] = embedded
+                    candidates[:] = [{**row, **row_changes}, {**other, **row_changes}] if label == 'ambiguous' else [
+                        {**row, **row_changes}, other]
+                    pages.clear()
+                    result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
+                    self.assertEqual(pages, [])
+                    self.assertEqual(result['status'], expected)
+
     def assert_guarded(self, state):
         result = state['assets']['a'*64]['work_result']
         self.assertEqual(result['status'], 'review', result)
