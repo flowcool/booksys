@@ -12,7 +12,7 @@ import uuid
 
 import yaml
 
-from library.primitives import LibraryError, digest, now, sync_dir
+from library.primitives import ADMISSION_ROOTS, LibraryError, digest, now, sync_dir
 from library.publication import Publisher, private_tree, publication_lock, rename_atomic, verify
 from library.readers import sha256
 from library.transform import transform_archive
@@ -37,6 +37,14 @@ def slug(value: Any) -> str:
 
 def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
     asset = state['assets'][key]
+    result = asset.get('work_result', {})
+    if result.get('status') == 'periodical':
+        fields = {field: result['work'][field] for field in ('series', 'number')}
+        signature = digest({'asset': key, 'periodical': fields})
+        leaf = 'issue--' + key + '--' + signature[:12]
+        target = str(Path(ADMISSION_ROOTS['periodical']) / slug(fields['series']) / slug(fields['number']) / leaf)
+        return {'status': 'periodical', 'signature': signature, 'target': target, 'fields': fields,
+                'fiche_title': fields['series'] + ' ' + fields['number']}
     work = work_fields(state, key)
     fields = {**(work or {}), **asset.get('overrides', {})}
     status = 'classified' if work else 'holding'
@@ -62,11 +70,20 @@ def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
             'fiche_title': str(work_title or series_fallback or 'À identifier')}
 
 
+def publication_comicinfo(asset: dict[str, Any], desired: dict[str, Any], key: str) -> bytes:
+    fields = desired['fields']
+    if desired['status'] == 'periodical':
+        return work_comicinfo({}, fields)
+    notes = 'Booksys; source_asset_sha256=' + key + '; admission=' + desired['status']
+    old_notes = asset.get('embedded', {}).get('Notes', '')
+    return work_comicinfo(asset, {**fields, 'notes': str(old_notes) + '\n' + notes})
+
+
 class AdmissionPublisher(Publisher):
     def target_path(self, relative: str) -> Path:
         path = Path(relative)
         if (path.is_absolute() or '..' in path.parts or not path.parts
-                or path.parts[0] not in ('holding', 'classified')):
+                or path.parts[0] not in ADMISSION_ROOTS.values()):
             raise LibraryError('Unsafe admission path')
         target = self.root / path
         if any(p.is_symlink() for p in (target, *target.parents)):
@@ -196,10 +213,7 @@ class AdmissionPublisher(Publisher):
                         'work': asset.get('work_result'), 'origins': [state['origins'][oid] for oid in asset['origins']]}
             fiche = ('# ' + html.escape(desired['fiche_title']) +
                      '\n\n<pre>' + html.escape(json.dumps(evidence, ensure_ascii=False, indent=2)) + '</pre>\n').encode()
-            fields = desired['fields']
-            notes = 'Booksys; source_asset_sha256=' + key + '; admission=' + desired['status']
-            old_notes = asset.get('embedded', {}).get('Notes', '')
-            xml = work_comicinfo(asset, {**fields, 'notes': str(old_notes) + '\n' + notes})
+            xml = publication_comicinfo(asset, desired, key)
             required = (2*1024**3 if asset['format'] == 'pdf' else sum(p['size'] for p in asset.get('page_manifest', []))) + len(fiche) + 8*1024**2
             self.capacity.check(self.root, required)
             op: dict[str, Any] = {'schema': 1, 'id': uuid.uuid4().hex, 'kind': 'admission',

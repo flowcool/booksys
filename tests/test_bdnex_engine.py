@@ -85,8 +85,14 @@ class EngineTests(unittest.TestCase):
             self.assertIn('900201', [row['edition_ref'] for row in response['candidates']])
             self.assertEqual(response['decision'], {'status': 'review', 'reason': 'insufficient'})
             dated = next(row for row in response['candidates'] if row['edition_ref'] == '900201')
-            self.assertEqual(engine.decide([{**dated, 'score': 100}], {'series': ['example'], 'number': ['1']}),
-                             {'status': 'review', 'reason': 'insufficient'})
+            for embedded in ({}, {'Web': dated['url']}):
+                with self.subTest(embedded=embedded):
+                    proposed = engine.match({
+                        'inputs': [{'path': 'Example - T01 - Return.cbz', 'embedded': embedded}],
+                        'identity': {'series': ['example'], 'number': ['1'], 'title': ['return']},
+                    })
+                    self.assertEqual(proposed['decision'],
+                                     {'status': 'proposed', 'reason': 'dated_unique', 'edition_ref': '900201'})
 
 
     def test_high_score_without_volume_survives_many_wanted_albums(self) -> None:

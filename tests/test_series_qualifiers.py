@@ -52,7 +52,7 @@ class SeriesQualifierTests(unittest.TestCase):
         self.assertEqual(result['status'], 'no_match')
         self.assertEqual(result['rejected_fields'], ['title'])
 
-    def test_my_greatest_adventure_dated_series_stays_in_review(self) -> None:
+    def test_my_greatest_adventure_dated_series_requires_a_cover_proposal(self) -> None:
         state, key = asset_state('My Greatest Adventure_03@BD_Fr.cbz')
         candidate = {'source': 'bedetheque', 'edition_ref': 'fixture-3', 'score': 80,
                      'series': 'My greatest adventure Vol1 DC comics 1955',
@@ -61,8 +61,11 @@ class SeriesQualifierTests(unittest.TestCase):
         engine = object.__new__(Engine)
         engine.numbered = {'3': [('My-greatest-adventure-Vol1-DC-comics-1955', 'fixture-3')]}
         self.assertEqual(engine.decide([candidate], identity_for(state, key)),
-                         {'status': 'review', 'reason': 'insufficient'})
+                         {'status': 'proposed', 'reason': 'dated_unique', 'edition_ref': 'fixture-3'})
+        reprint, reprint_key = asset_state('My Greatest Adventure_03@BD_Fr.cbz', embedded={'Year': '2011'})
+        self.assertEqual(engine.decide([candidate], identity_for(reprint, reprint_key))['status'], 'review')
         undated = {**candidate, 'series': 'My greatest adventure Vol1 DC comics'}
+        engine.numbered = {'3': [('My-greatest-adventure-Vol1-DC-comics', 'fixture-3')]}
         self.assertEqual(engine.decide([undated], identity_for(state, key)),
                          {'status': 'selected', 'reason': 'numbered', 'edition_ref': 'fixture-3'})
         result = evaluate_work(bind_evidence(state, key), [candidate])

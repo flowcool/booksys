@@ -364,6 +364,12 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
     # This also protects tasks already queued before a metadata method update.
     if not references and asset.get('work_result', {}).get('status') == 'identified':
         return state
+    from library.asset_evidence import bind_evidence
+    from library.periodicals import periodical_result
+    periodical = periodical_result(bind_evidence(state, asset_id))
+    if periodical is not None:
+        asset['work_result'] = periodical
+        return state
     from library.origins import resolve_asset
     cover_source = (lambda: resolve_asset(store, reception, state, asset_id)) if reception is not None else None
     from library.bdnex import identity_for, inputs_for

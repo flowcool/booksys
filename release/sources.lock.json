@@ -383,8 +383,8 @@
         {
           "id": "dpkg:libgssapi-krb5-2:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libhogweed6t64:amd64",
@@ -413,8 +413,8 @@
         {
           "id": "dpkg:libk5crypto3:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libkeyutils1:amd64",
@@ -425,14 +425,14 @@
         {
           "id": "dpkg:libkrb5-3:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libkrb5support0:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libksba8:amd64",
@@ -1336,7 +1336,7 @@
           "id": "dpkg:libgssapi-krb5-2:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -1352,7 +1352,7 @@
           "id": "dpkg:libk5crypto3:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -1368,7 +1368,7 @@
           "id": "dpkg:libkrb5-3:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -1376,7 +1376,7 @@
           "id": "dpkg:libkrb5support0:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -2875,8 +2875,8 @@
         {
           "id": "dpkg:libgssapi-krb5-2:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libharfbuzz0b:amd64",
@@ -2917,8 +2917,8 @@
         {
           "id": "dpkg:libk5crypto3:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libkeyutils1:amd64",
@@ -2929,14 +2929,14 @@
         {
           "id": "dpkg:libkrb5-3:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libkrb5support0:amd64",
           "source": "krb5",
-          "source_version": "1.21.3-5+deb13u1",
-          "version": "1.21.3-5+deb13u1"
+          "source_version": "1.21.3-5+deb13u2",
+          "version": "1.21.3-5+deb13u2"
         },
         {
           "id": "dpkg:libksba8:amd64",
@@ -4182,7 +4182,7 @@
           "id": "dpkg:libgssapi-krb5-2:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -4238,7 +4238,7 @@
           "id": "dpkg:libk5crypto3:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -4254,7 +4254,7 @@
           "id": "dpkg:libkrb5-3:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -4262,7 +4262,7 @@
           "id": "dpkg:libkrb5support0:amd64",
           "license": "See exact installed copyright notice",
           "sources": [
-            "debian_krb5_1.21.3-5_deb13u1"
+            "debian_krb5_1.21.3-5_deb13u2"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -12047,11 +12047,11 @@
       "url": "https://deb.debian.org/debian/pool/main/g/graphite2/graphite2_1.3.14-2+deb13u1.dsc",
       "sha256": "13cc102b088bfcb7c1130313c7ef48b781b388fe43c5c302d5fb67cb423eef7b"
     },
-    "debian_krb5_1.21.3-5_deb13u1": {
+    "debian_krb5_1.21.3-5_deb13u2": {
       "package": "krb5",
-      "version": "1.21.3-5+deb13u1",
-      "url": "https://security.debian.org/debian-security/pool/updates/main/k/krb5/krb5_1.21.3-5+deb13u1.dsc",
-      "sha256": "d17d2840bc97fea2c2375245569ca67838a2b557ee083c6cbe42b129a317212c"
+      "version": "1.21.3-5+deb13u2",
+      "url": "https://security.debian.org/debian-security/pool/updates/main/k/krb5/krb5_1.21.3-5+deb13u2.dsc",
+      "sha256": "72f1fd2681f4688b64a762599480fbd7612d0f5f2cb9f4ce1b21a9eaeee4791d"
     },
     "debian_harfbuzz_10.2.0-1_deb13u1": {
       "package": "harfbuzz",

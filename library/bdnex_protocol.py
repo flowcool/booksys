@@ -84,10 +84,11 @@ def validate_decision(decision: Any, rows: list[dict[str, Any]]) -> None:
     if isinstance(decision, dict):
         reason = decision.get('reason')
         if (decision.keys() == {'status', 'reason'} and decision['status'] == 'review' and rows
-                and reason in ('ambiguous', 'insufficient', 'conflicting_file_evidence')):
+                and reason in ('ambiguous', 'insufficient', 'conflicting_file_evidence', 'dated_ambiguous', 'dated_conflict')):
             return
-        if (decision.keys() == {'status', 'reason', 'edition_ref'} and decision['status'] == 'selected'
-                and reason in ('strong', 'numbered')):
+        if (decision.keys() == {'status', 'reason', 'edition_ref'}
+                and ((decision['status'] == 'selected' and reason in ('strong', 'numbered'))
+                     or (decision['status'] == 'proposed' and reason in ('unique_agreement', 'dated_unique')))):
             chosen = [row for row in rows if row['edition_ref'] == decision['edition_ref']]
             if len(chosen) == 1 and (reason != 'strong' or chosen[0]['score'] >= STRONG_SCORE):
                 return

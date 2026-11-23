@@ -165,14 +165,15 @@ class Engine:
         result = {'index': self.index, 'candidates': validate_candidates(candidates),
                   'match_counts': {'native': native, 'filtered': filtered}}
         if 'identity' in request and candidates:
-            if len(web_refs) == 1:
+            decision = self.decide(candidates, identity)
+            if len(web_refs) == 1 and not decision['reason'].startswith('dated_'):
                 # This is a proposal. The worker checks every file conflict and
                 # hydrates this exact album before any Web exemption.
                 result['decision'] = {'status': 'selected', 'reason': 'strong', 'edition_ref': next(iter(web_refs))}
-            elif web_refs:
+            elif len(web_refs) > 1:
                 result['decision'] = {'status': 'review', 'reason': 'conflicting_file_evidence'}
             else:
-                result['decision'] = self.decide(candidates, identity)
+                result['decision'] = decision
         return result
 
     def decide(self, candidates: list[dict[str, Any]], identity: dict[str, list[str]]) -> dict[str, str]:
@@ -183,7 +184,7 @@ class Engine:
         title = next(iter(identity.get('title', [])), None)
         year = next(iter(identity.get('year', [])), None)
 
-        def agrees(row: dict[str, Any]) -> bool:
+        def agrees(row: dict[str, Any], *, allow_undated_file: bool = False) -> bool:
             row_series = normalized(row.get('series') or '', 'series')
             row_title = normalized(row.get('title') or '', 'title')
             if row.get('number') and (identity.get('integral') == ['true']
@@ -192,7 +193,7 @@ class Engine:
             if series and row_series.startswith(series + ' '):
                 dates = re.findall(r'\b(?:18|19|20)\d{2}\b', row_series[len(series):])
                 if dates and ((year and year not in dates) or (
-                        not year and (not title or row_title != title))):
+                        not year and not allow_undated_file and (not title or row_title != title))):
                     return False
             if title and row_title and row_title != row_series and row_title != title:
                 return False
@@ -211,6 +212,16 @@ class Engine:
                     refs.add(ref)
         distinct_series = {normalized(slug, 'series') for slug, ref in self.numbered.get(number or '', ())
                            if ref in refs}
+        if series and not year and any(
+            re.search(r'\b(?:18|19|20)\d{2}\b', label[len(series):]) for label in distinct_series
+        ):
+            if len(refs) != 1:
+                return {'status': 'review', 'reason': 'dated_ambiguous'}
+            ref = next(iter(refs))
+            if any(row['edition_ref'] == ref and row.get('number')
+                   and agrees(row, allow_undated_file=True) for row in candidates):
+                return {'status': 'proposed', 'reason': 'dated_unique', 'edition_ref': ref}
+            return {'status': 'review', 'reason': 'dated_conflict'}
         if len(distinct_series) > 1:
             return {'status': 'review', 'reason': 'ambiguous'}
         if len(strong) > 1 or (len(refs) > 1 and not (
@@ -225,8 +236,19 @@ class Engine:
                 if (row['edition_ref'] not in refs or not row.get('number')
                         or not (label == series or label.startswith(series + ' '))):
                     continue
-                dated_variant = re.search(r'\b(?:18|19|20)\d{2}\b', label[len(series):])
-                if dated_variant and not year and normalized(row.get('title') or '', 'title') not in identity.get('title', []):
-                    break
                 return {'status': 'selected', 'reason': 'numbered', 'edition_ref': row['edition_ref']}
+        # An agreement outside the selection rules can only locate a page.
+        if number:
+            proposals = []
+            for row in compatible:
+                if not row.get('number') or normalized(row['number'], 'number') != number:
+                    continue
+                label = normalized(row.get('series') or '', 'series')
+                if (series and (label == series or label.startswith(series + ' '))) or (
+                        title and normalized(row.get('title') or '', 'title') == title):
+                    proposals.append(row['edition_ref'])
+            if len(proposals) == 1:
+                return {'status': 'proposed', 'reason': 'unique_agreement', 'edition_ref': proposals[0]}
+            if len(proposals) > 1:
+                return {'status': 'review', 'reason': 'ambiguous'}
         return {'status': 'review', 'reason': 'insufficient'}

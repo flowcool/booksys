@@ -32,7 +32,7 @@ def normalized(value: Any, field: str = '') -> Any:
     text = text.replace('œ', 'oe').replace('’', "'")
     if field in ('title', 'series'):
         text = re.sub(r"\s*\((?:le|la|les|l'|un|une|des)\)\s*$", '', text)
-        text = re.sub(r"^(?:(?:le|la|les|un|une|des)[ .]+|l')", '', text)
+        text = re.sub(r"^(?:(?:le|la|les|un|une|des)[ .]+|[ld]'(?=\w)|[ld][ _.-]+(?=[aeiouhy]))", '', text)
     return ' '.join(re.findall(r'\w+', text))
 
 
@@ -53,7 +53,8 @@ def informative(value: Any) -> bool:
     if not present(value):
         return False
     text = normalized(value, 'title')
-    generic = {'album', 'integrale', 'tome', 'volume', 'vol', 'bd', 'comic', 'comics', 'manga', 'numero'}
+    generic = {'album', 'integrale', 'tome', 'volume', 'vol', 'bd', 'comic', 'comics',
+               'manga', 'numero', 'issue', 'untitled', 'n'}
     return any(not token.isdigit() and token not in generic for token in text.split())
 
 
@@ -82,7 +83,7 @@ def asset_assertions(evidence: dict[str, Any]) -> list[dict[str, Any]]:
         provenance = evidence.get('field_provenance', {}).get(field, {})
         if present(evidence.get(field)) and (evidence.get('asset_bound') is True or provenance.get('scope') == 'asset'):
             assertions.append({**deepcopy(provenance), 'field': field, 'value': evidence[field], 'scope': 'asset'})
-    return assertions
+    return [a for a in assertions if a['field'] != 'title' or informative(a['value'])]
 
 
 def creator_names(candidate: dict[str, Any]) -> dict[str, set[str]]:

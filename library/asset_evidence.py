@@ -10,6 +10,13 @@ from library.bdnex_protocol import bedetheque_album_id
 from library.primitives import LibraryError
 
 
+def file_years(evidence: dict[str, Any]) -> set[str]:
+    years = {str(claim['value']) for claim in evidence.get('provenance', {}).get('year', [])
+             if claim.get('scope') == 'asset'}
+    return years | {year for label in evidence.get('labels', [])
+                    for year in re.findall(r'\(((?:18|19|20)\d{2})\)', label)}
+
+
 def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool = True) -> dict[str, Any]:
     asset = state['assets'][asset_id]
     if asset.get('sha256') != asset_id:
@@ -28,11 +35,20 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
         result['provenance'].setdefault('labels', []).append(
             {'value': value, 'source': source, 'scope': 'asset'})
         from library.names import METHOD, parse_name
-        for field, parsed in parse_name(value).items():
-            result['provenance'].setdefault(field, []).append(
-                {'value': parsed, 'source': source, 'scope': 'asset', 'method': METHOD})
+        parsed = parse_name(value)
+        suffix = parsed.pop('title_suffix_hint', None)
+        raw_title = parsed.pop('raw_title', None)
+        for field, field_value in parsed.items():
+            entry = {'value': field_value, 'source': source, 'scope': 'asset', 'method': METHOD}
+            if field == 'title' and suffix:
+                entry.update(value=raw_title, title_suffix_hint=suffix, title_without_suffix=field_value)
+            result['provenance'].setdefault(field, []).append(entry)
 
     embedded = asset.get('embedded', {})
+    embedded_year = str(embedded.get('Year') or '')
+    if re.fullmatch(r'(?:18|19|20)\d{2}', embedded_year):
+        result['provenance']['year'] = [{'value': embedded_year, 'scope': 'asset',
+                                       'source': 'embedded:' + asset_id}]
     web = embedded.get('Web')
     if bedetheque_album_id(web):
         result['web'] = web
@@ -62,9 +78,9 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
         name = origin.get('member') if origin.get('parent_origin') else origin.get('path')
         if isinstance(name, str):
             label(PurePosixPath(name).stem, 'origin:' + oid)
-    if not include_capture:
-        return result
-    for source, hint in asset.get('captured_hints', {}).items():
+    has_file_number = bool(result['provenance'].get('number'))
+    captured_hints = asset.get('captured_hints', {}) if include_capture else {}
+    for source, hint in captured_hints.items():
         if not isinstance(hint, dict):
             continue
         bound = any(source == origin.get('source') and not origin.get('parent_origin')
@@ -76,9 +92,22 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
         for value in (hint.get('parent_title'), hint.get('title')):
             if isinstance(value, str) and value.strip() and value not in result['discovery_queries']:
                 result['discovery_queries'].append(value)
+    from library.work_identity import normalized, informative
+    embedded_title = result.get('title', '')
+    numbered_title = re.fullmatch(r'Tome\s+([0-9]{1,3})\s*[-–—:]\s*(.+)', embedded_title, re.I)
+    if numbered_title and has_file_number:
+        title = numbered_title[2].strip()
+        numbers = {normalized(entry['value'], 'number') for entry in result['provenance'].get('number', [])}
+        if (numbers == {normalized(numbered_title[1], 'number')}
+                and informative(title) and not is_volume_title(title)):
+            result['title'] = title
+            # The embedded assertion is recorded before any origin or capture titles.
+            result['provenance']['title'][0].update(
+                value=title, raw_value=embedded_title, method='embedded-numbered-title-1')
+    if not include_capture:
+        return result
     # A plain standalone name is qualified only when the directly captured title
     # agrees with the exact source file. Derived bundle hints cannot add this proof.
-    from library.work_identity import normalized, informative
     def standalone(value: str) -> str:
         value = re.sub(r'\.(?:pdf|cbz|cbr)$', '', value, flags=re.I)
         value = re.sub(r'^zz(?=[a-zÀ-ÿ])', '', value, flags=re.I)
