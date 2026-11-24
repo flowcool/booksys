@@ -243,7 +243,8 @@ class IdentityTests(unittest.TestCase):
         state['assets'][key]['origins'].append('new')
         state['origins']['new'] = {'sha256': key, 'path': 'Example - T03 - London.cbz'}
         updated = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
-        self.assertEqual(updated['assets'][key]['work_result']['status'], 'no_match')
+        self.assertEqual(updated['assets'][key]['work_result']['status'], 'review')
+        self.assertEqual(updated['assets'][key]['work_result']['reason'], 'Contradictory asset identity evidence')
 
 
     def test_bookys_heading_fallback_uses_only_asset_bound_labels(self) -> None:
@@ -357,11 +358,12 @@ class IdentityTests(unittest.TestCase):
                         f'<meta itemprop="alternativeheadline" content="Tome {number}">'
                         '<meta itemprop="genre" content="Franco-Belge"><span itemprop="publisher">Imperia</span>')
                 work = self.numbered_alias_result(f'{alias} - T{number}.cbz', [row], html)
-                self.assertEqual(work['status'], 'no_match')
+                self.assertEqual(work['status'], 'review')
                 self.assertEqual(work['work'], {})
                 self.assertEqual(work['candidate_concordance']['mode'], 'none')
-                self.assertEqual(work['candidates'][0]['series'], canonical)
-                self.assertEqual(work['candidates'][0]['title'], title)
+                self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
+                self.assertEqual(work['concordant_candidates'][0]['series'], canonical)
+                self.assertEqual(work['concordant_candidates'][0]['title'], title)
                 self.assertEqual(work['evidence']['provenance']['series'][0]['value'], alias)
                 self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
 
@@ -380,7 +382,8 @@ class IdentityTests(unittest.TestCase):
                 '<meta itemprop="alternativeheadline" content="Tome 82">')
         work = self.numbered_alias_result('Cassidy - T82.cbz', [candidate], html, insufficient=True)
         self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
-        self.assertEqual(work['status'], 'no_match')
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
 
         other = {**candidate, 'edition_ref': '999', 'url': 'https://www.bedetheque.com/album/index/i/999'}
         for filename, choices in (

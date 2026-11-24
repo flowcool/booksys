@@ -26,8 +26,11 @@ The running implementation is not evidence that this accepted change is delivere
    `Web` can identify that candidate when the numbers agree. A number-first label
    can prove an informative title of at least two words and its number.
    Parsed filename, OCR and captured fields can support a candidate. They cannot
-   veto a candidate that meets these rules. Two possible works require review.
-   Edition variants of one work can share a decision. Never choose by score.
+   veto a candidate that meets these rules. Edition variants of one work can
+   share a decision. If R3 finds no candidate, finds several works, or has an
+   incomplete candidate set, apply the existing exact concordance rules.
+   Accept one work when exact evidence proves it. Keep the exact proof and
+   the R3 receipt. Never choose by score.
    A contradictory number blocks. An informative label title after the issue
    marker blocks a candidate title with no shared word. A valid own `Web` can
    explain a noisy title. Record the mode and matched words with method
@@ -104,6 +107,8 @@ year absent from the file also requires cover confirmation, as decision 13 state
 Keep threshold 40. A recorded cover score below 10 for this asset and album blocks
 identification, including a title or Web exemption. Apply R3 before parsed-field
 conflicts and service score decisions in all enrichment and discovery paths.
+If exact concordance identifies a work, use its existing title, `Web`, creator
+and cover checks. An R3 abstention grants no cover exemption.
 Compare the first validated page with the selected album cover. Covers cannot
 select or rank candidates or establish an edition. Record both image digests,
 method, threshold and result. A missing or failed cover check leaves the proposal

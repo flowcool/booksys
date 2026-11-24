@@ -52,7 +52,7 @@ class WorkEnrichmentTests(unittest.TestCase):
     def test_exact_page_does_not_override_other_title_evidence_or_a_wrong_volume(self):
         cases = (
             ('Naruto - 1 - Other Caption.cbz', None, '1', 'no_match'),
-            ('Naruto - 1 - Masashi Kishimoto.cbz', {'Title': 'Other Caption'}, '1', 'no_match'),
+            ('Naruto - 1 - Masashi Kishimoto.cbz', {'Title': 'Other Caption'}, '1', 'review'),
             ('Naruto - 2 - Naruto Uzumaki.cbz', None, '2', 'review'),
         )
         for label, embedded, number, status in cases:
@@ -61,7 +61,8 @@ class WorkEnrichmentTests(unittest.TestCase):
 
     def test_exact_page_does_not_choose_between_two_numbered_proposals(self):
         result = self.match_naruto('Naruto - 1 - Naruto Uzumaki.cbz', ambiguous=True)
-        self.assertEqual(result['status'], 'review')
+        self.assertEqual(result['status'], 'no_match')
+        self.assertEqual(result['candidate_concordance']['mode'], 'ambiguous')
 
     def test_opening_ocr_identifies_work_without_isbn_but_not_rear_advertisement(self):
         from library.work_enrichment import printed_concordance

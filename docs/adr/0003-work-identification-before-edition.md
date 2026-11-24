@@ -19,8 +19,9 @@ Use candidate-centric concordance (`candidate-concordance-r3-v1`). Asset labels
 must contain the candidate's informative series and title words with the same
 number. A number-first informative title or the file's own Bedetheque `Web` can
 also prove one work. Parsed filename, OCR and captured fields support candidates;
-they do not veto an R3 pick. Several possible works require review. Never rank
-by score. Collapse edition variants without inventing edition metadata.
+they do not veto an R3 pick. If R3 abstains, apply exact concordance with its
+existing vetoes and keep both results. Never rank by score. Collapse edition
+variants without inventing edition metadata.
 
 Series and number alone, generic titles and an unsupported series year require
 the existing cover confirmation at threshold 40. A recorded score below 10 for

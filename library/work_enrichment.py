@@ -12,7 +12,7 @@ from library.french_source import ProviderPage, robots_allowed
 from library.names import METHOD as NAME_METHOD
 from library.work_identity import (
     NUMBERED_SERIES_ALIASES, WORK_FIELDS, asset_assertions, evaluate_work, classify_work,
-    informative, known_work_value, normalized, present,
+    informative, known_work_value, normalized, present, uses_candidate_concordance,
 )
 
 COMPETING_NUMBERED_SERIES = {'garry': frozenset({
@@ -130,6 +130,7 @@ def bind_cover(rows: list[dict[str, Any]], selected: dict[str, Any]) -> None:
 def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 extra: list[dict[str, Any]] | None = None, *, discovery: bool = True,
                 hydrate: bool = False, exact_page_attempts: list[dict[str, str]] | None = None,
+                bdnex_decision: dict[str, Any] | None = None,
                 cover_source: CoverSource | None = None) -> None:
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
@@ -187,7 +188,7 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             page_attempt['status'] = 'parsed'
             canonical = page_candidates[0]
             from library.candidate_concordance import words as candidate_words
-            if local_result.get('candidate_concordance') and (
+            if uses_candidate_concordance(local_result) and (
                     canonical.get('edition_ref') != row.get('edition_ref')
                     or numbered_work(canonical)[1] != numbered_work(row)[1]
                     or candidate_words(canonical.get('series')) != candidate_words(row.get('series'))
@@ -254,6 +255,8 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     result['attempts'] = attempts
     result['exact_page_attempts'] = exact_page_attempts
     result['evidence'] = evidence
+    if bdnex_decision is not None:
+        result['bdnex_decision'] = bdnex_decision
     result['updated_at'] = now()
     if not candidates and not evidence.get('identity_conflicts'):
         statuses = {a['status'] for a in attempts}
@@ -299,16 +302,19 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
     evidence = bind_evidence(state, key)
     candidates = response.get('candidates', [])
     concordant = evaluate_work(evidence, candidates)
-    if concordant.get('candidate_concordance'):
+    receipt = concordant['candidate_concordance']
+    r3 = uses_candidate_concordance(concordant)
+    asset_labels = any(a.get('scope') == 'asset' for a in evidence.get('provenance', {}).get('labels', []))
+    # Preserve the separate service proposal path when R3 has no asset labels to check.
+    if receipt['mode'] != 'none' or (asset_labels and any(c.get('source') == 'bedetheque' for c in candidates)):
         concordant.update(evidence=evidence, attempts=[], exact_page_attempts=[], updated_at=now(),
                           bdnex_decision=decision)
         if concordant['status'] == 'no_match':
             save_work_result(asset, concordant, providers, cover_source)
             return False  # Keep discovery available; never revive a rejected service proposal.
-        if concordant['status'] == 'identified' and concordant['candidate_concordance']['needs_cover']:
+        if concordant['status'] == 'identified' and (not r3 or receipt['needs_cover']):
             enrich_work(state, key, providers, candidates, discovery=False, hydrate=True,
-                        cover_source=cover_source)
-            asset['work_result']['bdnex_decision'] = decision
+                        bdnex_decision=decision, cover_source=cover_source)
         else:
             save_work_result(asset, concordant, providers, cover_source)
         return True
@@ -318,7 +324,7 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
         'status': 'review', 'reason': 'BDneX found no decisive reference', 'work': {},
         'field_conflicts': {}, 'provenance': [], 'candidates': candidates, 'concordant_candidates': [],
         'evidence': evidence, 'attempts': [], 'exact_page_attempts': [], 'updated_at': now(),
-        'bdnex_decision': decision,
+        'bdnex_decision': decision, 'candidate_concordance': receipt,
     }
     if decision_status in ('selected', 'proposed'):
         selected = next(row for row in candidates if row['edition_ref'] == decision['edition_ref'])

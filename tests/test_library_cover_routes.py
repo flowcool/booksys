@@ -154,9 +154,9 @@ class CoverRouteTests(unittest.TestCase):
             for label, embedded, row_changes, expected in (
                 ('ambiguous', {'Series': 'Series', 'Number': '2'}, {'series': 'Series'}, 'review'),
                 ('dated', {'Series': 'Series', 'Number': '2'}, {'series': 'Series 2011'}, 'review'),
-                ('wrong number', {'Series': 'Series', 'Number': '3'}, {'series': 'Series'}, 'no_match'),
+                ('wrong number', {'Series': 'Series', 'Number': '3'}, {'series': 'Series'}, 'review'),
                 ('title veto', {'Series': 'Series', 'Number': '2', 'Title': 'Other Title'},
-                 {'series': 'Series'}, 'review'),
+                 {'series': 'Series'}, 'no_match'),
             ):
                 with self.subTest(label=label):
                     asset['embedded'] = embedded
