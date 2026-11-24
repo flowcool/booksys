@@ -307,7 +307,7 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(result['assets'][key]['work_result']['status'] == 'identified', identified)
 
     def numbered_alias_result(self, filename: str, candidates: list[dict[str, Any]],
-                              html: str | None) -> dict[str, Any]:
+                              html: str | None, *, insufficient: bool = False) -> dict[str, Any]:
         from copy import deepcopy
 
         key = 'a'*64
@@ -320,7 +320,10 @@ class IdentityTests(unittest.TestCase):
 
         class Local:
             def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-                return {'status': 'ok', 'candidates': candidates}
+                response: dict[str, Any] = {'status': 'ok', 'candidates': candidates}
+                if insufficient:
+                    response['decision'] = {'status': 'review', 'reason': 'insufficient'}
+                return response
 
         class Public:
             bdnex = Local()
@@ -362,6 +365,33 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(work['concordant_candidates'][0]['title'], title)
                 self.assertEqual(work['evidence']['provenance']['series'][0]['value'], alias)
                 self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
+
+    def test_insufficient_series_alias_reads_only_one_exact_numbered_reference(self) -> None:
+        from html import escape
+
+        canonical = 'Hopalong Cassidy puis Cassidy (Impéria)'
+        title = 'La cité perdue'
+        ref = '292428'
+        url = f'https://www.bedetheque.com/album/index/i/{ref}'
+        candidate = {'source': 'bedetheque', 'edition_ref': ref, 'url': url, 'title': title,
+                     'series': canonical, 'number': '82', 'score': 87,
+                     'provenance': {'method': 'bdnex-sitemap-1'}}
+        html = (f'<link rel="canonical" href="{url}"><h1><a>{escape(canonical)}</a></h1>'
+                f'<meta itemprop="name" content="{escape(canonical + " - " + title)}">'
+                '<meta itemprop="alternativeheadline" content="Tome 82">')
+        work = self.numbered_alias_result('Cassidy - T82.cbz', [candidate], html, insufficient=True)
+        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
+        self.assertEqual(work['status'], 'review')
+
+        other = {**candidate, 'edition_ref': '999', 'url': 'https://www.bedetheque.com/album/index/i/999'}
+        for filename, choices in (
+                ('Cassidy - T83.cbz', [candidate]),
+                ('Other Cassidy - T82.cbz', [candidate]),
+                ('Cassidy - T82.cbz', [candidate, other])):
+            with self.subTest(filename=filename, candidates=len(choices)):
+                work = self.numbered_alias_result(filename, choices, html, insufficient=True)
+                self.assertEqual(work['exact_page_attempts'], [])
+                self.assertEqual(work['status'], 'no_match')
 
     def test_numbered_series_aliases_refuse_unverified_or_conflicting_candidates(self) -> None:
         base = 'https://www.bedetheque.com/album/index/i/'

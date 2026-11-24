@@ -10,7 +10,12 @@ import unicodedata
 IDENTITY_FIELDS = ('title', 'series', 'number', 'integral')
 WORK_FIELDS = (*IDENTITY_FIELDS, 'author', 'contributors', 'summary', 'language',
                'publisher', 'date', 'isbn', 'genres', 'adult', 'recommended_age', 'family')
-NUMBERED_SERIES_ALIASES = {'big bull': 'big bull imperia', 'garry': 'garry imperia 2e serie'}
+NUMBERED_SERIES_ALIASES = {
+    'big bull': 'big bull imperia',
+    'cassidy': 'hopalong cassidy puis cassidy imperia',
+    'garry': 'garry imperia 2e serie',
+    'hulk l incroyable ed heritage': 'incroyable hulk editions heritage',
+}
 
 
 def normalized(value: Any, field: str = '') -> Any:
