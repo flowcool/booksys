@@ -98,8 +98,6 @@ def exact_bdnex_reference(evidence: dict[str, Any], candidates: list[dict[str, A
 def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any],
                             *, allow_bare_creator: bool = True) -> None:
     title = reference.get('title') or ''
-    if not informative(title):
-        return
     creators = {normalized(name) for field in ('writers', 'artists') for name in reference.get(field, [])}
     for entry in evidence['provenance'].get('title', []):
         if entry.get('method') != NAME_METHOD:
@@ -107,7 +105,8 @@ def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any],
         hint = entry.get('title_suffix_hint')
         if hint:
             parts = {normalized(name) for name in re.split(r'[-,]', hint)}
-            if (normalized(entry['title_without_suffix'], 'title') == normalized(title, 'title')
+            if (informative(title)
+                    and normalized(entry['title_without_suffix'], 'title') == normalized(title, 'title')
                     and (normalized(hint) in creators or parts <= creators)):
                 entry.update(value=entry['title_without_suffix'], raw_value=entry['value'],
                              creator_reference=reference['url'])
@@ -189,12 +188,15 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             canonical = page_candidates[0]
             bind_cover(page_candidates, row)
             if early_reference:
-                if (canonical['edition_ref'] != row['edition_ref']
-                        or numbered_work(canonical) != numbered_work(row)
+                reference_series, reference_number = numbered_work(row)
+                canonical_series, canonical_number = numbered_work(canonical)
+                page_matches_file_series = canonical_series == file_series_alias
+                if (canonical['edition_ref'] != row['edition_ref'] or canonical_number != reference_number
+                        or (canonical_series != reference_series and not page_matches_file_series)
                         or (file_series_alias and canonical['provenance'].get('canonical_album_ref') != row['edition_ref'])):
                     page_attempt['status'] = 'reference_mismatch'
                     continue
-                if file_series_alias:
+                if file_series_alias and not page_matches_file_series:
                     for candidate in page_candidates:
                         candidate['field_provenance']['series'] = {
                             **candidate['field_provenance']['series'], 'file_series_alias': file_series_alias,

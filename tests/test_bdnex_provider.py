@@ -393,6 +393,29 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(work['exact_page_attempts'], [])
                 self.assertEqual(work['status'], 'no_match')
 
+    def test_index_alias_can_hydrate_the_file_series_with_verified_creator_credit(self) -> None:
+        ref = '451252'
+        url = f'https://www.bedetheque.com/album/index/i/{ref}'
+        candidate = {'source': 'bedetheque', 'edition_ref': ref, 'url': url,
+                     'title': 'Tome 7', 'series': 'Witch and the Beast', 'number': '7', 'score': 87,
+                     'provenance': {'method': 'bdnex-sitemap-1'}}
+        html = (f'<link rel="canonical" href="{url}"><h1><a>The Witch and the Beast</a></h1>'
+                '<meta itemprop="name" content="The Witch and the Beast - Tome 7">'
+                '<meta itemprop="alternativeheadline" content="Tome 7">'
+                '<div class="liste-auteurs"><span><a>Satake, Kousuke</a>'
+                '<small>Scénario</small></span></div>')
+        filename = 'The Witch and the Beast - T07 - Kousuke Satake.cbz'
+        work = self.numbered_alias_result(filename, [candidate], html, insufficient=True)
+        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
+        self.assertEqual(work['candidates'][0]['series'], 'The Witch and the Beast')
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
+
+        wrong = html.replace('The Witch and the Beast', 'The Other Witch')
+        work = self.numbered_alias_result(filename, [candidate], wrong, insufficient=True)
+        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'reference_mismatch'}])
+        self.assertEqual(work['status'], 'no_match')
+
     def test_numbered_series_aliases_refuse_unverified_or_conflicting_candidates(self) -> None:
         base = 'https://www.bedetheque.com/album/index/i/'
         ref = '406430'

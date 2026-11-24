@@ -11,10 +11,13 @@ IDENTITY_FIELDS = ('title', 'series', 'number', 'integral')
 WORK_FIELDS = (*IDENTITY_FIELDS, 'author', 'contributors', 'summary', 'language',
                'publisher', 'date', 'isbn', 'genres', 'adult', 'recommended_age', 'family')
 NUMBERED_SERIES_ALIASES = {
+    'attack serie 1': 'attack 1re serie imperia',
     'big bull': 'big bull imperia',
     'cassidy': 'hopalong cassidy puis cassidy imperia',
+    'cyclone serie 1': 'cyclone 1re serie aredit',
     'garry': 'garry imperia 2e serie',
     'hulk l incroyable ed heritage': 'incroyable hulk editions heritage',
+    'the witch and the beast': 'witch and the beast',
 }
 
 
