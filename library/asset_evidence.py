@@ -45,6 +45,8 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
             result['provenance'].setdefault(field, []).append(entry)
 
     embedded = asset.get('embedded', {})
+    result['embedded'] = {key: embedded[key] for key in ('Series', 'Title', 'Number', 'Web', 'Year')
+                          if key in embedded}
     embedded_year = str(embedded.get('Year') or '')
     if re.fullmatch(r'(?:18|19|20)\d{2}', embedded_year):
         result['provenance']['year'] = [{'value': embedded_year, 'scope': 'asset',

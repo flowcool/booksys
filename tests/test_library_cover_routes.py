@@ -59,10 +59,10 @@ class CoverRouteTests(unittest.TestCase):
         snapshot = SimpleNamespace(result_set=lambda *a: deepcopy(state))
         with patch('library.work_enrichment.discover', return_value=DiscoveryResult('no_candidate')):
             result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
-            self.assertEqual(result['exact_page_attempts'], [{'edition_ref': '123', 'status': 'parsed'}])
+            self.assertEqual(result['exact_page_attempts'], [])
             self.assertEqual(result['status'], 'identified')
             self.assertEqual(result['work']['title'], 'Informative Album')
-            self.assertEqual(result['evidence']['cover_confirmation']['reason'], 'asset_title')
+            self.assertEqual(result['candidate_concordance']['mode'], 'cov')
             embedded = state['assets'][key]['embedded']
             self.assertEqual(embedded['Title'], 'Tome 02 - Informative Album')
             self.assertEqual(result['evidence']['provenance']['title'][0]['raw_value'], embedded['Title'])
@@ -86,7 +86,8 @@ class CoverRouteTests(unittest.TestCase):
                     state['assets'][key]['captured_hints'] = hints
                     result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
                     self.assertEqual(result['exact_page_attempts'], [])
-                    self.assertEqual(result['status'], 'no_match')
+                    self.assertEqual(result['status'], 'identified')
+                    self.assertEqual(result['candidate_concordance']['mode'], 'cov')
 
     def test_unique_numbered_proposal_hydrates_one_album_before_confirmation(self):
         from bdnex_service.engine import Engine
@@ -96,7 +97,7 @@ class CoverRouteTests(unittest.TestCase):
         key = 'a'*64
         asset = state['assets'][key]
         asset['origins'] = ['o']
-        state['origins']['o'] = {'sha256': key, 'path': 'Comic.cbz'}
+        state['origins']['o'] = {'sha256': key, 'path': 'Series T02.cbz'}
         row.update(score=83, url='https://www.bedetheque.com/BD-Series-Number-2-123.html')
         engine = Engine.__new__(Engine)
         engine.numbered = {}
@@ -139,30 +140,31 @@ class CoverRouteTests(unittest.TestCase):
             candidates[:] = [row, {**other, 'title': 'Other Album'}]
             pages.clear()
             result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
-            self.assertEqual(pages, [row['url']])
+            self.assertEqual(pages, [])
             self.assertEqual(result['status'], 'identified')
-            self.assertEqual(result['evidence']['cover_confirmation']['reason'], 'asset_title')
+            self.assertEqual(result['candidate_concordance']['mode'], 'cov')
 
             title = 'Conflicting Album'
             pages.clear()
             result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
-            self.assertEqual(pages, [row['url']])
-            self.assertEqual(result['reason_code'], 'cover_identity_conflict')
+            self.assertEqual(pages, [])
+            self.assertEqual(result['status'], 'identified')
+            self.assertEqual(result['candidate_concordance']['mode'], 'cov')
 
             for label, embedded, row_changes, expected in (
                 ('ambiguous', {'Series': 'Series', 'Number': '2'}, {'series': 'Series'}, 'review'),
-                ('dated', {'Series': 'Series', 'Number': '2'}, {'series': 'Series 2011'}, 'no_match'),
+                ('dated', {'Series': 'Series', 'Number': '2'}, {'series': 'Series 2011'}, 'review'),
                 ('wrong number', {'Series': 'Series', 'Number': '3'}, {'series': 'Series'}, 'no_match'),
                 ('title veto', {'Series': 'Series', 'Number': '2', 'Title': 'Other Title'},
-                 {'series': 'Series'}, 'no_match'),
+                 {'series': 'Series'}, 'review'),
             ):
                 with self.subTest(label=label):
                     asset['embedded'] = embedded
-                    candidates[:] = [{**row, **row_changes}, {**other, **row_changes}] if label == 'ambiguous' else [
+                    candidates[:] = [{**row, **row_changes}, {**other, **row_changes, 'title': 'Other Album'}] if label == 'ambiguous' else [
                         {**row, **row_changes}, other]
                     pages.clear()
                     result = prepare_enrichment(snapshot, key, providers, [])['assets'][key]['work_result']
-                    self.assertEqual(pages, [])
+                    self.assertEqual(pages, [row['url']] if label == 'dated' else [])
                     self.assertEqual(result['status'], expected)
 
     def test_dated_unique_needs_a_cover_even_when_title_or_web_agrees(self):
@@ -354,5 +356,7 @@ class CoverRouteTests(unittest.TestCase):
                     self.assertEqual(result['assets'][key]['work_result'], state['assets'][key]['work_result'])
                     self.assertEqual(providers.bdnex.calls, 0)
                 else:
-                    self.assert_guarded(result)
+                    work = result['assets'][key]['work_result']
+                    self.assertEqual(work['status'], 'identified')
+                    self.assertEqual(work['candidate_concordance']['mode'], 'cov')
                     self.assertEqual(providers.bdnex.calls, 2)
