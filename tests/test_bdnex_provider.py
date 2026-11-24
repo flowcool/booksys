@@ -234,20 +234,19 @@ class IdentityTests(unittest.TestCase):
 
         result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
         work = result['assets'][key]['work_result']
-        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['status'], 'no_match')
         self.assertEqual(work['work'], {})
-        self.assertEqual(work['reason_code'], 'cover_identity_conflict')
-        self.assertEqual(work['provenance'][0]['edition_ref'], '123')
-        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': '123', 'status': 'unavailable'}])
+        self.assertEqual(work['candidate_concordance']['mode'], 'none')
+        self.assertEqual(work['candidates'][0]['edition_ref'], '123')
 
         state['assets'][key] = result['assets'][key]
         state['assets'][key]['origins'].append('new')
         state['origins']['new'] = {'sha256': key, 'path': 'Example - T03 - London.cbz'}
         updated = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
-        self.assertEqual(updated['assets'][key]['work_result']['status'], 'review')
+        self.assertEqual(updated['assets'][key]['work_result']['status'], 'no_match')
 
 
-    def test_bookys_heading_fallback_needs_independent_file_evidence(self) -> None:
+    def test_bookys_heading_fallback_uses_only_asset_bound_labels(self) -> None:
         from copy import deepcopy
 
         key = 'a'*64
@@ -259,8 +258,8 @@ class IdentityTests(unittest.TestCase):
 
         for embedded, parent, page_title, page_available, expected_paths, identified in (
             ({'Title': candidate['title']}, None, heading, True, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
-            ({'Title': candidate['title']}, None, heading, False, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], False),
-            ({}, None, heading, True, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], False),
+            ({'Title': candidate['title']}, None, heading, False, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
+            ({}, None, heading, True, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
             ({}, 'bundle', heading, True, ['scan.cbz'], False),
             ({}, None, 'Nains - Tomes 1-3', True, ['scan.cbz'], False),
         ):
@@ -358,11 +357,11 @@ class IdentityTests(unittest.TestCase):
                         f'<meta itemprop="alternativeheadline" content="Tome {number}">'
                         '<meta itemprop="genre" content="Franco-Belge"><span itemprop="publisher">Imperia</span>')
                 work = self.numbered_alias_result(f'{alias} - T{number}.cbz', [row], html)
-                self.assertEqual(work['status'], 'review')
+                self.assertEqual(work['status'], 'no_match')
                 self.assertEqual(work['work'], {})
-                self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
-                self.assertEqual(work['concordant_candidates'][0]['series'], canonical)
-                self.assertEqual(work['concordant_candidates'][0]['title'], title)
+                self.assertEqual(work['candidate_concordance']['mode'], 'none')
+                self.assertEqual(work['candidates'][0]['series'], canonical)
+                self.assertEqual(work['candidates'][0]['title'], title)
                 self.assertEqual(work['evidence']['provenance']['series'][0]['value'], alias)
                 self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
 
@@ -381,7 +380,7 @@ class IdentityTests(unittest.TestCase):
                 '<meta itemprop="alternativeheadline" content="Tome 82">')
         work = self.numbered_alias_result('Cassidy - T82.cbz', [candidate], html, insufficient=True)
         self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
-        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['status'], 'no_match')
 
         other = {**candidate, 'edition_ref': '999', 'url': 'https://www.bedetheque.com/album/index/i/999'}
         for filename, choices in (
@@ -414,7 +413,8 @@ class IdentityTests(unittest.TestCase):
         wrong = html.replace('The Witch and the Beast', 'The Other Witch')
         work = self.numbered_alias_result(filename, [candidate], wrong, insufficient=True)
         self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'reference_mismatch'}])
-        self.assertEqual(work['status'], 'no_match')
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['reason_code'], 'cover_page_reference_mismatch')
 
     def test_numbered_series_aliases_refuse_unverified_or_conflicting_candidates(self) -> None:
         base = 'https://www.bedetheque.com/album/index/i/'
@@ -447,7 +447,7 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(work['status'], 'no_match')
                 self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': attempt}] if attempt else [])
 
-    def test_exact_page_contradiction_survives_public_discovery_fallback(self) -> None:
+    def test_r3_complete_title_identifies_without_page_hydration(self) -> None:
         from copy import deepcopy
         key = 'a'*64
         state = {'assets': {key: {'sha256': key, 'origins': ['o'], 'embedded': {'Title': 'Old title'}}},
@@ -478,12 +478,11 @@ class IdentityTests(unittest.TestCase):
                 return []
 
         result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
-        self.assertNotEqual(result['assets'][key]['work_result']['status'], 'identified')
+        self.assertEqual(result['assets'][key]['work_result']['status'], 'identified')
         work = result['assets'][key]['work_result']
-        self.assertEqual(work['candidates'][0]['title'], 'New title')
-        self.assertEqual(work['exact_page_attempts'], [{
-            'edition_ref': '123', 'status': 'parsed',
-        }])
+        self.assertEqual(work['work']['title'], 'Old title')
+        self.assertEqual(work['candidate_concordance']['mode'], 'cov')
+        self.assertEqual(work['exact_page_attempts'], [])
 
     def test_scores_and_wrong_embedded_web_do_not_override_asset_identity(self) -> None:
         evidence = {'asset_bound': True, 'series': 'Nains', 'number': '1'}

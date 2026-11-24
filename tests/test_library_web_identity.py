@@ -47,8 +47,8 @@ class WebIdentityTests(unittest.TestCase):
         apply_bdnex_decision(state, 'a'*64, providers, response)
         result = state['assets']['a'*64]['work_result']
         self.assertEqual(result['status'], 'identified', result)
-        comparison = result['evidence']['cover_confirmation']['web_comparisons'][0]
-        self.assertEqual(comparison['basis'], 'same_album_reference')
+        self.assertEqual(result['candidate_concordance']['mode'], 'web')
+        self.assertEqual(result['evidence']['cover_confirmation']['basis'], 'web')
         providers.get_binary.assert_not_called()
 
     def test_work_differences_win_over_title_creator_and_cover(self):
@@ -125,7 +125,7 @@ class WebIdentityTests(unittest.TestCase):
         self.assertEqual(state['assets']['a'*64]['work_result']['status'], 'review')
         providers.get_binary.assert_not_called()
 
-    def test_every_structured_conflict_wins_over_web_and_title(self):
+    def test_own_web_ignores_noisy_fields_but_never_a_wrong_number(self):
         for field, value in (('Title', 'Other Album'), ('Series', 'Other Series'),
                              ('Number', '1'), ('Writer', 'Other Writer')):
             with self.subTest(field=field):
@@ -133,8 +133,12 @@ class WebIdentityTests(unittest.TestCase):
                 state['assets']['a'*64]['embedded'].update({'Title': 'Informative Album', field: value})
                 apply_bdnex_decision(state, 'a'*64, providers, response)
                 result = state['assets']['a'*64]['work_result']
-                self.assertEqual(result['status'], 'review', result)
-                self.assertIsNone(result['evidence']['cover_confirmation']['basis'])
+                if field == 'Number':
+                    self.assertEqual(result['status'], 'review', result)
+                    self.assertIsNone(result['evidence']['cover_confirmation']['basis'])
+                else:
+                    self.assertEqual(result['status'], 'identified', result)
+                    self.assertEqual(result['candidate_concordance']['mode'], 'web')
                 providers.get_binary.assert_not_called()
 
     def test_dated_series_mismatch_wins_over_web(self):
@@ -146,10 +150,11 @@ class WebIdentityTests(unittest.TestCase):
         state['origins']['o'] = {'sha256': 'a'*64, 'path': 'Series (2011) - T02.cbz', 'source': 'offline:series'}
         apply_bdnex_decision(state, 'a'*64, providers, response)
         result = state['assets']['a'*64]['work_result']
-        self.assertEqual(result['reason_code'], 'cover_identity_conflict', result)
+        self.assertEqual(result['status'], 'no_match', result)
+        self.assertEqual(result['candidate_concordance']['mode'], 'none')
         providers.get_binary.assert_not_called()
 
-    def test_web_mismatch_and_canonical_mismatch_block_all_exemptions(self):
+    def test_own_web_identifies_without_hydration_but_legacy_web_conflict_blocks(self):
         for mode in ('web', 'canonical'):
             state, row, providers, response = self.route('https://www.bedetheque.com/BD-Series-Tome-2-123.html')
             state['assets']['a'*64]['embedded']['Title'] = 'Informative Album'
@@ -160,8 +165,13 @@ class WebIdentityTests(unittest.TestCase):
                 providers.get = lambda url: {**original(url), 'body': original(url)['body'].replace('123.html', '999.html')}
             apply_bdnex_decision(state, 'a'*64, providers, response)
             result = state['assets']['a'*64]['work_result']
-            self.assertEqual(result['status'], 'review', result)
-            self.assertEqual(result['reason_code'], 'cover_web_conflict' if mode == 'web' else 'cover_page_reference_mismatch')
+            if mode == 'web':
+                self.assertEqual(result['status'], 'review', result)
+                self.assertEqual(result['reason_code'], 'cover_web_conflict')
+            else:
+                self.assertEqual(result['status'], 'identified', result)
+                self.assertEqual(result['candidate_concordance']['mode'], 'web')
+                self.assertEqual(result['exact_page_attempts'], [])
             providers.get_binary.assert_not_called()
 
     def test_unknown_slug_title_needs_confirmation_instead_of_a_title_veto(self):

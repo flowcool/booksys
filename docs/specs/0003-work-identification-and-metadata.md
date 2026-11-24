@@ -21,9 +21,17 @@ The running implementation is not evidence that this accepted change is delivere
 2. Several edition records may describe one album. Retain their common supported
    information and continue. Keep edition-specific differences unknown. Do not
    combine conflicting records into an invented edition.
-3. Classify automatically when file evidence agrees with a reference record.
-   Keep ambiguous cases for review. Retain candidates and the reason for doubt.
-   A first search result or highest score alone is not a sufficient decision.
+3. Identify one album when asset labels contain every informative series and title
+   word of a Bedetheque candidate and its number agrees. The file's own Bedetheque
+   `Web` can identify that candidate when the numbers agree. A number-first label
+   can prove an informative title of at least two words and its number.
+   Parsed filename, OCR and captured fields can support a candidate. They cannot
+   veto a candidate that meets these rules. Two possible works require review.
+   Edition variants of one work can share a decision. Never choose by score.
+   A contradictory number blocks. An informative label title after the issue
+   marker blocks a candidate title with no shared word. A valid own `Web` can
+   explain a noisy title. Record the mode and matched words with method
+   `candidate-concordance-r3-v1`. Keep accepted identities in later cycles.
 4. Start with existing metadata, filename and captured source information.
    Reuse valid prior inspection and metadata evidence. A second upstream source is not mandatory for
    work-level identification; an unresolved contradiction still prevents it.
@@ -90,7 +98,17 @@ ComicInfo fields into each CBZ. Preserve ISBN centrally even if a chosen codec
 cannot represent it. Verify the codec/schema pair before adding GTIN or changing
 ComicInfo version. Komga's future import behaviour must be tested separately.
 
-An automatic Bedetheque identification based on series and issue number requires cover confirmation when asset-bound evidence supplies no concordant informative album title or explicit primary creator. Apply this rule to BDneX decisions and their enrichment and discovery fallbacks. Compare the first page in the validated reading order with the cover of the eligible album reference. The images cannot select or rank references, resolve identity contradictions, or establish an edition. Record both image digests, the method, the calibrated threshold and the result. A missing, unreadable, unavailable or timed-out cover check leaves the identity in review. Use the existing public-provider cache, robots policy, shared request budget and sequential pacing. No alternate-cover search is permitted. The release threshold requires a frozen, independently labelled calibration and validation lot.
+An automatic Bedetheque identification with series and number alone requires
+cover confirmation. A generic candidate title supplies no title proof. A series
+year absent from the file also requires cover confirmation, as decision 13 states.
+Keep threshold 40. A recorded cover score below 10 for this asset and album blocks
+identification, including a title or Web exemption. Apply R3 before parsed-field
+conflicts and service score decisions in all enrichment and discovery paths.
+Compare the first validated page with the selected album cover. Covers cannot
+select or rank candidates or establish an edition. Record both image digests,
+method, threshold and result. A missing or failed cover check leaves the proposal
+in review. Keep the existing cache, robots policy, request budget and sequential
+pacing. Do not search alternate covers.
 
 ## Reuse boundaries
 

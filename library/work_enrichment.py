@@ -186,6 +186,14 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 continue
             page_attempt['status'] = 'parsed'
             canonical = page_candidates[0]
+            from library.candidate_concordance import words as candidate_words
+            if local_result.get('candidate_concordance') and (
+                    canonical.get('edition_ref') != row.get('edition_ref')
+                    or numbered_work(canonical)[1] != numbered_work(row)[1]
+                    or candidate_words(canonical.get('series')) != candidate_words(row.get('series'))
+                    or re.findall(r'\d+', str(canonical.get('series'))) != re.findall(r'\d+', str(row.get('series')))):
+                page_attempt['status'] = 'reference_mismatch'
+                continue
             bind_cover(page_candidates, row)
             if early_reference:
                 reference_series, reference_number = numbered_work(row)
@@ -287,11 +295,25 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
                         response: dict[str, Any], *, cover_source: CoverSource | None = None) -> bool:
     decision = response.get('decision', {})
     decision_status = decision.get('status')
-    if decision_status not in ('selected', 'proposed', 'review') or decision.get('reason') == 'insufficient':
-        return False
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
-    candidates = response['candidates']
+    candidates = response.get('candidates', [])
+    concordant = evaluate_work(evidence, candidates)
+    if concordant.get('candidate_concordance'):
+        concordant.update(evidence=evidence, attempts=[], exact_page_attempts=[], updated_at=now(),
+                          bdnex_decision=decision)
+        if concordant['status'] == 'no_match':
+            save_work_result(asset, concordant, providers, cover_source)
+            return False  # Keep discovery available; never revive a rejected service proposal.
+        if concordant['status'] == 'identified' and concordant['candidate_concordance']['needs_cover']:
+            enrich_work(state, key, providers, candidates, discovery=False, hydrate=True,
+                        cover_source=cover_source)
+            asset['work_result']['bdnex_decision'] = decision
+        else:
+            save_work_result(asset, concordant, providers, cover_source)
+        return True
+    if decision_status not in ('selected', 'proposed', 'review') or decision.get('reason') == 'insufficient':
+        return False
     result: dict[str, Any] = {
         'status': 'review', 'reason': 'BDneX found no decisive reference', 'work': {},
         'field_conflicts': {}, 'provenance': [], 'candidates': candidates, 'concordant_candidates': [],
