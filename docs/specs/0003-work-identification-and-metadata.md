@@ -58,8 +58,10 @@ The running implementation is not evidence that this accepted change is delivere
     inputs and method remain valid. A temporary provider error uses bounded retry;
     it is not a contradiction, a missing record, or a permanent negative match.
 12. Periodical issues (operator decision, 23 November 2026). A closed list in data
-    names periodical titles: magazines published by issue, such as Fluide Glacial,
-    Fillette, Tintin Hebdoptimiste and Nouveau Tintin. An asset whose file evidence
+    names periodical titles. The list includes Fluide Glacial, Fillette, Tintin
+    Hebdoptimiste and Nouveau Tintin. On 24 November 2026, the operator added Les
+    Amis de Jacobs, Schtroumpf Fanzine, La Semaine de Charlie, Psikopat,
+    Tchô ! Le mégazine, Vécu and Pif le Mag. An asset whose file evidence
     names one listed title and one issue number is a periodical issue. Booksys does
     not send it to BDneX or to album discovery. A Bedetheque album record is not
     evidence for a periodical issue, even with the same number (for example a
