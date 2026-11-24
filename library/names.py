@@ -35,6 +35,8 @@ def parse_name(value: str) -> dict[str, Any]:
                                  ' ', name, flags=re.I)
     name = ' '.join(name.split())
     name = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', name)
+    # Psikopat's second series uses the final number as its issue number.
+    name = re.sub(r'^(Psikopat) [-–] Série 2 ([-–] \d{1,3})$', r'\1 \2', name, flags=re.I)
     if (not name or len(name) > 500 or re.search(
             r'\b(?:tomes|volumes|best\s+of|pages?|pack|collection)\b|\d\s*[-–]\s*\d|\+', name, re.I)):
         return {}

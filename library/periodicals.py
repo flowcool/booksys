@@ -7,10 +7,17 @@ from library.primitives import now
 from library.work_identity import asset_assertions, normalized
 
 PERIODICAL_TITLES = {
+    'amis de jacobs': 'Les Amis de Jacobs',
     'fillette': 'Fillette',
     'fluide glacial': 'Fluide Glacial',
     'nouveau tintin': 'Nouveau Tintin',
+    'pif le mag': 'Pif le Mag',
+    'psikopat': 'Psikopat',
+    'schtroumpf fanzine': 'Schtroumpf Fanzine',
+    'semaine de charlie': 'La Semaine de Charlie',
+    'tcho le megazine': 'Tchô ! Le mégazine',
     'tintin hebdoptimiste': 'Tintin Hebdoptimiste',
+    'vecu': 'Vécu',
 }
 
 
