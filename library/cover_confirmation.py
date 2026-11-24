@@ -14,10 +14,12 @@ from typing import Any
 from library import decode
 from library.asset_evidence import file_years
 from library.bdnex_protocol import bedetheque_album_id
+from library.candidate_concordance import decide
 from library.cover_sift import METHOD, THRESHOLD, FUNCTION_VERSION, PREPROCESSING
 from library.primitives import LibraryError, digest
 from library.work_identity import (
     NUMBERED_SERIES_ALIASES, asset_assertions, creator_names, informative, normalized, present,
+    uses_candidate_concordance,
 )
 
 CoverSource = Callable[[], Path]
@@ -139,9 +141,8 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     if evidence.get('asset') != asset['sha256'] or evidence.get('asset_bound') is not True:
         review('asset_binding_missing')
         return
-    from library.candidate_concordance import METHOD as R3_METHOD, decide
     concordance = result.get('candidate_concordance', {})
-    r3 = concordance.get('method') == R3_METHOD
+    r3 = uses_candidate_concordance(result)
     if r3:
         checked = decide(evidence, result.get('candidates', rows))
         if checked.candidate is None or checked.receipt() != concordance:

@@ -24,9 +24,14 @@ series and title words in asset labels. `title_number` requires a number-first
 label and an informative title of at least two words. These modes identify
 one work directly. A contradictory issue number blocks. An informative label
 title after its issue marker blocks a candidate title with no shared word.
-The file's own valid `Web` can explain a noisy title. Two possible works require
-review. Edition variants with the same number and title can collapse to one work.
+The file's own valid `Web` can explain a noisy title. Edition variants with the
+same number and title can collapse to one work.
 Common fields survive; edition differences stay unknown.
+
+If R3 finds no candidate, finds several works, or has an incomplete candidate
+set, the worker applies the existing exact concordance rules. Exact evidence can
+identify one work in these cases. The result records the exact proof and the R3
+receipt.
 
 `cov:cover` and `series_number:cover` require the existing cover confirmation at
 threshold 40. A generic candidate title or an unsupported series year supplies
@@ -39,9 +44,9 @@ ComicInfo `Web` accepts only canonical
 `https://www.bedetheque.com/BD-...-<id>.html` URLs. Other hosts, query strings,
 fragments and malformed IDs are rejected. The decision receipt records `method`,
 `mode`, `needs_cover`, `matched_words` and the album id in `candidate_concordance`.
-The finalizer copies that receipt to `work_result.evidence` and records the mode
-as its direct exemption basis. This permits a targeted R3 requeue if required.
-Legacy exact concordance retains its existing cover/Web checks.
+For an R3 selection, the finalizer copies the receipt to `work_result.evidence`.
+For a direct R3 exemption, it records the mode as the exemption basis.
+Exact concordance keeps its existing title, `Web`, creator and cover checks.
 
 The service also retrieves exact series/number proposals from the full sitemap.
 The normalized file series must equal the slug series or its whole-word prefix.

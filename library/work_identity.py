@@ -7,6 +7,8 @@ import re
 from typing import Any
 import unicodedata
 
+from library.candidate_concordance import METHOD as R3_METHOD, decide
+
 IDENTITY_FIELDS = ('title', 'series', 'number', 'integral')
 WORK_FIELDS = (*IDENTITY_FIELDS, 'author', 'contributors', 'summary', 'language',
                'publisher', 'date', 'isbn', 'genres', 'adult', 'recommended_age', 'family')
@@ -117,13 +119,19 @@ def creator_names(candidate: dict[str, Any]) -> dict[str, set[str]]:
     return names
 
 
+def uses_candidate_concordance(result: dict[str, Any]) -> bool:
+    receipt = result.get('candidate_concordance', {})
+    return (receipt.get('method') == R3_METHOD
+            and receipt.get('mode', 'none') not in ('none', 'ambiguous', 'incomplete'))
+
+
 def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    """Identify one work from candidate words or existing exact concordance.
+    """Try R3 candidate concordance, then exact concordance if R3 abstains.
 
     R3 uses asset labels and embedded ComicInfo. Parsed fields cannot veto it.
-    Keep its basis for the final cover gate. Never choose by score.
+    Exact concordance uses its own evidence and vetoes. Keep the R3 receipt
+    for both routes. Never choose by score.
     """
-    from library.candidate_concordance import decide
     decision = decide(evidence, candidates)
     if decision.candidate is not None:
         chosen = decision.candidate
@@ -144,16 +152,9 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
             elif values and len(values) == len(decision.editions):
                 result['work'][field] = deepcopy(values[0])
         return result
-    if decision.mode in ('ambiguous', 'incomplete'):
-        return {'status': 'review', 'reason': decision.reason, 'work': {}, 'field_conflicts': {},
-                'provenance': [], 'candidates': deepcopy(candidates), 'concordant_candidates': [],
-                'candidate_concordance': decision.receipt()}
-    if (any(a.get('scope') == 'asset' for a in evidence.get('provenance', {}).get('labels', []))
-            and any(c.get('source') == 'bedetheque' for c in candidates)):
-        return {'status': 'no_match', 'reason': decision.reason, 'work': {}, 'field_conflicts': {},
-                'provenance': [], 'candidates': deepcopy(candidates), 'concordant_candidates': [],
-                'candidate_concordance': decision.receipt()}
-    return _evaluate_exact_work(evidence, candidates)
+    result = _evaluate_exact_work(evidence, candidates)
+    result['candidate_concordance'] = decision.receipt()
+    return result
 
 
 def _evaluate_exact_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:

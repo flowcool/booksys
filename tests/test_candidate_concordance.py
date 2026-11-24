@@ -85,17 +85,72 @@ class CandidateConcordanceTests(unittest.TestCase):
         self.assertEqual(result['candidate_concordance']['method'], 'candidate-concordance-r3-v1')
         self.assertEqual(result['evidence']['cover_confirmation']['basis'], 'cov')
 
-    def test_rejected_label_cannot_return_through_exact_parsed_fields(self):
+    def test_exact_series_alias_applies_when_r3_has_no_candidate(self):
+        from library.work_identity import evaluate_work
+        asset = evidence('Big Bull T3 The Silent Island')
+        asset.update(series='Big Bull', number='3', title='The Silent Island')
+        row = candidate(series='Big Bull (Impéria)', field_provenance={
+            'series': {'file_series_alias': 'big bull'}})
+        result = evaluate_work(asset, [row])
+        self.assertEqual(result['status'], 'identified')
+        self.assertEqual(result['concordant_candidates'], [row])
+        self.assertEqual(result['candidate_concordance']['mode'], 'none')
+
+    def test_exact_dated_series_reaches_cover_when_r3_has_no_candidate(self):
+        from library.cover_confirmation import finalize
+        from library.work_identity import evaluate_work
+        asset = evidence('Sky Patrol Archive T3')
+        asset.update(series='Sky Patrol', number='3')
+        row = candidate(series='Sky Patrol 1988')
+        result = evaluate_work(asset, [row])
+        self.assertEqual(result['status'], 'identified')
+        self.assertEqual(result['concordant_candidates'], [row])
+        self.assertEqual(result['candidate_concordance']['mode'], 'none')
+        result['evidence'] = asset
+        finalize({'sha256': asset['asset']}, result, None)
+        self.assertEqual(result['reason_code'], 'cover_canonical_cover_unavailable')
+
+    def test_exact_series_and_number_with_volume_title_reach_cover(self):
+        from library.cover_confirmation import finalize
+        from library.work_identity import evaluate_work
+        asset = evidence('Sky Patrol Archive T3')
+        asset.update(series='Sky Patrol', number='3', title='Volume 3')
+        row = candidate(title='Volume 3')
+        result = evaluate_work(asset, [row])
+        self.assertEqual(result['status'], 'identified')
+        self.assertEqual(result['concordant_candidates'], [row])
+        self.assertEqual(result['candidate_concordance']['mode'], 'none')
+        self.assertNotIn('title', result['work'])
+        result['evidence'] = asset
+        finalize({'sha256': asset['asset']}, result, None)
+        self.assertEqual(result['reason_code'], 'cover_canonical_cover_unavailable')
+
+    def test_exact_title_resolves_r3_ambiguity(self):
+        from library.cover_confirmation import finalize
+        from library.work_identity import evaluate_work
+        asset = evidence('Sky Patrol T3 The Silent Island', 'Sky Patrol T3 Silent Island Returns')
+        asset.update(series='Sky Patrol', number='3')
+        asset['provenance']['title'] = [{'value': 'The Silent Island', 'scope': 'asset',
+                                        'source': 'origin:synthetic'}]
+        row = candidate(score=75)
+        other = candidate(title='Silent Island Returns', ref='124', score=99)
+        result = evaluate_work(asset, [row, other])
+        self.assertEqual(result['concordant_candidates'], [row])
+        self.assertEqual(result['candidate_concordance']['mode'], 'ambiguous')
+        result['evidence'] = asset
+        finalize({'sha256': asset['asset']}, result, None)
+        self.assertEqual(result['status'], 'identified')
+        self.assertEqual(result['evidence']['cover_confirmation']['reason'], 'asset_title')
+
+    def test_exact_path_vetoes_a_conflicting_bound_title(self):
         from library.work_identity import evaluate_work
         asset = evidence('Sky Patrol T3 The Crimson Forest')
-        asset.update(series='Sky Patrol', number='3', title='The Silent Island')
+        asset.update(series='Sky Patrol', number='3', title='The Crimson Forest')
         self.assertEqual(evaluate_work(asset, [candidate()])['status'], 'no_match')
 
-    def test_unnumbered_homonym_cannot_match_a_numbered_file(self):
-        from library.work_identity import evaluate_work
+    def test_r3_rejects_unnumbered_homonym_for_numbered_file(self):
         asset = evidence('Sky Patrol #03 The Silent Island', embedded={'Number': '3'})
-        asset.update(title='The Silent Island')
-        self.assertEqual(evaluate_work(asset, [candidate(series=None, number=None)])['status'], 'no_match')
+        self.assertIsNone(decide(asset, [candidate(series=None, number=None)]).candidate)
 
     def test_scan_resolution_and_series_ordinal_are_not_issue_conflicts(self):
         asset = evidence('Sky Patrol (2e series) T3 (2024) [Digital-1200] The Silent Island')
