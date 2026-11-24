@@ -70,4 +70,4 @@ class SeriesQualifierTests(unittest.TestCase):
                          {'status': 'selected', 'reason': 'numbered', 'edition_ref': 'fixture-3'})
         result = evaluate_work(bind_evidence(state, key), [candidate])
         self.assertEqual(result['status'], 'no_match')
-        self.assertIn('series', result['rejected_fields'])
+        self.assertEqual(result['candidate_concordance']['mode'], 'none')

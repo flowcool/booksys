@@ -331,8 +331,12 @@ def _corroborated_heading_candidates(state: dict[str, Any], asset_id: str,
     from library.work_enrichment import printed_concordance
     from library.work_identity import evaluate_work
 
-    evidence = bind_evidence(state, asset_id, include_capture=False)
     asset = state['assets'][asset_id]
+    evidence = bind_evidence(state, asset_id)
+    outcome = evaluate_work(evidence, candidates)
+    if outcome.get('candidate_concordance'):
+        return outcome['concordant_candidates'] if outcome['status'] == 'identified' else []
+    evidence = bind_evidence(state, asset_id, include_capture=False)
     outcome = evaluate_work(printed_concordance(evidence, asset, candidates), candidates)
     return outcome['concordant_candidates'] if outcome['status'] == 'identified' else []
 

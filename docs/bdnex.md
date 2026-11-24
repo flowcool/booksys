@@ -13,28 +13,35 @@ Below 90, the service can select a candidate when the series and volume point
 to one reference in the full sitemap. A dated series variant needs title
 agreement. Competing references and conflicting file evidence go to review.
 
-A selected BDneX reference is a proposal. The finalizer checks contradictions first.
-These include file fields, the embedded Web work, primary credits and dated series.
-No cover or exemption can override a contradiction.
-It then checks exemptions in this order: embedded Web, informative asset title,
-explicit primary creator. Otherwise, it requires cover confirmation.
-A failed page or cover request leaves the proposal in review.
+The worker evaluates all returned candidates with `candidate-concordance-r3-v1`.
+This includes service replies marked `insufficient` or `conflicting_file_evidence`.
+Asset-scoped labels and embedded ComicInfo supply the evidence. Parsed filename,
+OCR and captured fields cannot veto an R3 pick. Never select by score.
+
+`web` identifies the file's own canonical Bedetheque album when the numbers
+agree and its words occur in the file evidence. `cov` requires all informative
+series and title words in asset labels. `title_number` requires a number-first
+label and an informative title of at least two words. These modes identify
+one work directly. A contradictory issue number blocks. An informative label
+title after its issue marker blocks a candidate title with no shared word.
+The file's own valid `Web` can explain a noisy title. Two possible works require
+review. Edition variants with the same number and title can collapse to one work.
+Common fields survive; edition differences stay unknown.
+
+`cov:cover` and `series_number:cover` require the existing cover confirmation at
+threshold 40. A generic candidate title or an unsupported series year supplies
+no direct title exemption. Periodical and dated-series rules stay unchanged.
+A recorded score below 10 for the same asset and album blocks every R3 mode.
+A missing or failed cover check leaves the proposal in review.
 Classification and admission require the completed identity decision.
 
-ComicInfo `Web` is asset-bound evidence only for canonical
-`https://www.bedetheque.com/BD-...-<id>.html` URLs. Other hosts, loose URLs,
-query strings, fragments and malformed IDs are rejected.
-An indexed Web album becomes the proposal even when native matching returns
-another album or no album. The worker still hydrates and checks that exact page.
-Web exemption requires the same work and no conflicting file fields.
-Compare normalized series, number and title from the album slugs. Keep both IDs
-in `web_comparisons`; different edition IDs alone do not conflict. A retained
-edition card resolves through its parser-bound album URL and edition-record ID.
-A Web URL for that same album uses the current candidate slug, so a stale name
-in the Web URL does not create a conflict. Unresolved slugs remain in review.
-A differing known series, number or title is a work conflict. Missing fields
-cannot prove a contradiction.
-The receipt records `basis` as `web`, `title`, `creator` or `cover`.
+ComicInfo `Web` accepts only canonical
+`https://www.bedetheque.com/BD-...-<id>.html` URLs. Other hosts, query strings,
+fragments and malformed IDs are rejected. The decision receipt records `method`,
+`mode`, `needs_cover`, `matched_words` and the album id in `candidate_concordance`.
+The finalizer copies that receipt to `work_result.evidence` and records the mode
+as its direct exemption basis. This permits a targeted R3 requeue if required.
+Legacy exact concordance retains its existing cover/Web checks.
 
 The service also retrieves exact series/number proposals from the full sitemap.
 The normalized file series must equal the slug series or its whole-word prefix.
@@ -43,11 +50,11 @@ This retrieval uses no archive or image access. These proposals reach the same
 finalizer. A missing slug title supplies no title agreement; it needs another
 exemption or a passing cover. A different informative title keeps its veto.
 The existing discovery path handles empty results, insufficient evidence and service outages.
-Candidate-only responses from older service images retain their existing path.
+Candidate-only responses from older service images also reach R3.
 If the original lookup cannot identify a directly downloaded Bookys album,
 Booksys can try its captured heading as one extra logical name. The heading
-must supply a series and issue. Candidates from that search require agreement
-with evidence from the file before they can enter identity validation.
+must supply a series and issue. Only headings bound to the exact asset supply
+R3 label words. Bundle-parent headings remain discovery hints.
 Already identified assets keep their work result and evidence in automatic cycles.
 Metadata scheduling excludes them, even after a method or evidence revision change.
 Already queued metadata tasks return the accepted result before any provider call.
@@ -116,7 +123,10 @@ The earlier filename-only qualification retained 112 prior identities in a
 516-file replay. That result predates the cover/Web finalizer. It does not prove
 retention under the current policy. Frozen replays must count missing page and
 cover proof as review and report every lost prior identity.
-The metadata method change uses existing progressive replay; no bulk reset.
+Metadata method v8 uses the existing progressive replay. The automatic cycle
+reopens unresolved tasks on the method change. It preserves their scheduled due
+time and leaves accepted identities unchanged. No bulk reset or schema conversion
+is required.
 
 A standalone title may contain one informative word when its file name and
 direct captured title agree. Bundle-parent labels cannot supply this proof.

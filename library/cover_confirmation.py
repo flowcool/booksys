@@ -114,8 +114,8 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
              source: CoverSource | None = None) -> None:
     """Finalize every automatic Bedetheque proposal before classification.
 
-    A visual pass can confirm only the one reference selected by textual rules.
-    Receipt reuse is limited to this evaluation's exact evidence and inputs.
+    R3 title/Web decisions record their basis. Series-only and dated decisions
+    require the existing cover threshold. Parsed fields cannot veto an R3 pick.
     """
     if result['status'] != 'identified':
         return
@@ -139,19 +139,42 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     if evidence.get('asset') != asset['sha256'] or evidence.get('asset_bound') is not True:
         review('asset_binding_missing')
         return
+    from library.candidate_concordance import METHOD as R3_METHOD, decide
+    concordance = result.get('candidate_concordance', {})
+    r3 = concordance.get('method') == R3_METHOD
+    if r3:
+        checked = decide(evidence, result.get('candidates', rows))
+        if checked.candidate is None or checked.receipt() != concordance:
+            review('candidate_concordance_changed')
+            return
+        evidence['candidate_concordance'] = concordance
+        row = rows[0]
+        receipt.update(album_id=row.get('edition_ref'), album_url=row.get('url'),
+                       candidate_concordance=concordance)
+        prior = asset.get('work_result', {}).get('evidence', {}).get('cover_confirmation', {})
+        score = prior.get('score')
+        if (prior.get('asset_sha256') == asset['sha256'] and prior.get('album_id') == row.get('edition_ref')
+                and prior.get('method') == METHOD and isinstance(score, (int, float))
+                and not isinstance(score, bool) and math.isfinite(score) and 0 <= score < 10):
+            receipt['score'] = score
+            review('strong_cover_disagreement')
+            return
+        if not concordance['needs_cover']:
+            receipt.update(result='exempt', reason='candidate_concordance', basis=concordance['mode'])
+            return
     indexed = all(row.get('provenance', {}).get('method') == 'bdnex-sitemap-1'
                   or (row.get('candidate_lineage', {}).get('provenance') or {}).get('method') == 'bdnex-sitemap-1'
                   for row in rows)
-    if any(identity_conflict(evidence, row, indexed=indexed) for row in rows):
+    if not r3 and any(identity_conflict(evidence, row, indexed=indexed) for row in rows):
         review('identity_conflict')
         return
-    if evidence.get('discovery_truncated') or evidence.get('identity_conflicts'):
+    if evidence.get('discovery_truncated') or (not r3 and evidence.get('identity_conflicts')):
         review('incomplete_evidence')
         return
     references = {(row.get('source'), row.get('edition_ref'), row.get('url')) for row in rows}
     row = rows[0]
     canonical = row.get('canonical_identity')
-    if canonical and identity_conflict(evidence, canonical, indexed=indexed):
+    if not r3 and canonical and identity_conflict(evidence, canonical, indexed=indexed):
         review('identity_conflict')
         return
     receipt.update(album_id=row.get('edition_ref'), album_url=row.get('url'))
@@ -161,7 +184,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     comparisons = [web_comparison(a['value'], candidate) for a in web for candidate in rows]
     if comparisons:
         receipt['web_comparisons'] = comparisons
-    if any(item['result'] == 'different_work' for item in comparisons):
+    if not r3 and any(item['result'] == 'different_work' for item in comparisons):
         review('web_conflict')
         return
     assertions = asset_assertions(evidence)
@@ -192,8 +215,8 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     if any(status != 'parsed' for status in page_statuses):
         review('page_' + page_statuses[-1])
         return
-    require_cover = result.get('bdnex_decision', {}).get('reason') == 'dated_unique'
-    if web:
+    require_cover = r3 or result.get('bdnex_decision', {}).get('reason') == 'dated_unique'
+    if web and not r3:
         if any(item['result'] == 'unresolved' for item in comparisons):
             review('web_unresolved')
             return
@@ -219,7 +242,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     # Neither a strong score nor a captured heading is an independent anchor.
     bound = {a['field'] for a in assertions if present(a['value'])
              and (a['field'] != 'series' or informative(a['value']))}
-    if not {'series', 'number'} <= bound:
+    if not r3 and not {'series', 'number'} <= bound:
         review('missing_series_number')
         return
     binding = row.get('cover_binding', {})

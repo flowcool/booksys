@@ -118,12 +118,45 @@ def creator_names(candidate: dict[str, Any]) -> dict[str, set[str]]:
 
 
 def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    """Require exact informative file/reference concordance; never pick a top score.
+    """Identify one work from candidate words or existing exact concordance.
 
-    Direct evidence requires asset_bound=True or per-field provenance scope=asset.
-    Parent bundle/capture labels alone cannot identify a member. Candidate values
-    are source assertions, not operator decisions or exact-edition confirmations.
+    R3 uses asset labels and embedded ComicInfo. Parsed fields cannot veto it.
+    Keep its basis for the final cover gate. Never choose by score.
     """
+    from library.candidate_concordance import decide
+    decision = decide(evidence, candidates)
+    if decision.candidate is not None:
+        chosen = decision.candidate
+        result: dict[str, Any] = {
+            'status': 'identified', 'reason': decision.reason, 'work': {}, 'field_conflicts': {},
+            'concordant_candidates': [deepcopy(chosen)], 'candidates': deepcopy(candidates),
+            'candidate_concordance': decision.receipt(),
+            'provenance': [{k: deepcopy(c[k]) for k in ('source', 'edition_ref', 'url', 'field_provenance')
+                            if k in c} for c in decision.editions]}
+        for field in WORK_FIELDS:
+            values = [c[field] for c in decision.editions if known_work_value(field, c.get(field))]
+            if field == 'series' and known_work_value(field, chosen.get(field)):
+                result['work'][field] = deepcopy(chosen[field])
+            elif len({normalized(v, field) for v in values}) > 1:
+                result['field_conflicts'][field] = [
+                    {'value': deepcopy(c.get(field)), 'url': c.get('url'), 'source': c.get('source')}
+                    for c in decision.editions if present(c.get(field))]
+            elif values and len(values) == len(decision.editions):
+                result['work'][field] = deepcopy(values[0])
+        return result
+    if decision.mode in ('ambiguous', 'incomplete'):
+        return {'status': 'review', 'reason': decision.reason, 'work': {}, 'field_conflicts': {},
+                'provenance': [], 'candidates': deepcopy(candidates), 'concordant_candidates': [],
+                'candidate_concordance': decision.receipt()}
+    if (any(a.get('scope') == 'asset' for a in evidence.get('provenance', {}).get('labels', []))
+            and any(c.get('source') == 'bedetheque' for c in candidates)):
+        return {'status': 'no_match', 'reason': decision.reason, 'work': {}, 'field_conflicts': {},
+                'provenance': [], 'candidates': deepcopy(candidates), 'concordant_candidates': [],
+                'candidate_concordance': decision.receipt()}
+    return _evaluate_exact_work(evidence, candidates)
+
+
+def _evaluate_exact_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {'status': 'review', 'reason': 'No informative asset-bound evidence',
         'work': {}, 'field_conflicts': {}, 'provenance': [],
         'candidates': deepcopy(candidates)}
