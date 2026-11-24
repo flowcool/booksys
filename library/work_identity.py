@@ -7,7 +7,6 @@ import re
 from typing import Any
 import unicodedata
 
-from library.candidate_concordance import METHOD as R3_METHOD, decide
 
 IDENTITY_FIELDS = ('title', 'series', 'number', 'integral')
 WORK_FIELDS = (*IDENTITY_FIELDS, 'author', 'contributors', 'summary', 'language',
@@ -120,6 +119,8 @@ def creator_names(candidate: dict[str, Any]) -> dict[str, set[str]]:
 
 
 def uses_candidate_concordance(result: dict[str, Any]) -> bool:
+    # Local import: the BDneX image copies this module without candidate_concordance.
+    from library.candidate_concordance import METHOD as R3_METHOD
     receipt = result.get('candidate_concordance', {})
     return (receipt.get('method') == R3_METHOD
             and receipt.get('mode', 'none') not in ('none', 'ambiguous', 'incomplete'))
@@ -132,6 +133,7 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
     Exact concordance uses its own evidence and vetoes. Keep the R3 receipt
     for both routes. Never choose by score.
     """
+    from library.candidate_concordance import decide
     decision = decide(evidence, candidates)
     if decision.candidate is not None:
         chosen = decision.candidate
