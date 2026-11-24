@@ -11,7 +11,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 from library.bdnex_protocol import STRONG_SCORE, bedetheque_album_id, validate_candidates
-from library.work_identity import normalized
+from library.work_identity import NUMBERED_SERIES_ALIASES, normalized
 
 _hints: ContextVar[dict[str, str]] = ContextVar('embedded_hints', default={})
 MIN_SCORE = 70
@@ -157,9 +157,10 @@ class Engine:
         if len(identity.get('series', [])) == len(identity.get('number', [])) == 1:
             series = identity['series'][0]
             number = identity['number'][0]
+            alias = NUMBERED_SERIES_ALIASES.get(series)
             for slug, ref in self.numbered.get(number, ()):
                 label = normalized(slug, 'series')
-                if label == series or label.startswith(series + ' '):
+                if label == series or label == alias or label.startswith(series + ' '):
                     add(self.albums[ref], MIN_AGREEING_SCORE)
         candidates = sorted(rows.values(), key=lambda row: row['score'], reverse=True)[:15]
         result = {'index': self.index, 'candidates': validate_candidates(candidates),

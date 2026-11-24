@@ -374,7 +374,7 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
     cover_source = (lambda: resolve_asset(store, reception, state, asset_id)) if reception is not None else None
     from library.bdnex import identity_for, inputs_for
     from library.bdnex_protocol import digest
-    from library.work_enrichment import apply_bdnex_decision, enrich_work
+    from library.work_enrichment import apply_bdnex_decision, enrich_work, exact_bdnex_reference
     local_candidates = []
     exact_page_attempts: list[dict[str, str]] = []
     client = getattr(providers, 'bdnex', None)
@@ -415,6 +415,11 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
                 decision = response.get('decision', {})
                 insufficient = not references and decision.get('reason') == 'insufficient'
                 local_candidates = [] if insufficient else response['candidates']
+                if insufficient:
+                    proposed, file_series_alias = exact_bdnex_reference(
+                        bind_evidence(state, asset_id), response['candidates'])
+                    if file_series_alias:
+                        local_candidates = proposed
                 enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
                             exact_page_attempts=exact_page_attempts, cover_source=cover_source)
                 if asset['work_result']['status'] == 'identified' and not references:
