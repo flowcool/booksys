@@ -5,7 +5,8 @@ See the [architecture](../architecture.md) and the
 [work identification scope](0003-work-identification-and-metadata.md).
 
 Keep a local library usable without Bookys or a specific reading application.
-Process tracked Booksys PDF, CBZ and CBR inputs. Preserve original downloads.
+Process tracked Booksys PDF, CBZ and CBR inputs and finished single-volume ZIP
+and RAR page archives. Preserve original downloads.
 Keep unrelated downloader files outside this pipeline.
 Publish independent CBZ copies with supported ComicInfo.xml metadata.
 Keep source and output hashes, file origins and transformation journals.

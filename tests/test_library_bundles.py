@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from library.catalog import Catalog, LibraryError
 from library.intake import receive
@@ -34,8 +35,57 @@ def inputs(root, members):
 
 class BundleTests(unittest.TestCase):
 
+    def test_finished_generic_image_archive_becomes_one_asset(self):
+        from library.bundle_worker import POLICY
+        from library.intake import decoder_readiness
+        from library.primitives import digest
+        from library.readers import READER_POLICY, fingerprint
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            reception, parent, captured, journal, queue = inputs(root, [('01.png', image_bytes())])
+            store = create_catalog(self, root / 'state')
+            work = root / 'work'
+            work.mkdir()
+            link = queue[0]['links'][0]
+            with patch('library.decode.WORK_ROOT', str(work)):
+                link['status'] = 7
+                state = receive(store, reception, captured, journal, queue, stable_seconds=0)
+                self.assertFalse(state['assets'])
+                origin, = state['origins'].values()
+                origin.update(availability='rejected', fingerprint=list(fingerprint(parent)),
+                              bundle_engine_policy=digest({'bundle': POLICY, 'reader': READER_POLICY,
+                                                           'decoder_readiness': decoder_readiness()}),
+                              reason='Bundle contains unknown, recursive or mixed loose content')
+                store.save(state, expected=state['revision'])
+                link['status'] = 0
+                state = receive(store, reception, captured, journal, queue, stable_seconds=0, incremental=True)
+                key, = state['assets']
+                origin, = state['origins'].values()
+                self.assertEqual((origin['availability'], origin['sha256']), ('validated', key))
+                self.assertNotIn('bundle', origin)
+                self.assertEqual(state['assets'][key]['page_manifest'][0]['name'], '01.png')
+                self.assertEqual(state['assets'][key]['format'], 'cbz')
+                with patch('library.intake.inspect_file', side_effect=AssertionError('Repeated validation')):
+                    state = receive(store, reception, captured, journal, queue, stable_seconds=0, incremental=True)
+                self.assertEqual(list(state['assets']), [key])
+
+    def test_multi_volume_image_archive_waits_for_review(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            reception, _, captured, journal, queue = inputs(root,
+                [(f'Series T{volume:02}/01.png', image_bytes()) for volume in (1, 2)])
+            work = root / 'work'
+            work.mkdir()
+            with patch('library.decode.WORK_ROOT', str(work)):
+                state = receive(create_catalog(self, root / 'state'), reception, captured, journal, queue,
+                                stable_seconds=0)
+            origin, = state['origins'].values()
+            self.assertEqual(origin['availability'], 'pending')
+            self.assertIn('possible multi-work archive', origin['reason'])
+            self.assertFalse(state['assets'])
+
     def test_retained_bundle_survives_native_package_absence_without_weakening_source_proof(self):
-        from unittest.mock import patch
         from library.origins import resolve_asset
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

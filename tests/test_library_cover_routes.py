@@ -247,6 +247,36 @@ class CoverRouteTests(unittest.TestCase):
                 apply_bdnex_decision(state, 'a'*64, providers, response)
                 self.assert_guarded(state)
 
+    def test_method_bump_makes_unresolved_asset_due_now(self):
+        from datetime import datetime, timedelta, timezone
+        from library.automatic import evidence_version
+        from library.business_stages import BusinessStages
+        from library.stage_model import METHODS
+
+        state, _, _ = self.setup_route()
+        key = 'a'*64
+        asset = state['assets'][key]
+        asset.update(status='validated', origins=['o'], work_result={'status': 'review'})
+        state['origins']['o'] = {'availability': 'validated'}
+        at = datetime(2026, 11, 25, tzinfo=timezone.utc)
+        asset['stage_metadata'] = {'method': 'metadata-step-v8', 'evidence': evidence_version(asset),
+                                   'evaluation': 'prior', 'outcome': 'done',
+                                   'next_at': (at + timedelta(days=7)).isoformat()}
+        obligations = BusinessStages.obligations(state, key, now=at)
+        metadata, = [item for item in obligations if item.stage == 'metadata']
+        self.assertEqual((metadata.due_at, metadata.method), (at, METHODS['metadata']))
+        # Completed work with the same input revision can stay closed in the queue.
+        self.assertNotEqual(metadata.input_revision, 'prior')
+        later, = [o for o in BusinessStages.obligations(state, key, now=at + timedelta(seconds=1))
+                  if o.stage == 'metadata']
+        self.assertEqual(later.input_revision, metadata.input_revision)
+        asset['stage_metadata']['method'] = METHODS['metadata']
+        self.assertNotIn('metadata', [o.stage for o in BusinessStages.obligations(state, key, now=at)])
+        asset['stage_metadata']['evidence'] = 'older evidence'
+        metadata, = [o for o in BusinessStages.obligations(state, key, now=at) if o.stage == 'metadata']
+        self.assertEqual(metadata.due_at, at)
+        self.assertNotEqual(metadata.input_revision, 'prior')
+
     def test_identified_asset_keeps_previous_evidence_after_method_bumps(self):
         from datetime import datetime, timezone
         from library.automatic import evidence_version

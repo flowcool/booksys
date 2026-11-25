@@ -80,10 +80,16 @@ class BusinessStages:
             changed = False
         method_changed = prior.get('method', METHODS['metadata']) != METHODS['metadata']
         if asset.get('work_result', {}).get('status') != 'identified' and (changed or due <= now or method_changed):
-            revision = (prior['evaluation'] if not changed and (prior.get('outcome') in ('retry', 'defer') or method_changed) and prior.get('evaluation') else
-                        digest({'evidence': evidence, 'evaluation': prior.get('next_at', '')}))
+            if method_changed and not changed:
+                # A completed work item ignores a new due date for the same revision.
+                revision = digest({'evidence': evidence, 'evaluation': prior.get('evaluation', ''),
+                                   'method': METHODS['metadata']})
+            elif not changed and prior.get('outcome') in ('retry', 'defer') and prior.get('evaluation'):
+                revision = prior['evaluation']
+            else:
+                revision = digest({'evidence': evidence, 'evaluation': prior.get('next_at', '')})
             result.append(Obligation('metadata', key, revision, METHODS['metadata'],
-                due_at=due if not changed else now))
+                due_at=now if changed or method_changed else due))
         desired = projection(state, key)
         if asset.get('admission', {}).get('signature') != desired['signature']:
             result.append(Obligation('copies', key, desired['signature'], METHODS['copies']))
