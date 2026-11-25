@@ -27,6 +27,56 @@ The session API closes its browser after each solve. It does not persist cookies
 
 See the [limit audit](audit-limits.md) for the relevant resource guards.
 
+## Submit completed Telegram documents
+
+Prepare a private JSON Lines file with one line per completed document.
+Use the approved BD_X18 channel and the approved bd_fr topic. Start with an
+explicit list of 50 files. Review intake errors, identification yield and
+copy outcomes before submitting the rest. Keep WEBTOONSVF out of the list.
+
+Stage each completed file under
+`$BOOKSYS_ORIGINALS_ROOT/booksys/telegram/<channel>_<message>/`.
+Keep the path stable after submission. Booksys reads that exact file through
+the originals mount. Keep the archive and the retained trial files in place.
+Use the size and SHA-256 from the producer's completed-file proof. A tdl
+export alone only establishes the message and original filename.
+
+Each manifest line contains:
+
+- `receipt` with the numeric channel `id` and a one-element `messages` array.
+  The message has its numeric `id`, original filename in `file`, optional
+  `type: "message"`, and optional caption in `text`. Use the same shape to
+  select one message from a batch export.
+- `topic` with the numeric topic ID, or `null` for the channel feed.
+- `path` relative to `BOOKSYS_ORIGINALS_ROOT`. The staged basename may use
+  tdl's sanitized form. Keep the same CBR, CBZ or PDF extension.
+- `completed: true`, `size` in bytes, and the lowercase hex `sha256` of
+  the completed file.
+
+Use the intake worker container for the selected Booksys instance. Set
+`BD_X18_CHANNEL`, `BD_FR_CHANNEL` and `BD_FR_TOPIC` from the private receipt
+inventory. The dry run checks the full list and prints the exact entries it
+would submit. It opens no database connection.
+
+```sh
+docker exec -i "$BOOKSYS_INTAKE_CONTAINER" /app/.venv/bin/python -m library.telegram_intake \
+  /dev/stdin --scope "$BD_X18_CHANNEL" --scope "$BD_FR_CHANNEL:$BD_FR_TOPIC" \
+  --dry-run < first-50.jsonl
+```
+
+For the authorized submission, replace `--dry-run` with
+`--state-dir /data/booksys/library-lab/state`, or use the selected worker's
+`<root>/state` path. Each result reports `submitted` or `already-submitted`.
+Keep the receipt and paths identical when retrying a batch. The command
+validates the list before it writes. Each accepted line commits separately,
+so a later database failure can leave earlier lines queued. A changed receipt
+for an existing channel and message stops the batch with an error.
+
+The manifest limit is 4096 lines. The single-comic reader applies its
+existing 1 GiB validation ceiling during intake. A queued file can still fail
+technical validation. To return to archive-only operation, stop submitting
+lists and retain the files, receipts and existing tasks.
+
 ## Copy-journal lookup index
 
 Before activating the indexed copy-journal reader on an existing authority,

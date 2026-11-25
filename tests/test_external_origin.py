@@ -1,8 +1,13 @@
+from contextlib import redirect_stderr, redirect_stdout
+import hashlib
+from io import StringIO
+import json
 import tempfile
 import unittest
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from library.business_stages import BusinessStages
@@ -16,7 +21,7 @@ from test_library_readers import image_bytes
 
 
 class ExternalOriginTests(unittest.TestCase):
-    def test_same_file_reuses_origin_and_asset_and_enters_ordinary_stages(self):
+    def test_same_file_reuses_origin_and_asset_and_enters_ordinary_stages(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             originals = root/'originals'
@@ -52,6 +57,7 @@ class ExternalOriginTests(unittest.TestCase):
                     self.assertEqual(adapter.ready(task, now=at), '')
                     self.assertEqual(adapter.receipt(task), ('absent', ''))
                     prepared = adapter.execute(task, now=at).prepared
+                    assert prepared is not None
                     catalog.backend().commit(prepared.change, expected_revision=prepared.revision,
                                              conflict=prepared.conflict)
                 self.assertEqual(tasks.discover.call_args_list[0], tasks.discover.call_args_list[1])
@@ -66,7 +72,152 @@ class ExternalOriginTests(unittest.TestCase):
             obligations = BusinessStages.obligations(state, aid, now=datetime.now(timezone.utc))
             self.assertEqual({item.stage for item in obligations}, {'metadata', 'copies'})
 
-    def test_scan_excludes_managed_stream_temporary_and_symlink_inputs(self):
+    def telegram_entry(self, originals: Path, channel: int, message: int, topic: int | None,
+                       *, caption: str | None = None) -> dict[str, Any]:
+        name = "L’Album.cbz"
+        document = {'id': message, 'file': name}
+        if caption is not None:
+            document['text'] = caption
+        else:
+            document['type'] = 'message'
+        relative = Path('booksys/telegram')/f'{channel}_{message}'/name
+        path = originals/relative
+        path.parent.mkdir(parents=True)
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr(zipfile.ZipInfo('001.png'), image_bytes())
+        data = path.read_bytes()
+        return {'receipt': {'id': channel, 'messages': [document]}, 'topic': topic,
+                'path': str(relative), 'completed': True, 'size': len(data),
+                'sha256': hashlib.sha256(data).hexdigest()}
+
+    def submit_telegram(self, root: Path, *rows: dict[str, Any], dry_run: bool = False) -> list[dict[str, Any]]:
+        from library.telegram_intake import main
+
+        manifest = root/'telegram.jsonl'
+        manifest.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        args = [str(manifest), '--state-dir', str(root/'state'), '--scope', '101',
+                '--scope', '202:17']
+        if dry_run:
+            args.append('--dry-run')
+        output = StringIO()
+        with redirect_stdout(output):
+            main(args)
+        return [json.loads(line) for line in output.getvalue().splitlines()]
+
+    def test_telegram_registration_queues_normal_successors_without_a_scan(self) -> None:
+        from library.asset_evidence import bind_evidence
+        from library.stage_runtime import StageRuntime
+        from library.work_items import WorkItems
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            originals = root/'originals'
+            first = self.telegram_entry(originals, 101, 12, None)
+            second = self.telegram_entry(originals, 202, 16, 17, caption='Unverified series T99')
+            catalog = create_catalog(self, root/'state')
+            runtime = StageRuntime(root, root/'downloads', root/'collector', providers=MagicMock(),
+                                   client=None, browser=None, isolated=True)
+            work = WorkItems(catalog.backend()._database)
+            self.addCleanup(work.close)
+            at = datetime.now(timezone.utc)
+            (root/'work').mkdir()
+            with patch('library.intake.EXTERNAL_ROOT', originals), \
+                 patch('library.decode.WORK_ROOT', str(root/'work')), \
+                 patch('library.stage_runtime.require_nas'), \
+                 patch.dict('os.environ', {'BOOKSYS_WORK_STAGES': 'intake,metadata,copies'}), \
+                 patch('library.intake.external_origins', side_effect=AssertionError('global scan')) as scan:
+                self.assertEqual(runtime.discover_business(now=at), 0)
+                dry = self.submit_telegram(root, first, second, dry_run=True)
+                self.assertEqual([row['status'] for row in dry], ['would-submit', 'would-submit'])
+                self.assertFalse(catalog.read()['origins'])
+                with patch.dict('os.environ', {'BOOKSYS_WORK_STAGES': 'metadata,copies'}), \
+                     redirect_stderr(StringIO()) as refusal, self.assertRaises(SystemExit):
+                    self.submit_telegram(root, first)
+                self.assertIn('BOOKSYS_WORK_STAGES', refusal.getvalue())
+                self.assertFalse(catalog.read()['origins'])
+                queued = self.submit_telegram(root, first, second)
+                self.assertEqual([row['status'] for row in queued], ['submitted', 'submitted'])
+                actor = runtime.actor('intake')
+                self.addCleanup(actor.work.close)
+                self.assertEqual(actor.step(now=datetime.now(timezone.utc)), 'done')
+                self.assertEqual(actor.step(now=datetime.now(timezone.utc)), 'done')
+                state = catalog.read()
+                aid, = state['assets']
+                self.assertEqual(aid, first['sha256'])
+                self.assertEqual(set(state['assets'][aid]['origins']), {row['origin'] for row in queued})
+                origin_ids = {origin['telegram']['message']: oid for oid, origin in state['origins'].items()}
+                caption_origin = state['origins'][origin_ids[16]]['telegram']
+                self.assertEqual(caption_origin['caption'], 'Unverified series T99')
+                self.assertEqual((caption_origin['channel'], caption_origin['topic']), (202, 17))
+                found_origin, found_path = resolve_asset_origin(catalog, root/'downloads', state, aid)
+                self.assertIn(found_origin, origin_ids.values())
+                self.assertEqual(hashlib.sha256(found_path.read_bytes()).hexdigest(), aid)
+                evidence = bind_evidence(state, aid)
+                self.assertIn('Unverified series T99', evidence['discovery_queries'])
+                self.assertNotIn('Unverified series T99', evidence['labels'])
+                self.assertNotIn('work_result', state['assets'][aid])
+                at = datetime.now(timezone.utc)
+                self.assertEqual(runtime.discover_business(now=at), 2)
+                self.assertIsNotNone(work.claim_item('metadata', aid, 'metadata-worker', now=at))
+                self.assertIsNotNone(work.claim_item('copies', aid, 'copies-worker', now=at))
+                repeated = self.submit_telegram(root, first, second)
+                self.assertEqual([row['status'] for row in repeated], ['already-submitted', 'already-submitted'])
+                self.assertIsNone(work.claim_item('intake', 'external-'+origin_ids[12], 'intake-worker', now=at))
+                changed = json.loads(json.dumps(second))
+                changed['receipt']['messages'][0]['text'] = 'Changed caption'
+                with redirect_stderr(StringIO()) as refusal, self.assertRaises(SystemExit):
+                    self.submit_telegram(root, changed)
+                self.assertIn('changed', refusal.getvalue().lower())
+
+                replaced = self.telegram_entry(originals, 101, 13, None)
+                [pending] = self.submit_telegram(root, replaced)
+                path = originals/replaced['path']
+                original_bytes = path.read_bytes()
+                path.write_bytes(b'\0' * len(original_bytes))
+                actor.clock = None
+                attempt = datetime.now(timezone.utc)
+                self.assertEqual(actor.step(now=attempt), 'retry')
+                self.assertIsNone(catalog.read()['origins'][pending['origin']]['sha256'])
+                path.write_bytes(original_bytes)
+                with patch('library.decode.run', return_value={
+                    'status': 'pending', 'reason': 'Decoder support unavailable',
+                }):
+                    self.assertEqual(actor.step(now=attempt + timedelta(minutes=6)), 'retry')
+                self.assertEqual(actor.step(now=attempt + timedelta(minutes=22)), 'done')
+                self.assertEqual(catalog.read()['origins'][pending['origin']]['sha256'], aid)
+                scan.assert_not_called()
+
+    def test_telegram_cli_refuses_unbound_or_unfinished_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            originals = root/'originals'
+            row = self.telegram_entry(originals, 202, 16, 17)
+            source = originals/row['path']
+            linked = source.with_name('Linked.cbz')
+            linked.symlink_to(source)
+            partial = source.with_name('Album.partial.cbz')
+            partial.write_bytes(source.read_bytes())
+            cases = (
+                ({'completed': False}, 'completed'), ({'size': row['size'] + 1}, 'size'),
+                ({'sha256': 'f'*64}, 'SHA-256'), ({'path': '/outside.cbz'}, 'path'),
+                ({'path': 'booksys/telegram/../202_16/L’Album.cbz'}, 'path'),
+                ({'path': str(linked.relative_to(originals))}, 'symlink'),
+                ({'path': str(partial.relative_to(originals))}, 'partial'),
+                ({'topic': 18}, 'scope'),
+                ({'receipt': {'id': 303, 'messages': row['receipt']['messages']}}, 'scope'),
+                ({'receipt': {'id': 202, 'messages': [
+                    {**row['receipt']['messages'][0], 'text': '\0'}]}}, 'caption'),
+            )
+            with patch('library.intake.EXTERNAL_ROOT', originals):
+                for changes, reason in cases:
+                    with self.subTest(reason=reason), redirect_stderr(StringIO()) as refusal:
+                        with self.assertRaises(SystemExit) as raised:
+                            self.submit_telegram(root, {**row, **changes}, dry_run=True)
+                        self.assertEqual(raised.exception.code, 1)
+                        self.assertIn(reason.lower(), refusal.getvalue().lower())
+            self.assertFalse((root/'state').exists())
+
+    def test_scan_excludes_managed_stream_temporary_and_symlink_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ('Series', 'booksys', '@eaDir', 'ug-tmp-old', 'Series/@eaDir', 'Series/booksys'):
