@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 import random
 import tempfile
+from typing import Any
 import zipfile
 import unittest
 from unittest.mock import patch
@@ -33,6 +34,93 @@ def encoded(image):
 
 
 class CoverGuardTests(unittest.TestCase):
+    def test_cover_threshold_uses_full_catalogue_work_count_and_album_id(self):
+        from library.cover_confirmation import apply_cover_threshold
+        from test_candidate_concordance import candidate, evidence
+
+        row = candidate(series='Sky Patrol Press')
+        asset = evidence('Sky Patrol T3')
+        album = {'album_id': '123', 'series': 'Sky Patrol Press', 'number': '3', 'title': 'The Silent Island'}
+        edition = dict(album, album_id='456')
+        sibling = dict(album, album_id='789', series='Sky Patrol Other Press', title='The Last Gate')
+        for score, albums, expected in (
+            (40, None, True), (20, None, False), (19.999, [album], False),
+            (20, [album, edition], True), (39.999, [album, edition], True),
+            (20, [album, sibling], False), (20, [edition], False),
+            (20, [dict(album, title=''), dict(edition, title='')], False),
+        ):
+            with self.subTest(score=score, albums=albums):
+                def lookup(series, number):
+                    return None if albums is None else {'index': 'a' * 64, 'albums': albums}
+
+                receipt: dict[str, Any] = {
+                    'score': score, 'threshold': 40, 'result': 'pass' if score >= 40 else 'review',
+                    'reason': 'cover_agreement' if score >= 40 else 'below_threshold',
+                }
+                method = apply_cover_threshold(receipt, asset, row, lookup)
+                self.assertEqual(receipt['result'] == 'pass', expected)
+                if expected and score < 40:
+                    self.assertEqual(method, 'catalogue-unique-cover-v1')
+                    self.assertEqual(receipt['catalogue_family']['family_size'], 1)
+                    self.assertEqual(receipt['catalogue_family']['matched_families'], ['sky patrol press'])
+                    self.assertEqual(receipt['threshold'], 20)
+                else:
+                    self.assertIsNone(method)
+                    self.assertEqual(receipt['threshold'], 40)
+
+    def test_reduced_threshold_requires_an_informative_title_match(self):
+        from library.cover_confirmation import apply_cover_threshold
+        from test_candidate_concordance import candidate, evidence, family_result
+
+        for issue, title, dated_title, ref in (
+            ('17', 'Noël blanc', '1983-1984', '283721'),
+            ('26', 'Snoopy se fait mousser', '1950-2000', '455221'),
+        ):
+            with self.subTest(issue=issue):
+                row = candidate('Snoopy les Peanuts', issue, dated_title, ref)
+                receipt: dict[str, Any] = {'score': 25, 'threshold': 40, 'result': 'review',
+                                           'reason': 'below_threshold'}
+                method = apply_cover_threshold(receipt, evidence(f'Snoopy T{issue} - {title}'), row,
+                                               lambda series, number: family_result(row))
+                self.assertIsNone(method)
+                self.assertEqual(receipt['result'], 'review')
+                self.assertEqual(receipt['threshold'], 40)
+
+    def test_prefix_cover_pass_records_requeue_method_after_finalization(self):
+        from types import SimpleNamespace
+        from library.work_enrichment import save_work_result
+        from library.work_identity import evaluate_work
+        from test_candidate_concordance import evidence
+
+        state, row, _ = self.fixture(series='Sky Patrol 2e serie Press', number='3')
+        asset = state['assets']['a' * 64]
+        labels = evidence('Sky Patrol - Série 2 - Tome 3')
+        album = {'album_id': '123', 'series': row['series'], 'number': '3', 'title': row['title']}
+        lookup = lambda series, issue: {'index': 'a' * 64, 'albums': [album]}
+        providers = SimpleNamespace(bdnex=SimpleNamespace(lookup_family=lookup),
+                                    get_binary=lambda url: {'status': 'ok', 'body': b'reference'})
+
+        def extract(operation, source, payload, destination):
+            (destination / 'first-page.img').write_bytes(b'original')
+            return {'status': 'extracted', 'input_sha256': asset['sha256']}
+
+        for score in (10, 20, 40):
+            with self.subTest(score=score), tempfile.TemporaryDirectory() as directory:
+                result = evaluate_work(copy.deepcopy(labels), [row], family_lookup=lookup)
+                result['evidence'] = copy.deepcopy(labels)
+                compared = {'score': score, 'result': 'pass' if score >= 40 else 'review',
+                            'reason': 'cover_agreement' if score >= 40 else 'below_threshold'}
+                providers._cover_confirmations = {}
+                with patch.object(decode, 'WORK_ROOT', directory), patch.object(decode, 'run', side_effect=extract), \
+                        patch('library.cover_confirmation.compare', return_value=compared):
+                    save_work_result(asset, result, providers, lambda: Path('/unused'))
+                receipt = result['evidence']['cover_confirmation']
+                self.assertEqual(receipt['catalogue_family']['matched_families'], ['sky patrol 2e serie press'])
+                self.assertEqual(receipt['threshold'], 20 if score == 20 else 40)
+                self.assertEqual(result['status'], 'identified' if score >= 20 else 'review')
+                self.assertEqual(result.get('identification_method'),
+                                 'catalogue-unique-cover-v1' if score >= 20 else None)
+
     def test_real_child_compares_identical_textured_images(self):
         from library.cover_confirmation import compare
         with tempfile.TemporaryDirectory() as directory:
@@ -149,14 +237,51 @@ class CoverGuardTests(unittest.TestCase):
             self.assertEqual(fresh['status'], 'identified')
             self.assertEqual(fresh['evidence']['cover_confirmation']['score'], receipt['score'])
 
+    def test_pdf_without_manifest_confirms_the_first_page(self) -> None:
+        from types import SimpleNamespace
+        from library.readers import inspect_file
+        from library.work_enrichment import save_work_result
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(decode, 'WORK_ROOT', directory):
+            source = Path(directory) / 'series.pdf'
+            first, second = texture(), texture(999)
+            first.save(source, save_all=True, append_images=[second], dpi=(150, 150), quality=95)
+            inspection = inspect_file(source, stable_seconds=0)
+            self.assertEqual(inspection['status'], 'validated', inspection)
+            self.assertNotIn('page_manifest', inspection)
+
+            for reference, outcome in ((first, 'identified'), (second, 'review')):
+                with self.subTest(outcome=outcome):
+                    state, _, result = self.fixture()
+                    asset = state['assets']['a'*64]
+                    del asset['page_manifest']
+                    asset.update(inspection)
+                    result['evidence']['asset'] = asset['sha256']
+                    retry = copy.deepcopy(result)
+                    providers = SimpleNamespace(get_binary=lambda url: {
+                        'status': 'ok', 'body': encoded(reference)})
+                    save_work_result(asset, result, providers, lambda: source)
+                    self.assertEqual(result['status'], outcome, result)
+                    receipt = result['evidence']['cover_confirmation']
+                    self.assertEqual(receipt['member']['name'], '000001.jpg')
+                    self.assertEqual(receipt['member']['sha256'], receipt['input_sha256'])
+                    self.assertEqual(receipt['reason'],
+                                     'cover_agreement' if outcome == 'identified' else 'below_threshold')
+                    with patch.object(decode, 'run', side_effect=AssertionError('Must reuse')):
+                        save_work_result(asset, retry, providers, lambda: source)
+                    self.assertEqual(retry['evidence']['cover_confirmation'], receipt)
+
     def test_only_asset_title_or_explicit_same_role_creator_exempts(self):
         from library.work_enrichment import save_work_result
-        cases = [({'title': 'Informative Album'}, 'identified', 'asset_title'),
-                 ({'embedded': {'Writer': 'Jane Writer'}}, 'identified', 'asset_creator'),
-                 ({'embedded': {'Penciller': 'John Artist'}}, 'identified', 'asset_creator'),
-                 ({'embedded': {'Writer': 'John Artist'}}, 'review', 'creator_conflict'),
-                 ({'embedded': {'Writer': 'Other Writer'}}, 'review', 'creator_conflict'),
-                 ({'title': 'Series'}, 'no_match', None), ({}, 'review', 'archive_unavailable')]
+        cases: list[tuple[dict[str, object], str, str | None]] = [
+            ({'title': 'Informative Album'}, 'identified', 'asset_title'),
+            ({'embedded': {'Writer': 'Jane Writer'}}, 'identified', 'asset_creator'),
+            ({'embedded': {'Penciller': 'John Artist'}}, 'identified', 'asset_creator'),
+            ({'embedded': {'Writer': 'John Artist'}}, 'review', 'creator_conflict'),
+            ({'embedded': {'Writer': 'Other Writer'}}, 'review', 'creator_conflict'),
+            ({'title': 'Series'}, 'no_match', None),
+            ({}, 'review', 'archive_unavailable'),
+        ]
         for kwargs, status, reason in cases:
             with self.subTest(kwargs=kwargs):
                 state, row, result = self.fixture(**kwargs)

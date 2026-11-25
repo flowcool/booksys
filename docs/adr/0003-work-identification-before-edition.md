@@ -1,6 +1,6 @@
 # ADR 0003: Identify works and reuse metadata components
 
-Status: updated for the candidate concordance decision of 24 November 2026.
+Status: updated for the catalogue-unique cover decision of 25 November 2026.
 
 Identify the album from filenames, captured source information and metadata.
 Keep unknown values explicit. Retain provenance for supported fields.
@@ -24,8 +24,27 @@ existing vetoes and keep both results. Never rank by score. Collapse edition
 variants without inventing edition metadata.
 
 Series and number alone, generic titles and an unsupported series year require
-the existing cover confirmation at threshold 40. A recorded score below 10 for
-the same asset and album blocks identification. Keep number and disjoint label
-title rejections. Keep periodical and dated-series rules. Preserve accepted work
-in later cycles. Store the mode and matched words in the existing result payload.
-No schema conversion or BDneX service change is required.
+cover confirmation. The standard threshold is 40. Use 20 when the proposed
+album is the sole work with that number in the full BDneX index across the
+normalized label series and its whole-word extensions. Collapse editions with
+the same number and title. R3 can route a prefix match to cover if exactly one
+matched family has that number. Map `Série N` label markers to the catalogue
+ordinal and allow an unmarked first series.
+
+Both catalogue routes require a shared informative title word when the label
+includes an informative title after its issue marker. Years, digits and
+punctuation supply no title words. A different album with the same number and
+a title that covers the label title blocks both routes. Check the returned
+candidates and the catalogue lookup for such an album.
+
+A recorded score below 10 for the same asset and album blocks identification.
+Keep number and disjoint label title rejections. Keep periodical and dated-series
+rules. Preserve accepted work in later cycles. Store the mode and matched words
+in the existing result payload. Record the catalogue method and version, work
+count, matched families and threshold. Mark new-path identifications
+`catalogue-unique-cover-v1` for targeted requeue.
+
+Use the versioned read-only BDneX family lookup. An older service keeps the
+standard threshold and earlier R3 rules. Metadata method v9 progressively
+reopens unresolved tasks. Rebuild the BDneX service image from the public
+release commit.

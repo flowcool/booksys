@@ -1,18 +1,26 @@
 """Candidate words against asset labels. No provider calls or score ranking."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from functools import cache
 import re
 from typing import Any
 import unicodedata
 
-from library.bdnex_protocol import bedetheque_album_id
+from library.bdnex_protocol import FAMILY_METHOD, FAMILY_SCHEMA, FamilyLookup, bedetheque_album_id, family_matches
+from library.asset_evidence import file_years
+from library.names import parse_name
+from library.work_identity import normalized
 
 METHOD = 'candidate-concordance-r3-v1'
 STOP = frozenset('le la les de des du d l un une et a au aux the of en sur par pour vol volume tome t n no bd fr french cbr cbz pdf'.split())
 JUNK = frozenset('hybrid comic ebook toner printer notag scan digital manga vf webrip fixed officiel paprika papri ka kashimoya beastieboy internal retail dp sp crossread'.split())
 MARK = re.compile(r'\b(?:t|tome|vol|volume|int|integrale|hs|n|no)\s*(\d{1,4})\b|(?:^|\s)(\d{1,4})(?=\s|$)')
+EXPLICIT_ISSUE = re.compile(r'(?<!\w)(?:t(?:ome)?|vol(?:ume)?|n[°o]?|hs|int(?:[ée]grale)?|#)'
+                            r'\.?\s*(\d{1,4})(?!\w|[.,–-]\s*\d)', re.I)
+CATALOGUE_PREFIX_MODE = 'catalogue_prefix:cover'
 
 
 def normalize(value: Any) -> str:
@@ -48,6 +56,102 @@ def number(value: Any) -> str | None:
         return None
 
 
+def asset_labels(evidence: dict[str, Any]) -> list[str]:
+    return list(dict.fromkeys(a['value'] for a in evidence.get('provenance', {}).get('labels', [])
+                              if a.get('scope') == 'asset' and isinstance(a.get('value'), str)))
+
+
+def label_issue(label: str) -> tuple[str, str, set[str]] | None:
+    # Keep the series qualifier and separate it from the issue marker.
+    label = re.sub(r'^zz(?=[a-zÀ-ÿ])', '', label.strip(), flags=re.I).replace('_', ' ')
+    bare = re.sub(r'\[[^]]*\]|\((?!\s*s[ée]rie\s+\d+\s*\))[^)]*\)', ' ', label, flags=re.I)
+    marks = list(EXPLICIT_ISSUE.finditer(bare))
+    if len(marks) > 1:
+        return None
+    raw_series: Any
+    raw_issue: Any
+    title: Any
+    if marks:
+        mark = marks[0]
+        raw_series, raw_issue, title = bare[:mark.start()], mark[1], bare[mark.end():]
+    else:
+        parsed = parse_name(label)
+        raw_series, raw_issue, title = parsed.get('series'), parsed.get('number'), parsed.get('title')
+    series = normalized(raw_series, 'series') if raw_series else ''
+    issue = number(raw_issue)
+    if series and issue is not None:
+        return series, issue, words(title) - JUNK
+    return None
+
+
+def catalogue_family_for(evidence: dict[str, Any], row: dict[str, Any], lookup: FamilyLookup, *,
+                         candidates: Sequence[dict[str, Any]] = (),
+                         prefix: bool = False) -> tuple[dict[str, Any] | None, bool]:
+    """Return catalogue proof and whether a different album covers the label title."""
+    if evidence.get('asset_bound') is not True or row.get('source') != 'bedetheque':
+        return None, False
+    ref = bedetheque_album_id(row.get('url'))
+    issue = number(row.get('number'))
+    if ref is None or ref != row.get('edition_ref') or issue is None:
+        return None, False
+    series = str(row.get('series') or '')
+    labels = asset_labels(evidence)
+    claims = [claim for label in labels if (claim := label_issue(label)) is not None]
+    embedded = evidence.get('embedded', {})
+    claims_numbers = {n for _, n, _ in claims}
+    claims_numbers.update(str(int(n)) for label in labels for n in EXPLICIT_ISSUE.findall(
+        re.sub(r'\([^)]*\)|\[[^]]*\]', '', label.replace('_', ' '))))
+    claims_numbers.update(str(int(n)) for n in EXPLICIT_ISSUE.findall(str(embedded.get('Title') or '')))
+    if embedded_issue := number(embedded.get('Number')):
+        claims_numbers.add(embedded_issue)
+    if claims_numbers != {issue}:
+        return None, False
+    if prefix:
+        years = file_years(evidence)
+        if embedded.get('Year'):
+            years.add(str(embedded['Year']))
+        dates = set(re.findall(r'\b(?:18|19|20)\d{2}\b', normalize(series)))
+        if years and dates and dates != years:
+            return None, False
+    titles = [title for _, _, title in claims if title]
+    candidate_title = words(row.get('title')) - JUNK
+    title_agrees = all(title & candidate_title for title in titles)
+
+    def competes(album_id: str | None, album_number: Any, title: Any) -> bool:
+        return (bool(titles) and album_id is not None and album_id != ref and number(album_number) == issue
+                and any(label_title <= words(title) for label_title in titles))
+
+    competing = any(competes(other.get('edition_ref'), other.get('number'), other.get('title'))
+                    for other in candidates if other.get('source') == 'bedetheque')
+    proof = None
+    found_album = False
+    for query in dict.fromkeys(query for query, _, _ in claims):
+        if not family_matches(query, series) or prefix and query == normalized(series, 'series'):
+            continue
+        response = lookup(query, issue)
+        if response is None:
+            continue
+        albums = response['albums']
+        competing = competing or any(competes(album['album_id'], album['number'], album['title']) for album in albums)
+        if not any(album['album_id'] == ref and album['number'] == issue for album in albums):
+            continue
+        found_album = True
+        if competing:
+            return None, True
+        if not title_agrees or proof is not None:
+            continue
+        families = sorted({str(normalized(album['series'], 'series')) for album in albums})
+        # The issue number is common to the response. Absent titles cannot prove edition equivalence.
+        works = {title if (title := normalized(album['title'])) else ('untitled', album['album_id'])
+                 for album in albums}
+        if (prefix and len(families) == 1) or (not prefix and len(works) == 1):
+            proof = {'method': FAMILY_METHOD, 'version': FAMILY_SCHEMA, 'index': response['index'],
+                     'family_size': len(works), 'matched_families': families, 'series': query, 'number': issue}
+            if not titles:
+                break
+    return (None, True) if found_album and competing else (proof, False)
+
+
 @dataclass
 class Decision:
     candidate: dict[str, Any] | None = None
@@ -56,21 +160,26 @@ class Decision:
     reason: str = 'No candidate agrees with asset labels'
     matched_words: list[str] = field(default_factory=list)
     editions: list[dict[str, Any]] = field(default_factory=list)
+    catalogue_family: dict[str, Any] | None = None
+    competing_catalogue_title: bool = False
 
     def receipt(self) -> dict[str, Any]:
-        return {'method': METHOD, 'mode': self.mode, 'needs_cover': self.needs_cover,
+        result = {'method': METHOD, 'mode': self.mode, 'needs_cover': self.needs_cover,
                 'reason': self.reason, 'matched_words': self.matched_words,
                 'album_id': self.candidate.get('edition_ref') if self.candidate else None}
+        if self.catalogue_family is not None:
+            result['catalogue_family'] = self.catalogue_family
+        return result
 
 
-def decide(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> Decision:
+def decide(evidence: dict[str, Any], candidates: list[dict[str, Any]], *,
+           family_lookup: FamilyLookup | None = None) -> Decision:
     """Return one work, its basis and whether cover confirmation is required.
 
     Only asset-scoped labels and bound embedded ComicInfo can establish R3.
     Parsed fields, OCR and discovery scores cannot veto or select a work.
     """
-    labels = list(dict.fromkeys(a['value'] for a in evidence.get('provenance', {}).get('labels', [])
-                               if a.get('scope') == 'asset' and isinstance(a.get('value'), str)))
+    labels = asset_labels(evidence)
     embedded = evidence.get('embedded', {}) if evidence.get('asset_bound') is True else {}
     if not labels and not embedded:
         return Decision(reason='No asset label or embedded ComicInfo')
@@ -163,6 +272,17 @@ def decide(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> Decisi
             mode = 'title_number'
         if mode:
             matches.append((row, mode, combined & tokens))
+    family_proofs: dict[str, dict[str, Any]] = {}
+    if not matches and family_lookup is not None:
+        lookup = cache(family_lookup)
+        for row in candidates:
+            proof, competing = catalogue_family_for(evidence, row, lookup, candidates=candidates, prefix=True)
+            if competing:
+                return Decision(mode='ambiguous', reason='Another album covers the asset label title and number',
+                                competing_catalogue_title=True)
+            if proof is not None:
+                family_proofs[row['edition_ref']] = proof
+                matches.append((row, CATALOGUE_PREFIX_MODE, words(row.get('series')) & tokens))
     # A Web id is explicit file authority. Other candidates do not displace it.
     explicit = [m for m in matches if m[1] == 'web']
     if explicit:
@@ -186,4 +306,4 @@ def decide(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> Decisi
                         reason='Several possible works' if groups else 'No candidate agrees with asset labels')
     chosen, mode, matched = groups[0][0]
     return Decision(chosen, mode, mode.endswith(':cover'), 'Asset evidence agrees with one work',
-                    sorted(matched), [m[0] for m in groups[0]])
+                    sorted(matched), [m[0] for m in groups[0]], family_proofs.get(chosen.get('edition_ref', '')))

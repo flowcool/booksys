@@ -11,6 +11,34 @@ from bdnex_service.engine import Engine, SitemapCache, validate_xml
 
 @unittest.skipUnless(importlib.util.find_spec('bdnex'), 'Pinned engine lives in the separate container')
 class EngineTests(unittest.TestCase):
+    def test_family_lookup_reads_every_album_with_that_number(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls
+
+        albums = [
+            'Sky-Patrol-Tome-3-The-Silent-Island-900003',
+            'Sky-Patrol-Tome-3a-The-Silent-Island-900013',
+            'Sky-Patrol-2e-serie-Publisher-Tome-3-The-Last-Gate-900023',
+            'Sky-Patroller-Tome-3-The-Crossing-900033',
+            'Sky-Patrol-Tome-4-The-Crossing-900043',
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            urls = sitemap_urls()
+            cache = SitemapCache(path, writable=True)
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums
+            ) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', urls[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', urls[1],
+                            b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            result = engine.lookup_family({'series': 'Sky Patrol', 'number': '3'})
+            self.assertEqual({row['album_id'] for row in result['albums']}, {'900003', '900013', '900023'})
+            self.assertEqual(result['index'], engine.index)
+            narrowed = engine.lookup_family({'series': 'Sky Patrol - Série 2 -', 'number': '3'})
+            self.assertEqual([row['album_id'] for row in narrowed['albums']], ['900023'])
+
     def test_decorated_lookup_and_web_proposal_without_native_hits(self) -> None:
         from bdnex.importer.bedetheque.sitemap import sitemap_urls
         with tempfile.TemporaryDirectory() as folder:

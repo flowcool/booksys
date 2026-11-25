@@ -1,5 +1,6 @@
 """Synthetic asset labels at the candidate decision boundary."""
 import unittest
+from typing import Any
 
 from library.candidate_concordance import decide
 
@@ -15,7 +16,88 @@ def candidate(series='Sky Patrol', number='3', title='The Silent Island', ref='1
             'edition_ref': ref, 'url': f'https://www.bedetheque.com/BD-Fixture-{ref}.html', **extra}
 
 
+def family_result(*rows: dict[str, Any]) -> dict[str, Any]:
+    return {'index': 'a' * 64, 'albums': [
+        {'album_id': row['edition_ref'], **{key: row[key] for key in ('series', 'number', 'title')}}
+        for row in rows]}
+
+
 class CandidateConcordanceTests(unittest.TestCase):
+    def test_catalogue_prefix_requires_one_family_and_respects_the_series_marker(self):
+        row = candidate(series='Sky Patrol 2e serie Publisher')
+        second = candidate(series='Sky Patrol Original Press', title='The Last Gate', ref='456')
+        calls = []
+
+        def lookup(series, issue):
+            calls.append((series, issue))
+            albums = [row] if 'serie 2' in series else [row, second]
+            return {'index': 'a' * 64, 'albums': [
+                {'album_id': r['edition_ref'], **{key: r[key] for key in ('series', 'number', 'title')}}
+                for r in albums]}
+
+        for label in ('Sky Patrol (Série 2) - Tome 3', 'Sky Patrol Série 2 T3', 'Sky Patrol - Série 2 - Tome 3'):
+            with self.subTest(label=label):
+                asset = evidence(label)
+                self.assertEqual(decide(asset, [row]).mode, 'none')
+                result = decide(asset, [row], family_lookup=lookup)
+                self.assertEqual(result.mode, 'catalogue_prefix:cover')
+                self.assertTrue(result.needs_cover)
+                assert result.candidate is not None
+                self.assertEqual(result.candidate['edition_ref'], '123')
+                self.assertEqual(calls[-1], ('sky patrol serie 2', '3'))
+        self.assertEqual(decide(evidence('Sky Patrol T3'), [row], family_lookup=lookup).mode, 'none')
+        self.assertEqual(decide(evidence('Sky Patrol Série 2 T3 - Unrelated Caption'), [row],
+                                family_lookup=lookup).mode, 'none')
+        self.assertEqual(decide(evidence('Sky Patrol Série 2 T3', embedded={'Number': '4'}), [row],
+                                family_lookup=lookup).mode, 'none')
+
+        first = candidate(series='Sky Patrol Original Press', ref='456')
+        def unmarked_first(series, issue):
+            return {'index': 'a' * 64, 'albums': [{'album_id': '456', 'series': first['series'],
+                    'number': issue, 'title': first['title']}]}
+        self.assertEqual(decide(evidence('Sky Patrol (Série 1) - Tome 3'), [first],
+                                family_lookup=unmarked_first).mode, 'catalogue_prefix:cover')
+        self.assertEqual(decide(evidence('Sky Patrol (Série 2) - Tome 3'), [first],
+                                family_lookup=unmarked_first).mode, 'none')
+
+    def test_snoopy_prefix_requires_title_agreement_and_reports_a_competing_album(self):
+        from library.work_identity import evaluate_work
+
+        for issue, title, dated_title, prefix_id, true_id in (
+            ('17', 'Noël blanc', '1983-1984', '283721', '10347'),
+            ('26', 'Snoopy se fait mousser', '1950-2000', '455221', '10356'),
+        ):
+            with self.subTest(issue=issue):
+                asset = evidence(f'Snoopy - Tome {issue} - {title}')
+                asset.update(series='Snoopy', number=issue, title=title)
+                prefix = candidate('Snoopy les Peanuts', issue, dated_title, prefix_id)
+                truth = candidate('Peanuts 6 Snoopy Dargaud', issue, title.replace('ë', 'e'), true_id)
+                lookup = lambda series, number: family_result(prefix)
+                self.assertEqual(decide(asset, [prefix], family_lookup=lookup).mode, 'none')
+                result = decide(asset, [truth, prefix], family_lookup=lookup)
+                self.assertEqual(result.mode, 'ambiguous')
+                self.assertIsNone(result.candidate)
+                outcome = evaluate_work(asset, [truth, prefix], family_lookup=lookup)
+                self.assertEqual(outcome['status'], 'review')
+                self.assertEqual(outcome['concordant_candidates'], [])
+                untitled = evidence(f'Snoopy - Tome {issue}')
+                self.assertEqual(decide(untitled, [prefix], family_lookup=lookup).mode, 'catalogue_prefix:cover')
+
+    def test_prefix_abstains_when_another_album_covers_the_label_title(self):
+        asset = evidence('Snoopy T17 - Noël blanc')
+        prefix = candidate('Snoopy les Peanuts', '17', 'Un Noël en famille', '283721')
+        lookup = lambda series, number: family_result(prefix)
+        self.assertEqual(decide(asset, [prefix], family_lookup=lookup).mode, 'catalogue_prefix:cover')
+        for competitor_series in ('Peanuts 6 Snoopy Dargaud', 'Snoopy les Peanuts'):
+            with self.subTest(competitor_series=competitor_series):
+                competitor = candidate(competitor_series, '17', 'Le Noel blanc de Snoopy', '10347')
+                if competitor_series == 'Snoopy les Peanuts':
+                    result = decide(asset, [prefix], family_lookup=lambda series, number: family_result(prefix, competitor))
+                else:
+                    result = decide(asset, [competitor, prefix], family_lookup=lookup)
+                self.assertEqual(result.mode, 'ambiguous')
+                self.assertIsNone(result.candidate)
+
     def test_complete_label_words_identify_despite_parsed_field_noise(self):
         asset = evidence('zzSky Patrol - tome 03 : The Silent Island @source [Digital]')
         asset.update(title='Scanner Name', identity_conflicts={'title': ['noise']})

@@ -7,7 +7,7 @@ from library.periodicals import PERIODICAL_TITLES
 from library.primitives import digest
 
 
-METHOD = 'work-metadata-2026-11-24-v8-candidate-concordance-r3'
+METHOD = 'work-metadata-2026-11-25-v9-catalogue-unique-cover'
 WEEK = 7 * 86400
 
 

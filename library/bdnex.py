@@ -7,14 +7,14 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from urllib.parse import urlsplit
 
 from library.bdnex_protocol import (
-    PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates,
-    validate_decision, valid_match_counts,
+    FAMILY_PATH, FAMILY_SCHEMA, FamilyLookup, PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates,
+    validate_decision, validate_family_request, validate_family_result, valid_match_counts,
 )
 from library.names import parse_name
 
@@ -32,6 +32,41 @@ class BDneXClient:
             raise ValueError('Invalid private BDneX configuration')
         self.endpoint, self.token, self.timeout = endpoint.rstrip('/'), token, timeout
         self.retry_at = 0.0
+        self.family_retry_at = 0.0
+
+    def _post(self, path: str, body: bytes) -> Any:
+        req = Request(self.endpoint + path, data=body,
+                      headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
+        # Private credentials must never follow redirects or ambient proxy settings.
+        with build_opener(ProxyHandler({}), NoRedirect()).open(req, timeout=self.timeout) as response:
+            raw = response.read(MAX_RESPONSE + 1)
+        if len(raw) > MAX_RESPONSE:
+            raise ValueError('BDneX response too large')
+        return json.loads(raw)
+
+    def lookup_family(self, series: str, number: str) -> dict[str, Any] | None:
+        if time.monotonic() < max(self.retry_at, self.family_retry_at):
+            return None
+        request = {'schema': FAMILY_SCHEMA, 'series': series, 'number': number}
+        try:
+            query = validate_family_request(request)
+        except ValueError:
+            return None
+        try:
+            result = self._post(FAMILY_PATH, json.dumps(request).encode())
+            validate_family_result(result, query)
+            if (type(result.get('schema')) is not int or result['schema'] != FAMILY_SCHEMA
+                    or result.get('request') != digest(request) or result.get('engine') != PIN):
+                raise ValueError('Invalid BDneX family binding')
+        except HTTPError as exc:
+            exc.close()
+            if exc.code == 404:
+                # A worker can start before the service image gains this endpoint.
+                self.family_retry_at = time.monotonic() + 60
+            return None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return {'index': result['index'], 'albums': result['albums']}
 
     def match(self, asset: str, inputs: list[dict[str, Any]], *,
               identity: dict[str, list[str]] | None = None) -> dict[str, Any]:
@@ -80,14 +115,7 @@ class BDneXClient:
         except ValueError:
             return {'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'}
         try:
-            req = Request(self.endpoint + '/v1/match', data=body,
-                headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
-            # Private credentials must never follow redirects or ambient proxy settings.
-            with build_opener(ProxyHandler({}), NoRedirect()).open(req, timeout=self.timeout) as response:
-                raw = response.read(MAX_RESPONSE + 1)
-            if len(raw) > MAX_RESPONSE:
-                raise ValueError('BDneX response too large')
-            result = json.loads(raw)
+            result = self._post('/v1/match', body)
             if (result.get('schema') != 1 or result.get('asset') != asset or result.get('request') != digest(request)
                     or result.get('engine') != PIN or not re.fullmatch('[a-f0-9]{64}', str(result.get('index', '')))):
                 raise ValueError('Invalid BDneX binding')
@@ -118,6 +146,10 @@ def configured_client() -> BDneXClient | None:
     # Misconfiguration is a deployment error, never silently disable an enabled provider.
     token = Path(os.environ['BOOKSYS_BDNEX_TOKEN_FILE']).read_text().strip()
     return BDneXClient(endpoint, token)
+
+
+def family_lookup_for(providers: Any) -> FamilyLookup | None:
+    return cast(FamilyLookup | None, getattr(getattr(providers, 'bdnex', None), 'lookup_family', None))
 
 
 def identity_for(state: dict[str, Any], key: str) -> dict[str, list[str]]:

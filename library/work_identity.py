@@ -4,8 +4,11 @@ from __future__ import annotations
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import unicodedata
+
+if TYPE_CHECKING:
+    from library.bdnex_protocol import FamilyLookup
 
 
 IDENTITY_FIELDS = ('title', 'series', 'number', 'integral')
@@ -126,7 +129,8 @@ def uses_candidate_concordance(result: dict[str, Any]) -> bool:
             and receipt.get('mode', 'none') not in ('none', 'ambiguous', 'incomplete'))
 
 
-def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]], *,
+                  family_lookup: FamilyLookup | None = None) -> dict[str, Any]:
     """Try R3 candidate concordance, then exact concordance if R3 abstains.
 
     R3 uses asset labels and embedded ComicInfo. Parsed fields cannot veto it.
@@ -134,7 +138,7 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
     for both routes. Never choose by score.
     """
     from library.candidate_concordance import decide
-    decision = decide(evidence, candidates)
+    decision = decide(evidence, candidates, family_lookup=family_lookup)
     if decision.candidate is not None:
         chosen = decision.candidate
         result: dict[str, Any] = {
@@ -155,6 +159,8 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) ->
                 result['work'][field] = deepcopy(values[0])
         return result
     result = _evaluate_exact_work(evidence, candidates)
+    if decision.competing_catalogue_title and result['status'] == 'no_match':
+        result.update(status='review', reason=decision.reason)
     result['candidate_concordance'] = decision.receipt()
     return result
 

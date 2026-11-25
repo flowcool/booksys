@@ -10,7 +10,7 @@ import sqlite3
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from library.bdnex_protocol import STRONG_SCORE, bedetheque_album_id, validate_candidates
+from library.bdnex_protocol import STRONG_SCORE, bedetheque_album_id, family_album, family_matches, validate_candidates
 from library.work_identity import NUMBERED_SERIES_ALIASES, normalized
 
 _hints: ContextVar[dict[str, str]] = ContextVar('embedded_hints', default={})
@@ -100,16 +100,30 @@ class Engine:
             catalogue = self.source.catalogue()
             self.count = len(catalogue)
             self.numbered: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            self.edition_suffixes: dict[str, list[tuple[str, str]]] = defaultdict(list)
             self.albums = {candidate.source_id: candidate for candidate in catalogue}
             for candidate in catalogue:
                 series, separator, _ = candidate.url.split('/BD-', 1)[-1].partition('-Tome-')
                 if separator and candidate.volume is not None:
                     self.numbered[str(candidate.volume)].append((series, candidate.source_id))
+                elif separator and (edition := family_album(candidate.url)):
+                    # The pinned matcher omits letter-suffixed editions from its volume buckets.
+                    self.edition_suffixes[edition['number']].append((series, candidate.source_id))
             self.index = revision.hexdigest()
         finally:
             cache.close()
         # Catalogue is warm. known_candidate_from_url builds its id map from
         # this in-memory catalogue, so matching needs neither DB nor network.
+
+    def lookup_family(self, query: dict[str, str]) -> dict[str, Any]:
+        number = query['number']
+        matches = {}
+        for series, ref in (*self.numbered.get(number, ()), *self.edition_suffixes.get(number, ())):
+            if family_matches(query['series'], series):
+                album = family_album(self.albums[ref].url)
+                if album is not None and album['number'] == number:
+                    matches[ref] = album
+        return {'index': self.index, 'albums': list(matches.values())}
 
     def match(self, request: dict[str, Any]) -> dict[str, Any]:
         from bdnex.importer.matching import find_matches, query_from_filename, volumes_for  # type: ignore[import-not-found]

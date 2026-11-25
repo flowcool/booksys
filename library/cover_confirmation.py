@@ -8,13 +8,14 @@ import re
 from pathlib import Path
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from library import decode
 from library.asset_evidence import file_years
-from library.bdnex_protocol import bedetheque_album_id
-from library.candidate_concordance import decide
+from library.bdnex import family_lookup_for
+from library.bdnex_protocol import FamilyLookup, bedetheque_album_id
+from library.candidate_concordance import catalogue_family_for, decide
 from library.cover_sift import METHOD, THRESHOLD, FUNCTION_VERSION, PREPROCESSING
 from library.primitives import LibraryError, digest
 from library.work_identity import (
@@ -23,6 +24,30 @@ from library.work_identity import (
 )
 
 CoverSource = Callable[[], Path]
+CATALOGUE_UNIQUE_THRESHOLD = 20.0  # Florent, 2026-11-25: only for a catalogue-unique album.
+CATALOGUE_IDENTIFICATION_METHOD = 'catalogue-unique-cover-v1'
+
+
+def apply_cover_threshold(receipt: dict[str, Any], evidence: dict[str, Any], row: dict[str, Any],
+                          lookup: FamilyLookup | None, *,
+                          prefix_proof: dict[str, Any] | None = None,
+                          candidates: Sequence[dict[str, Any]] = ()) -> str | None:
+    """Apply catalogue evidence to a cover comparison for the selected album."""
+    if prefix_proof is not None:
+        receipt['catalogue_family'] = prefix_proof
+    score = receipt.get('score')
+    if (receipt['reason'] == 'below_threshold' and isinstance(score, (float, int))
+            and CATALOGUE_UNIQUE_THRESHOLD <= score < THRESHOLD):
+        proof = prefix_proof if prefix_proof and prefix_proof['family_size'] == 1 else None
+        if proof is None and lookup is not None:
+            proof, _ = catalogue_family_for(evidence, row, lookup, candidates=candidates)
+        if proof is not None:
+            receipt.update(result='pass', reason='cover_agreement', threshold=CATALOGUE_UNIQUE_THRESHOLD,
+                           catalogue_family=proof)
+            return CATALOGUE_IDENTIFICATION_METHOD
+    if prefix_proof is not None and receipt['result'] == 'pass':
+        return CATALOGUE_IDENTIFICATION_METHOD
+    return None
 
 
 def identity_conflict(evidence: dict[str, Any], row: dict[str, Any], *, indexed: bool) -> bool:
@@ -117,7 +142,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     """Finalize every automatic Bedetheque proposal before classification.
 
     R3 title/Web decisions record their basis. Series-only and dated decisions
-    require the existing cover threshold. Parsed fields cannot veto an R3 pick.
+    require cover confirmation. Parsed fields cannot veto an R3 pick.
     """
     if result['status'] != 'identified':
         return
@@ -143,12 +168,18 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         return
     concordance = result.get('candidate_concordance', {})
     r3 = uses_candidate_concordance(result)
+    lookup = family_lookup_for(providers)
+    prefix_proof = None
     if r3:
-        checked = decide(evidence, result.get('candidates', rows))
+        checked = decide(evidence, result.get('candidates', rows),
+                         family_lookup=lookup if 'catalogue_family' in concordance else None)
         if checked.candidate is None or checked.receipt() != concordance:
             review('candidate_concordance_changed')
             return
         evidence['candidate_concordance'] = concordance
+        prefix_proof = checked.catalogue_family
+        if prefix_proof is not None:
+            receipt['catalogue_family'] = prefix_proof
         row = rows[0]
         receipt.update(album_id=row.get('edition_ref'), album_url=row.get('url'),
                        candidate_concordance=concordance)
@@ -251,17 +282,20 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
             or binding.get('album_url') != row.get('url')):
         review('canonical_cover_unavailable')
         return
+    pdf = asset.get('format') == 'pdf'
+    reader_policy = asset.get('reader_policy')
     receipt.update(reference_url=binding.get('cover_url'), reference_retrieved_at=None,
-                   order_policy=asset.get('reader_policy'))
+                   order_policy='pdf-first-page-render-150dpi-v1' if pdf else reader_policy)
     try:
         if source is None:
             review('archive_unavailable')
             return
         manifest = asset.get('page_manifest', [])
-        if not manifest:
+        if not pdf and not manifest:
             review('manifest_unavailable')
             return
-        receipt['member'] = manifest[0]
+        member = None if pdf else manifest[0]
+        receipt['member'] = member
         response = providers.get_binary(binding['cover_url'])
         receipt['reference_retrieved_at'] = response.get('retrieved_at')
         if response['status'] != 'ok':
@@ -272,7 +306,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         archive_path = source()  # Existing resolver rechecks source/parent hashes even on reuse.
         # Failures and passes within a fallback chain reuse only identical inputs.
         reuse_key = digest({'asset': asset['sha256'], 'evidence': {k: v for k, v in evidence.items()
-            if k != 'cover_confirmation'}, 'member': manifest[0], 'policy': asset.get('reader_policy'),
+            if k != 'cover_confirmation'}, 'member': member, 'policy': receipt['order_policy'],
             'binding': binding, 'reference': receipt['reference_sha256'], 'method': METHOD, 'threshold': THRESHOLD})
         cache = getattr(providers, '_cover_confirmations', None)
         if cache is None:
@@ -282,23 +316,29 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         else:
             with tempfile.TemporaryDirectory(dir=decode.WORK_ROOT) as directory:
                 extracted = decode.run('first_page', archive_path, {'asset_sha256': asset['sha256'],
-                    'reader_policy': asset.get('reader_policy'), 'member': manifest[0]}, destination=Path(directory))
-                if extracted.get('status') != 'extracted' or extracted.get('input_sha256') != asset['sha256']:
+                    'reader_policy': reader_policy, 'member': member}, destination=Path(directory))
+                member = extracted.get('member') if pdf else member
+                if (extracted.get('status') != 'extracted' or extracted.get('input_sha256') != asset['sha256']
+                        or not member):
                     review('extraction_unavailable')
                     return
                 original = (Path(directory) / 'first-page.img').read_bytes()
-                if hashlib.sha256(original).hexdigest() != manifest[0]['sha256']:
+                if len(original) != member['size'] or hashlib.sha256(original).hexdigest() != member['sha256']:
                     review('member_hash_drift')
                     return
-                compared = compare(original, reference)
+                compared = {**compare(original, reference), 'member': member}
             # A native failure can recover without restarting the metadata worker.
             cache[reuse_key] = {'receipt': compared,
                 'expires': time.time() + (7 * 86400 if compared['result'] == 'pass' else 300)}
             receipt.update(compared)
+        method = apply_cover_threshold(receipt, evidence, row, lookup, prefix_proof=prefix_proof,
+                                       candidates=result.get('candidates', rows))
         if receipt['result'] != 'pass':
             review(receipt['reason'])
         else:
             receipt['basis'] = 'cover'
+            if method is not None:
+                result['identification_method'] = method
     except (LibraryError, OSError, ValueError, KeyError, TypeError):
         review('confirmation_unavailable')
 

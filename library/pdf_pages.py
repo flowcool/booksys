@@ -23,6 +23,13 @@ def inspect_pdf(path: Path) -> dict[str, Any]:
     return {'status': 'validated', 'format': 'pdf', 'pages': count, 'embedded': {}}
 
 
+def render_pdf_page(path: Path, index: int) -> bytes:
+    rendered = subprocess.run(['pdftoppm', '-r', '150', '-jpeg', '-jpegopt', 'quality=90',
+        '-f', str(index), '-l', str(index), '-singlefile', str(path)],
+        timeout=300, capture_output=True, check=True)
+    return rendered.stdout
+
+
 def convert_pdf_pages(path: Path, sink: Callable[[str, bytes], None],
                       *, indices: list[int] | None = None) -> dict[str, Any]:
     count = inspect_pdf(path)['pages']
@@ -42,10 +49,7 @@ def convert_pdf_pages(path: Path, sink: Callable[[str, bytes], None],
                 image = images[index - 1]
                 data, extension = image.read_bytes(), image.suffix
             else:
-                rendered = subprocess.run(['pdftoppm', '-r', '150', '-jpeg', '-jpegopt', 'quality=90',
-                    '-f', str(index), '-l', str(index), '-singlefile', str(path)],
-                    timeout=300, capture_output=True, check=True)
-                data, extension = rendered.stdout, '.jpg'
+                data, extension = render_pdf_page(path, index), '.jpg'
             expanded += len(data)
             if expanded > MAX_EXPANDED:
                 raise LibraryError('PDF converted output size limit')
