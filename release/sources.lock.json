@@ -815,8 +815,8 @@
         {
           "id": "dpkg:libzstd1:amd64",
           "source": "libzstd",
-          "source_version": "1.5.7+dfsg-1",
-          "version": "1.5.7+dfsg-1"
+          "source_version": "1.5.7+dfsg-1+deb13u1",
+          "version": "1.5.7+dfsg-1+deb13u1"
         },
         {
           "id": "dpkg:login",
@@ -1624,7 +1624,7 @@
           "id": "dpkg:libzstd1:amd64",
           "license": "BSD-3-clause AND BSD-3-clause or GPL-2 AND Expat AND GPL-2 AND zlib",
           "sources": [
-            "debian_libzstd_1.5.7_dfsg-1"
+            "debian_libzstd_1.5.7_dfsg-1_deb13u1"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -3373,8 +3373,8 @@
         {
           "id": "dpkg:libzstd1:amd64",
           "source": "libzstd",
-          "source_version": "1.5.7+dfsg-1",
-          "version": "1.5.7+dfsg-1"
+          "source_version": "1.5.7+dfsg-1+deb13u1",
+          "version": "1.5.7+dfsg-1+deb13u1"
         },
         {
           "id": "dpkg:login",
@@ -4838,7 +4838,7 @@
           "id": "dpkg:libzstd1:amd64",
           "license": "BSD-3-clause AND BSD-3-clause or GPL-2 AND Expat AND GPL-2 AND zlib",
           "sources": [
-            "debian_libzstd_1.5.7_dfsg-1"
+            "debian_libzstd_1.5.7_dfsg-1_deb13u1"
           ],
           "rationale": "Retain complete exact distribution source including patches/build instructions. No System Library exclusion. Full installed copyright retained."
         },
@@ -12389,11 +12389,11 @@
       "url": "https://deb.debian.org/debian/pool/main/x/xxhash/xxhash_0.8.3-2.dsc",
       "sha256": "9d1f7aaace7871fbdb8775d756c6eaca84e6ad5d8e9c6ac465b7e0adc06ff90c"
     },
-    "debian_libzstd_1.5.7_dfsg-1": {
+    "debian_libzstd_1.5.7_dfsg-1_deb13u1": {
       "package": "libzstd",
-      "version": "1.5.7+dfsg-1",
-      "url": "https://deb.debian.org/debian/pool/main/libz/libzstd/libzstd_1.5.7+dfsg-1.dsc",
-      "sha256": "8f6ab97fa772d921334e50fa5756a0951e23c718dc913e43a228f28c1a23adf9"
+      "version": "1.5.7+dfsg-1+deb13u1",
+      "url": "https://deb.debian.org/debian-security/pool/updates/main/libz/libzstd/libzstd_1.5.7+dfsg-1+deb13u1.dsc",
+      "sha256": "32f2d49685864a4f03f639ac59cfd19674b650e1f2b007705b01342cb0fd5cc3"
     },
     "debian_shadow_1_4.17.4-2": {
       "package": "shadow",
