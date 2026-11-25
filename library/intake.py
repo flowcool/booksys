@@ -28,17 +28,20 @@ def decoder_readiness() -> str:
     return digest({tool: shutil.which(tool) is not None for tool in ('unrar', 'pdfimages', 'pdftoppm')})
 
 
-def retry_at(origin: dict[str, Any], *, bundle: bool = False) -> float | None:
-    """A finite retry deadline is scheduling state, never an input revision."""
-    if origin.get('availability') not in ('pending', 'rejected'):
-        return None
-    temporary = any(text in origin.get('reason', '').lower() for text in (
+def _temporary_reader_failure(reason: str) -> bool:
+    return any(text in reason.lower() for text in (
         'isolated reader failed', 'isolated bundle worker failed', 'cannot create isolated bundle engine',
         'resource limit exceeded', 'timed out', 'wall limit', 'reader policy differs',
         'decoder failed', 'decoder unavailable', 'support unavailable', 'timeoutexpired',
         'timeouterror', 'memoryerror', 'filenotfounderror'))
+
+
+def retry_at(origin: dict[str, Any], *, bundle: bool = False) -> float | None:
+    """A finite retry deadline is scheduling state, never an input revision."""
+    if origin.get('availability') not in ('pending', 'rejected'):
+        return None
     prefix = 'bundle' if bundle else 'intake'
-    if temporary and 0 < int(origin.get(prefix + '_attempts', 0)) < 3:
+    if _temporary_reader_failure(origin.get('reason', '')) and 0 < int(origin.get(prefix + '_attempts', 0)) < 3:
         return float(origin.get(prefix + '_next_attempt', 0))
     return None
 
@@ -94,9 +97,17 @@ def receive_external(store: Catalog, oid: str) -> PreparedResult:
     relative = Path(origin['path'])
     path = reception_path(EXTERNAL_ROOT, str(relative.parent), relative.name)
     stamp = fingerprint(path)
-    if digest({'external': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3]}) != oid:
+    telegram = origin.get('telegram')
+    if telegram is not None:
+        if stamp[2] != origin['size']:
+            raise LibraryError('Telegram file size changed since submission')
+    elif digest({'external': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3]}) != oid:
         raise LibraryError('External origin bytes changed since discovery')
     result = inspect_file(path)
+    if telegram is not None:
+        inspected_hash = result.get('sha256') or sha256(path)
+        if inspected_hash != telegram['sha256'] or fingerprint(path) != stamp:
+            raise LibraryError('Telegram file bytes changed since submission')
     if result.get('reason'):
         from booksys_core.diagnostics import emit, diagnostic_fields
         emit(service='library', stage='local', code='failed' if result['status'] == 'rejected' else 'waiting',
@@ -104,6 +115,8 @@ def receive_external(store: Catalog, oid: str) -> PreparedResult:
              refs=[{'kind': 'origin', 'id': oid}], **diagnostic_fields({'detail': str(result['reason'])}))
     if result.get('reason') == 'Stage enclosing deadline exceeded':
         raise RuntimeError(result['reason'])
+    if telegram is not None and _temporary_reader_failure(result.get('reason', '')):
+        raise LibraryError(result['reason'])
     refs = {'origins': [oid], 'assets': [result['sha256']] if result.get('sha256') else []}
     state = store.result_set('retire', refs, media=False)
     origin = state['origins'][oid]

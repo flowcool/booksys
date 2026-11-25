@@ -77,9 +77,14 @@ def bind_evidence(state: dict[str, Any], asset_id: str, *, include_capture: bool
         if not origin or origin.get('sha256') != asset_id:
             raise LibraryError('Evidence origin does not reference the exact asset')
         origins.append((oid, origin))
-        name = origin.get('member') if origin.get('parent_origin') else origin.get('path')
+        telegram = origin.get('telegram', {})
+        name = telegram.get('original_name') or (origin.get('member') if origin.get('parent_origin') else origin.get('path'))
         if isinstance(name, str):
             label(PurePosixPath(name).stem, 'origin:' + oid)
+        if include_capture and telegram.get('caption'):
+            query = telegram['caption'].strip().partition('\n')[0].strip()[:256]
+            if query and query not in result['discovery_queries']:
+                result['discovery_queries'].append(query)
     has_file_number = bool(result['provenance'].get('number'))
     captured_hints = asset.get('captured_hints', {}) if include_capture else {}
     for source, hint in captured_hints.items():
