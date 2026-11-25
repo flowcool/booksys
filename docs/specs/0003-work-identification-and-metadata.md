@@ -66,10 +66,10 @@ The running implementation is not evidence that this accepted change is delivere
 10. Convert technically valid unidentified comics into CBZ in the holding area
     labelled “À identifier”. Keep them available outside the classified collection.
     Keep identification and classification status separate from technical validity.
-11. Retry unresolved identification weekly. Retry sooner after a method improvement
-    or useful new evidence. Reuse inspection and extraction results when their
-    inputs and method remain valid. A temporary provider error uses bounded retry;
-    it is not a contradiction, a missing record, or a permanent negative match.
+11. Retry unresolved identification weekly. Make the task due immediately when
+    the method changes or useful new evidence arrives. Keep accepted identities.
+    Reuse inspection and extraction results when their inputs and method remain
+    valid. A temporary provider error uses bounded retry.
 12. Periodical issues (operator decision, 23 November 2026). A closed list in data
     names periodical titles. The list includes Fluide Glacial, Fillette, Tintin
     Hebdoptimiste and Nouveau Tintin. On 24 November 2026, the operator added Les
@@ -93,6 +93,15 @@ The running implementation is not evidence that this accepted change is delivere
     exemptions do not apply to this case. A file year that differs from the series
     year keeps the asset in review. Two or more dated series with this issue number
     also keep it in review.
+14. Accept a finished ZIP or RAR download with the pages of one volume. Use
+    the CBZ or CBR reader for the corresponding format. It checks page integrity
+    and records the natural page order. It accepts JPEG, PNG, WebP and GIF pages
+    and standard ancillary files. These include `ComicInfo.xml`, small `.txt`
+    and `.nfo` files, one thumbnail `.db` and `.picasa.ini`. Keep multiple page
+    groups pending for review. One volume can contain contiguous numbered
+    chapter folders. Do not split volumes. Keep the source and publish a CBZ copy.
+    Bundles of complete PDF, CBZ and CBR files use the bundle rules. Nested containers
+    and misleading suffixes remain subject to the existing checks.
 
 ## Metadata and provenance
 

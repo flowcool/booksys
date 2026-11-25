@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from library.primitives import LibraryError, sync_dir
-from library.readers import fingerprint, inspect_file, sha256
+from library.readers import COMIC_SUFFIXES, fingerprint, inspect_file, sha256
 from library.xmlmetadata import validate_xml
 
 VERSION = 'booksys-cbz-2'
@@ -20,7 +20,7 @@ def transform_archive(source: Path, destination: Path, xml: bytes, asset_hash: s
     validate_xml(xml)
     source, destination = source.absolute(), destination.absolute()
     before = fingerprint(source)
-    if sha256(source) != asset_hash or source.suffix.lower() not in ('.cbr', '.cbz', '.pdf'):
+    if sha256(source) != asset_hash or source.suffix.lower() not in COMIC_SUFFIXES:
         raise LibraryError('Transform source differs from identified comic asset')
     if any(path.is_symlink() for path in (source, destination, *source.parents, *destination.parents)):
         raise LibraryError('Symlink in transformation paths')

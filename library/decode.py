@@ -32,7 +32,7 @@ def run(operation: str, source: Path, payload: dict[str, Any] | None = None,
     source = source.absolute()
     before = fingerprint(source)
     # Bound decoding wall time, including slow input reads (plus 1 s per 2 MiB of source); the process group is killed on expiry.
-    timeout = {'validate': 45, 'first_page': 45, 'cover_compare': 15, 'bundle': 180,
+    timeout = {'validate': 45, 'validate_generic': 45, 'first_page': 45, 'cover_compare': 15, 'bundle': 180,
                'transform': 1800 if source.suffix.lower() == '.pdf' else 60}[operation]
     work = Path(tempfile.mkdtemp(dir=WORK_ROOT))
     try:

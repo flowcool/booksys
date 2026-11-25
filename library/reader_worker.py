@@ -15,7 +15,7 @@ import warnings
 import zipfile
 import subprocess
 import platform
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree
@@ -23,11 +23,13 @@ from xml.etree import ElementTree
 from PIL import Image
 
 from library.primitives import LibraryError
-from library.readers import READER_POLICY
+from library.readers import GENERIC_ARCHIVE_SUFFIXES, MAX_FILE, READER_POLICY
 
 MAX_MEMBER = 64 * 1024 ** 2
 MAX_EXPANDED = 2 * 1024 ** 3
 MAX_PAGES = 2000
+PAGE_SUFFIXES = frozenset(('.jpg', '.jpeg', '.png', '.webp', '.gif'))
+MULTIPLE_IMAGE_GROUPS = 'Multiple image groups: possible multi-work archive'
 # rarfile 4.5 decodes comments (at most 256 KiB) through a temporary RAR.
 RAR_COMMENT_SCRATCH = 1024 ** 2
 # Reject images above 100 million decoded pixels (about 400 MB as RGBA) before retaining their pixels; the decoder address space is 1.5 GiB.
@@ -73,7 +75,7 @@ def member(name: str, data: bytes, output: dict[str, Any]) -> None:
             raise LibraryError('Several ComicInfo records')
         output['embedded'] = metadata(data)
         output['source_comicinfo_base64'] = base64.b64encode(data).decode('ascii')
-    elif path.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp', '.gif'):
+    elif path.suffix.lower() in PAGE_SUFFIXES:
         with warnings.catch_warnings():
             warnings.simplefilter('error')
             with Image.open(io.BytesIO(data)) as image:
@@ -93,6 +95,50 @@ def member(name: str, data: bytes, output: dict[str, Any]) -> None:
         if path.suffix.lower() in ('.pdf', '.zip', '.rar', '.cbz', '.cbr'):
             raise PendingFile('Nested container or multi-work batch')
         raise LibraryError('Nested container or unauthorized archive content')
+
+
+def chapter_order(folders: set[PurePosixPath]) -> dict[str, int] | None:
+    if len(folders) <= 1:
+        return {}
+    ordered = {}
+    for folder in folders:
+        match = re.fullmatch(r'(?:chapitre|chapter)[ _.-]+([0-9]+)', folder.name, re.I)
+        if not match:
+            return None
+        ordered[str(folder)] = int(match.group(1))
+    numbers = set(ordered.values())
+    if (len({folder.parent for folder in folders}) != 1 or len(numbers) != len(folders)
+            or max(numbers) - min(numbers) + 1 != len(numbers)):
+        return None
+    return ordered
+
+
+def generic_image_folders(names: Iterable[str]) -> set[PurePosixPath]:
+    folders = set()
+    for name in names:
+        path = PurePosixPath(name)
+        if path.suffix.lower() in ('.pdf', '.cbz', '.cbr', '.zip', '.rar'):
+            return set()
+        if path.suffix.lower() in PAGE_SUFFIXES:
+            folders.add(path.parent)
+    return folders
+
+
+def generic_image_archive(path: Path, real: str | None) -> set[PurePosixPath]:
+    """Read member names only. Defer complete comics and nested containers to bundle intake."""
+    from library.bundle_worker import MAX_SOURCE
+
+    if path.stat().st_size > MAX_SOURCE:
+        return set()
+    if real == '.cbz':
+        with zipfile.ZipFile(path) as archive:
+            return generic_image_folders(entry.filename for entry in archive.infolist() if not entry.is_dir())
+    if real == '.cbr':
+        import rarfile  # type: ignore[import-untyped]
+
+        with rarfile.RarFile(path) as archive:
+            return generic_image_folders(entry.filename for entry in archive.infolist() if not entry.is_dir())
+    return set()
 
 
 def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], None] | None = None) -> dict[str, Any]:
@@ -146,7 +192,7 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
                     raise LibraryError('Archive expansion limit')
                 consume(entry.filename, archive.read(entry))
     else:
-        import rarfile  # type: ignore[import-untyped]
+        import rarfile
         rarfile.UNRAR_TOOL = os.environ.get('BOOKSYS_UNRAR', 'unrar')
         rarfile.USE_EXTRACT_HACK = False
         rarfile.tool_setup(unrar=True, unar=False, bsdtar=False, sevenzip=False, sevenzip2=False)
@@ -194,17 +240,10 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
             raise PendingFile('Multipart RAR') from exc
     if not output['pages'] or output['pages'] > MAX_PAGES:
         raise LibraryError('Empty archive or page count limit')
-    chapter_numbers: dict[str, int] = {}
-    if len(output['folders']) > 1:
-        folders = [PurePosixPath(folder) for folder in output['folders']]
-        chapters = [re.fullmatch(r'(?:chapitre|chapter)[ _.-]+([0-9]+)', folder.name, re.I)
-                    for folder in folders]
-        numbers = [int(match.group(1)) for match in chapters if match]
-        if (len({str(folder.parent) for folder in folders}) != 1
-                or len(numbers) != len(folders) or len(set(numbers)) != len(numbers)
-                or sorted(numbers) != list(range(min(numbers), max(numbers) + 1))):
-            return {'status': 'pending', 'reason': 'Multiple image groups: possible multi-work archive'}
-        chapter_numbers = {str(folder): number for folder, number in zip(folders, numbers)}
+    chapter_numbers = chapter_order({PurePosixPath(folder) for folder in output['folders']})
+    if chapter_numbers is None:
+        return {'status': 'pending', 'reason': MULTIPLE_IMAGE_GROUPS}
+    if chapter_numbers:
         output['layout'] = 'single-volume-numbered-chapters'
 
     names = [entry['name'] for entry in output['page_manifest']]
@@ -262,15 +301,27 @@ def main() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     output: dict[str, Any]
+    file_hash = hashlib.sha256()
     try:
-        file_hash = hashlib.sha256()
+        suffix = GENERIC_ARCHIVE_SUFFIXES.get(suffix, suffix)
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, 'rb') as handle:
+            magic = handle.read(8)
+            real = '.pdf' if magic.startswith(b'%PDF-') else '.cbz' if magic.startswith(b'PK\x03\x04') else '.cbr' if magic.startswith(b'Rar!\x1a\x07') else None
+            if operation == 'validate_generic':
+                folders = generic_image_archive(path, real)
+                if not folders:
+                    print(json.dumps({'status': 'bundle', 'reader_policy': READER_POLICY}))
+                    return
+                if suffix != real:
+                    raise PendingFile('Suffix and actual format differ')
+                if chapter_order(folders) is None:
+                    raise PendingFile(MULTIPLE_IMAGE_GROUPS)
+                if path.stat().st_size > MAX_FILE:
+                    raise LibraryError('File size limit or empty file')
+            file_hash.update(magic)
             while chunk := handle.read(1024 * 1024):
                 file_hash.update(chunk)
-        with path.open('rb') as handle:
-            magic = handle.read(8)
-        real = '.pdf' if magic.startswith(b'%PDF-') else '.cbz' if magic.startswith(b'PK\x03\x04') else '.cbr' if magic.startswith(b'Rar!\x1a\x07') else None
         if suffix != real:
             output = {'status': 'pending', 'reason': 'Suffix and actual format differ'}
         else:

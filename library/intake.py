@@ -11,14 +11,16 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from library.catalog import Catalog
+from library.multipart_model import is_multipart
 from library.store import PreparedResult
 from library.primitives import LibraryError, WorkingState, digest, now
-from library.readers import inspect_file, fingerprint, sha256, READER_POLICY
+from library.readers import GENERIC_ARCHIVE_SUFFIXES, inspect_file, fingerprint, sha256, READER_POLICY
 
 
 from library.reception import reception_path as reception_path
 
 EXTERNAL_ROOT = Path(os.environ.get('BOOKSYS_ORIGINALS_ROOT', '/data/booksys/comics-originals'))
+GENERIC_ARCHIVE_POLICY = 'generic-image-archive-1'
 
 
 def decoder_readiness() -> str:
@@ -43,11 +45,14 @@ def retry_at(origin: dict[str, Any], *, bundle: bool = False) -> float | None:
 
 def intake_signature(root: Path, package: dict[str, Any]) -> str:
     """Only external inputs can reopen intake; saved outcomes never fence its claim."""
-    from library.bundle_worker import POLICY
+    from library.bundle_worker import POLICY as BUNDLE_POLICY
     files = []
     for item in package.get('links', []):
         record = {key: item.get(key) for key in ('fid', 'name', 'status', 'size', 'input_folder')}
         if type(item.get('status')) is int and item['status'] == 0:
+            name = item['name']
+            if Path(name).suffix.lower() in GENERIC_ARCHIVE_SUFFIXES and not is_multipart(name):
+                record['generic_archive'] = GENERIC_ARCHIVE_POLICY
             try:
                 record['fingerprint'] = list(fingerprint(reception_path(root,
                     item.get('input_folder', package['folder']), item['name'])))
@@ -55,7 +60,8 @@ def intake_signature(root: Path, package: dict[str, Any]) -> str:
                 record['fingerprint'] = type(exc).__name__
         files.append(record)
     return digest({'package': {key: package.get(key) for key in ('pid', 'name', 'folder', 'retirement')},
-                   'files': files, 'reader': READER_POLICY, 'bundle': POLICY, 'decoder_readiness': decoder_readiness()})
+                   'files': files, 'reader': READER_POLICY, 'bundle': BUNDLE_POLICY,
+                   'decoder_readiness': decoder_readiness()})
 
 
 def external_origins(root: Path) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -139,6 +145,10 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
     state = store.result_set('retire', refs, media=False)
     assert isinstance(state, WorkingState)
     readiness = decoder_readiness()
+    from library.bundle_worker import POLICY as BUNDLE_POLICY
+    engine = {'bundle': BUNDLE_POLICY, 'reader': READER_POLICY, 'decoder_readiness': readiness}
+    bundle_engine = digest(engine)
+    generic_bundle_engine = digest({**engine, 'generic_archive': GENERIC_ARCHIVE_POLICY})
     def load_asset(key: str) -> None:
         if key in state['assets']:
             return
@@ -206,7 +216,7 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                         and origin.get('availability') not in ('validated', 'bundle', 'multipart_member')):
                     origin['availability'] = 'package_missing'
             continue
-        from library.multipart import is_multipart, receive_parts
+        from library.multipart import receive_parts
         receive_parts(state, media_directory or store.directory, root, source, package, captured['items'][source],
             stable_seconds, save=save, detached=media_directory is not None, load_asset=load_asset)
         for item in package.get('links', []):
@@ -255,13 +265,35 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             'observed_at': origin['observed_at'], 'transfer_status': 0,
                             'transfer_error': bool(item.get('error'))}
                         continue
-                    if (path.suffix.lower() in ('.zip', '.rar') or previous.get('bundle') or previous.get('bundle_engine_policy') or
-                            (previous.get('availability') == 'pending' and 'Nested container' in previous.get('reason', ''))):
+                    generic_archive = path.suffix.lower() in GENERIC_ARCHIVE_SUFFIXES
+                    engine_policy = generic_bundle_engine if generic_archive else bundle_engine
+                    same_attempt = (previous.get('fingerprint') == stamp and
+                                    previous.get('bundle_engine_policy') == engine_policy)
+                    nested = (previous.get('availability') == 'pending'
+                              and 'Nested container' in previous.get('reason', ''))
+                    use_bundle = (previous.get('bundle') or same_attempt
+                                  or (not generic_archive and (previous.get('bundle_engine_policy') or nested)))
+                    result: dict[str, Any] = {}
+                    policy_retry = (previous.get('validation_policy', previous.get('reader_policy')) != READER_POLICY
+                                    or previous.get('decoder_readiness', readiness) != readiness)
+                    if not use_bundle:
+                        due = retry_at(previous)
+                        retry_due = due is not None and due <= time.time()
+                        if (incremental and not retry_due and not policy_retry and previous.get('fingerprint') == stamp
+                                and previous.get('path') == origin['path']
+                                and previous.get('availability') in ('validated', 'rejected', 'pending')):
+                            if previous.get('availability') == 'validated' and previous.get('sha256') not in state['assets']:
+                                raise LibraryError('Cached origin references missing asset')
+                            state['origins'][oid] = {**previous, **size_fields, 'observed_at': origin['observed_at'],
+                                'transfer_status': 0, 'transfer_error': bool(item.get('error')), 'decoder_readiness': readiness}
+                            continue
+                        result = inspect_file(path, stable_seconds=stable_seconds)
+                        if result.get('reason') == 'Stage enclosing deadline exceeded':
+                            raise RuntimeError(result['reason'])
+                        use_bundle = result['status'] == 'bundle' or (
+                            result['status'] == 'pending' and 'Nested container' in result.get('reason', ''))
+                    if use_bundle:
                         from library.bundles import receive_bundle
-                        from library.bundle_worker import POLICY
-                        engine_policy = digest({'bundle': POLICY, 'reader': READER_POLICY, 'decoder_readiness': readiness})
-                        same_attempt = (previous.get('fingerprint') == stamp and
-                                        previous.get('bundle_engine_policy') == engine_policy)
                         bundle_due = retry_at(previous, bundle=True)
                         retry_bundle = bundle_due is not None and bundle_due <= time.time()
                         if (incremental and not previous.get('bundle') and same_attempt and
@@ -270,42 +302,16 @@ def receive(store: Catalog, root: Path, captured: dict[str, Any], journal: dict[
                             continue
                         attempts = (int(previous.get('bundle_attempts', 0)) if previous.get('bundle') else
                                     int(previous.get('bundle_attempts', 0)) + 1 if same_attempt else 1)
-                        origin.update(fingerprint=stamp, bundle_policy=POLICY, bundle_engine_policy=engine_policy,
+                        origin.update(fingerprint=stamp, bundle_policy=BUNDLE_POLICY, bundle_engine_policy=engine_policy,
                                       bundle_attempts=attempts, bundle_next_attempt=previous.get('bundle_next_attempt', 0)
                                       if previous.get('bundle') else time.time() + (300 if attempts == 1 else 900))
                         receive_bundle(state, media_directory or store.directory, path, oid, origin,
                             captured['items'][source], save=save, load_asset=load_asset,
                             stable_seconds=stable_seconds, detached=media_directory is not None)
                         continue
-                    due = retry_at(previous)
-                    retry_due = due is not None and due <= time.time()
-                    policy_retry = (previous.get('validation_policy', previous.get('reader_policy')) != READER_POLICY
-                                    or previous.get('decoder_readiness', readiness) != readiness)
-                    if (incremental and not retry_due and not policy_retry and previous.get('fingerprint') == stamp
-                            and previous.get('path') == origin['path']
-                            and previous.get('availability') in ('validated', 'rejected', 'pending')):
-                        if previous.get('availability') == 'validated' and previous.get('sha256') not in state['assets']:
-                            raise LibraryError('Cached origin references missing asset')
-                        state['origins'][oid] = {**previous, **size_fields, 'observed_at': origin['observed_at'], 'transfer_status': 0,
-                                                 'transfer_error': bool(item.get('error')), 'decoder_readiness': readiness}
-                        continue
-                    result = inspect_file(path, stable_seconds=stable_seconds)
-                    if result.get('reason') == 'Stage enclosing deadline exceeded':
-                        raise RuntimeError(result['reason'])
                     if result['status'] == 'rejected':
                         from booksys_core.diagnostics import emit
                         emit(service='library', stage='local', code='failed', reason='invalid_archive')
-                    if result['status'] == 'pending' and 'Nested container' in result.get('reason', ''):
-                        from library.bundles import receive_bundle
-                        from library.bundle_worker import POLICY
-                        origin.update(fingerprint=stamp, bundle_policy=POLICY,
-                                      bundle_engine_policy=digest({'bundle': POLICY, 'reader': READER_POLICY,
-                                                                   'decoder_readiness': readiness}),
-                                      bundle_attempts=1, bundle_next_attempt=time.time() + 300)
-                        receive_bundle(state, media_directory or store.directory, path, oid, origin,
-                            captured['items'][source], save=save, load_asset=load_asset,
-                            stable_seconds=stable_seconds, detached=media_directory is not None)
-                        continue
                     count = (int(previous.get('intake_attempts', 0)) + 1
                              if previous.get('fingerprint') == stamp and not policy_retry else 1)
                     origin.update(intake_attempts=count, intake_next_attempt=time.time() + (300 if count == 1 else 900))
