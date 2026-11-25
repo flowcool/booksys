@@ -84,8 +84,11 @@ Catalogue receipts also store the lookup method, version, index, work count
 and matched families. A pass via the prefix route or reduced threshold sets
 `work_result.identification_method` to `catalogue-unique-cover-v1` for
 targeted requeue. Metadata method v9 progressively reopens unresolved tasks.
-The reader child validates the first manifest member and both archive/member
-hashes. PDFs without an exemption remain in review until calibrated.
+For CBZ and CBR sources, the reader child checks the first manifest member
+and verifies the archive and member hashes. For PDF sources, it verifies
+the source hash and renders only page one in the same child. The receipt
+records the rendered page hash. The published copy still uses the CBZ
+conversion path.
 The child has resource limits. It has no new filesystem or network sandbox.
 Before rollback to a worker without this guard, pause metadata acceptance.
 Keep it paused until a guarded worker is restored. Deployment tooling is outside

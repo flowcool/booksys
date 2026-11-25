@@ -225,7 +225,7 @@ def inspect_archive(path: Path, suffix: str, *, sink: Callable[[str, bytes], Non
     return {'status': 'validated', 'format': suffix[1:], **output}
 
 
-from library.pdf_pages import inspect_pdf
+from library.pdf_pages import inspect_pdf, render_pdf_page
 
 
 def main() -> None:
@@ -278,22 +278,34 @@ def main() -> None:
                 from library.reader_inputs import sha256
                 request = json.loads(sys.stdin.buffer.read(2 * 1024**2))
                 expected = request['member']
-                if suffix == '.pdf':
-                    raise PendingFile('PDF cover comparison is not calibrated')
-                if (request['asset_sha256'] != file_hash.hexdigest()
-                        or request['reader_policy'] != READER_POLICY):
-                    raise PendingFile('Cover archive hash or policy drift')
+                if request['asset_sha256'] != file_hash.hexdigest():
+                    raise PendingFile('Cover source hash drift')
                 destination = work / 'first-page.img'
-                def first_member(name: str, data: bytes) -> None:
-                    if name == expected['name']:
-                        if hashlib.sha256(data).hexdigest() != expected['sha256']:
-                            raise PendingFile('Cover member hash drift')
-                        destination.write_bytes(data)
-                inspected = inspect_archive(path, suffix, sink=first_member)
-                if (inspected['status'] != 'validated' or not destination.is_file()
-                        or inspected['page_manifest'][0] != expected
-                        or sha256(path) != request['asset_sha256']):
-                    raise PendingFile('Cover first-page manifest or archive drift')
+                if suffix == '.pdf':
+                    if expected is not None:
+                        raise PendingFile('Unexpected archive member for PDF cover')
+                    inspect_pdf(path)
+                    data = render_pdf_page(path, 1)
+                    if not data or len(data) > MAX_MEMBER:
+                        raise PendingFile('PDF cover byte limit or empty output')
+                    expected = {'name': '000001.jpg', 'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)}
+                    destination.write_bytes(data)
+                else:
+                    if expected is None or request['reader_policy'] != READER_POLICY:
+                        raise PendingFile('Cover archive manifest unavailable or policy drift')
+
+                    def first_member(name: str, data: bytes) -> None:
+                        if name == expected['name']:
+                            if hashlib.sha256(data).hexdigest() != expected['sha256']:
+                                raise PendingFile('Cover member hash drift')
+                            destination.write_bytes(data)
+
+                    inspected = inspect_archive(path, suffix, sink=first_member)
+                    if (inspected['status'] != 'validated' or not destination.is_file()
+                            or inspected['page_manifest'][0] != expected):
+                        raise PendingFile('Cover first-page manifest drift')
+                if sha256(path) != request['asset_sha256']:
+                    raise PendingFile('Cover source changed during extraction')
                 output = {'status': 'extracted', 'member': expected}
             elif transform:
                 from library.xmlmetadata import validate_xml

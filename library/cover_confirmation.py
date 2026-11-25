@@ -280,17 +280,20 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
             or binding.get('album_url') != row.get('url')):
         review('canonical_cover_unavailable')
         return
+    pdf = asset.get('format') == 'pdf'
+    reader_policy = asset.get('reader_policy')
     receipt.update(reference_url=binding.get('cover_url'), reference_retrieved_at=None,
-                   order_policy=asset.get('reader_policy'))
+                   order_policy='pdf-first-page-render-150dpi-v1' if pdf else reader_policy)
     try:
         if source is None:
             review('archive_unavailable')
             return
         manifest = asset.get('page_manifest', [])
-        if not manifest:
+        if not pdf and not manifest:
             review('manifest_unavailable')
             return
-        receipt['member'] = manifest[0]
+        member = None if pdf else manifest[0]
+        receipt['member'] = member
         response = providers.get_binary(binding['cover_url'])
         receipt['reference_retrieved_at'] = response.get('retrieved_at')
         if response['status'] != 'ok':
@@ -301,7 +304,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         archive_path = source()  # Existing resolver rechecks source/parent hashes even on reuse.
         # Failures and passes within a fallback chain reuse only identical inputs.
         reuse_key = digest({'asset': asset['sha256'], 'evidence': {k: v for k, v in evidence.items()
-            if k != 'cover_confirmation'}, 'member': manifest[0], 'policy': asset.get('reader_policy'),
+            if k != 'cover_confirmation'}, 'member': member, 'policy': receipt['order_policy'],
             'binding': binding, 'reference': receipt['reference_sha256'], 'method': METHOD, 'threshold': THRESHOLD})
         cache = getattr(providers, '_cover_confirmations', None)
         if cache is None:
@@ -311,15 +314,17 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         else:
             with tempfile.TemporaryDirectory(dir=decode.WORK_ROOT) as directory:
                 extracted = decode.run('first_page', archive_path, {'asset_sha256': asset['sha256'],
-                    'reader_policy': asset.get('reader_policy'), 'member': manifest[0]}, destination=Path(directory))
-                if extracted.get('status') != 'extracted' or extracted.get('input_sha256') != asset['sha256']:
+                    'reader_policy': reader_policy, 'member': member}, destination=Path(directory))
+                member = extracted.get('member') if pdf else member
+                if (extracted.get('status') != 'extracted' or extracted.get('input_sha256') != asset['sha256']
+                        or not member):
                     review('extraction_unavailable')
                     return
                 original = (Path(directory) / 'first-page.img').read_bytes()
-                if hashlib.sha256(original).hexdigest() != manifest[0]['sha256']:
+                if len(original) != member['size'] or hashlib.sha256(original).hexdigest() != member['sha256']:
                     review('member_hash_drift')
                     return
-                compared = compare(original, reference)
+                compared = {**compare(original, reference), 'member': member}
             # A native failure can recover without restarting the metadata worker.
             cache[reuse_key] = {'receipt': compared,
                 'expires': time.time() + (7 * 86400 if compared['result'] == 'pass' else 300)}

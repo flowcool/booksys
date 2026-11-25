@@ -219,14 +219,51 @@ class CoverGuardTests(unittest.TestCase):
             self.assertEqual(fresh['status'], 'identified')
             self.assertEqual(fresh['evidence']['cover_confirmation']['score'], receipt['score'])
 
+    def test_pdf_without_manifest_confirms_the_first_page(self) -> None:
+        from types import SimpleNamespace
+        from library.readers import inspect_file
+        from library.work_enrichment import save_work_result
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(decode, 'WORK_ROOT', directory):
+            source = Path(directory) / 'series.pdf'
+            first, second = texture(), texture(999)
+            first.save(source, save_all=True, append_images=[second], dpi=(150, 150), quality=95)
+            inspection = inspect_file(source, stable_seconds=0)
+            self.assertEqual(inspection['status'], 'validated', inspection)
+            self.assertNotIn('page_manifest', inspection)
+
+            for reference, outcome in ((first, 'identified'), (second, 'review')):
+                with self.subTest(outcome=outcome):
+                    state, _, result = self.fixture()
+                    asset = state['assets']['a'*64]
+                    del asset['page_manifest']
+                    asset.update(inspection)
+                    result['evidence']['asset'] = asset['sha256']
+                    retry = copy.deepcopy(result)
+                    providers = SimpleNamespace(get_binary=lambda url: {
+                        'status': 'ok', 'body': encoded(reference)})
+                    save_work_result(asset, result, providers, lambda: source)
+                    self.assertEqual(result['status'], outcome, result)
+                    receipt = result['evidence']['cover_confirmation']
+                    self.assertEqual(receipt['member']['name'], '000001.jpg')
+                    self.assertEqual(receipt['member']['sha256'], receipt['input_sha256'])
+                    self.assertEqual(receipt['reason'],
+                                     'cover_agreement' if outcome == 'identified' else 'below_threshold')
+                    with patch.object(decode, 'run', side_effect=AssertionError('Must reuse')):
+                        save_work_result(asset, retry, providers, lambda: source)
+                    self.assertEqual(retry['evidence']['cover_confirmation'], receipt)
+
     def test_only_asset_title_or_explicit_same_role_creator_exempts(self):
         from library.work_enrichment import save_work_result
-        cases = [({'title': 'Informative Album'}, 'identified', 'asset_title'),
-                 ({'embedded': {'Writer': 'Jane Writer'}}, 'identified', 'asset_creator'),
-                 ({'embedded': {'Penciller': 'John Artist'}}, 'identified', 'asset_creator'),
-                 ({'embedded': {'Writer': 'John Artist'}}, 'review', 'creator_conflict'),
-                 ({'embedded': {'Writer': 'Other Writer'}}, 'review', 'creator_conflict'),
-                 ({'title': 'Series'}, 'no_match', None), ({}, 'review', 'archive_unavailable')]
+        cases: list[tuple[dict[str, object], str, str | None]] = [
+            ({'title': 'Informative Album'}, 'identified', 'asset_title'),
+            ({'embedded': {'Writer': 'Jane Writer'}}, 'identified', 'asset_creator'),
+            ({'embedded': {'Penciller': 'John Artist'}}, 'identified', 'asset_creator'),
+            ({'embedded': {'Writer': 'John Artist'}}, 'review', 'creator_conflict'),
+            ({'embedded': {'Writer': 'Other Writer'}}, 'review', 'creator_conflict'),
+            ({'title': 'Series'}, 'no_match', None),
+            ({}, 'review', 'archive_unavailable'),
+        ]
         for kwargs, status, reason in cases:
             with self.subTest(kwargs=kwargs):
                 state, row, result = self.fixture(**kwargs)
