@@ -8,6 +8,7 @@ from typing import Any
 
 
 from booksys_core.network_admission import BudgetWait
+from library.automatic import evidence_version
 from library.business_stages import BusinessStages
 from library.catalog import Catalog
 from library.metadata import Providers
@@ -124,12 +125,6 @@ class StageRuntime:
         closed = self.queue_gate(task.stage, stamp)
         if closed:
             return closed
-        try:
-            budget = self.business.providers.admission if task.stage == 'metadata' else None
-            if budget is not None and budget.next_due(timestamp=stamp.timestamp()) > stamp.timestamp():
-                return 'network_budget_wait'
-        except (CollectionError, OSError):
-            return 'network_authority_unavailable'
         if task.stage in ('metadata', 'copies'):
             from library.admission import eligible
             current = self.catalog.working_set('admit', {'assets': [task.entity]}, media=False)
@@ -137,11 +132,24 @@ class StageRuntime:
                 return 'inputs_changed'
             if not eligible(current, task.entity):
                 return 'domain_prerequisites'
+            from library.webtoons import webtoon_origins
+            webtoon = bool(webtoon_origins(current, task.entity))
+            if task.stage == 'metadata' and not webtoon:
+                try:
+                    budget = self.business.providers.admission
+                    if budget is not None and budget.next_due(timestamp=stamp.timestamp()) > stamp.timestamp():
+                        return 'network_budget_wait'
+                except (CollectionError, OSError):
+                    return 'network_authority_unavailable'
             if task.stage == 'copies':
                 if not any(current['origins'][oid].get('availability') == 'validated' and
                            current['origins'][oid].get('sha256') == task.entity for oid in current['assets'][task.entity]['origins']):
                     return 'intake_pending'
-                from library.admission import projection
-                if projection(current, task.entity)['signature'] != task.input_revision:
+                asset = current['assets'][task.entity]
+                if webtoon and (asset.get('stage_metadata', {}).get('evidence') != evidence_version(asset)
+                                or asset.get('work_result', {}).get('collection') != 'webtoon'):
+                    return 'inputs_changed'
+                from library.admission import current_projection
+                if current_projection(current, task.entity, self.catalog.directory)['signature'] != task.input_revision:
                     return 'inputs_changed'
         return self.native.ready(task, now=stamp) if task.stage not in ('metadata', 'copies') else ''

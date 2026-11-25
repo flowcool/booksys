@@ -366,6 +366,11 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
            references: list[tuple[str, str]], *, reception: Path | None = None) -> dict[str, Any]:
     state = store.result_set('identify', {'assets': [asset_id]})
     asset = state['assets'][asset_id]
+    from library.webtoons import webtoon_result
+    webtoon = webtoon_result(state, asset_id)
+    if webtoon is not None:
+        asset['work_result'] = webtoon
+        return state
     # Automatic cycles preserve accepted identities and their original evidence.
     # This also protects tasks already queued before a metadata method update.
     if not references and asset.get('work_result', {}).get('status') == 'identified':

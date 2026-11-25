@@ -12,10 +12,13 @@ import uuid
 
 import yaml
 
+from booksys_core.errors import ResultInputsChanged
+from library.mangaupdates import comicinfo_reference, read_references
 from library.primitives import ADMISSION_ROOTS, LibraryError, digest, now, sync_dir
 from library.publication import Publisher, private_tree, publication_lock, rename_atomic, verify
 from library.readers import sha256
 from library.transform import transform_archive
+from library.webtoons import series_key
 from library.xmlmetadata import work_comicinfo
 
 
@@ -35,15 +38,22 @@ def slug(value: Any) -> str:
     return text if text and text not in ('.', '..') else 'unknown'
 
 
-def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
+def projection(state: dict[str, Any], key: str, *,
+               references: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     asset = state['assets'][key]
     result = asset.get('work_result', {})
-    if result.get('status') == 'periodical':
+    status = result.get('status')
+    if status in ('periodical', 'webtoon'):
         fields = {field: result['work'][field] for field in ('series', 'number')}
-        signature = digest({'asset': key, 'periodical': fields})
-        leaf = 'issue--' + key + '--' + signature[:12]
-        target = str(Path(ADMISSION_ROOTS['periodical']) / slug(fields['series']) / slug(fields['number']) / leaf)
-        return {'status': 'periodical', 'signature': signature, 'target': target, 'fields': fields,
+        if status == 'webtoon' and references:
+            fields.update(comicinfo_reference(references.get(series_key(fields['series']), {})))
+        signature = digest({'asset': key, status: fields})
+        leaf = ('chapter--' if status == 'webtoon' else 'issue--') + key + '--' + signature[:12]
+        folder = slug(fields['series'])
+        if status == 'webtoon':
+            folder = folder.encode()[:240].decode(errors='ignore').rstrip(' .-')
+        target = str(Path(ADMISSION_ROOTS[status]) / folder / slug(fields['number']) / leaf)
+        return {'status': status, 'signature': signature, 'target': target, 'fields': fields,
                 'fiche_title': fields['series'] + ' ' + fields['number']}
     work = work_fields(state, key)
     fields = {**(work or {}), **asset.get('overrides', {})}
@@ -70,9 +80,14 @@ def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
             'fiche_title': str(work_title or series_fallback or 'À identifier')}
 
 
+def current_projection(state: dict[str, Any], key: str, directory: Path) -> dict[str, Any]:
+    webtoon = state['assets'][key].get('work_result', {}).get('status') == 'webtoon'
+    return projection(state, key, references=read_references(directory) if webtoon else None)
+
+
 def publication_comicinfo(asset: dict[str, Any], desired: dict[str, Any], key: str) -> bytes:
     fields = desired['fields']
-    if desired['status'] == 'periodical':
+    if desired['status'] in ('periodical', 'webtoon'):
         return work_comicinfo({}, fields)
     notes = 'Booksys; source_asset_sha256=' + key + '; admission=' + desired['status']
     old_notes = asset.get('embedded', {}).get('Notes', '')
@@ -192,7 +207,7 @@ class AdmissionPublisher(Publisher):
                 verify(self.target_path(current['target']), current['manifest'])
         return operations
 
-    def publish_asset(self, key: str) -> dict[str, Any]:
+    def publish_asset(self, key: str, *, expected_signature: str | None = None) -> dict[str, Any]:
         with publication_lock(self.store.directory, self.root):
             self.reconcile(locked=True, asset=key if self.local_recovery else None)
             if self.prepared:
@@ -201,7 +216,9 @@ class AdmissionPublisher(Publisher):
             if not eligible(state, key):
                 raise LibraryError('Asset is not eligible for work admission')
             asset = state['assets'][key]
-            desired = projection(state, key)
+            desired = current_projection(state, key, self.store.directory)
+            if expected_signature is not None and desired['signature'] != expected_signature:
+                raise ResultInputsChanged('Copy inputs changed after discovery')
             current = asset.get('admission')
             if current and current['signature'] == desired['signature']:
                 return self.load_operation(current['operation'])

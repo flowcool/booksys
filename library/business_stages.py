@@ -9,11 +9,13 @@ from typing import Any
 from library.admission import AdmissionPublisher, eligible, projection
 from library.automatic import evidence_version, WEEK, METHOD
 from library.catalog import Catalog
+from library.mangaupdates import read_references
 from library.metadata import Providers, enrich
 from library.primitives import LibraryError, digest
 from library.publication import Capacity
 from library.stage_model import Task, Obligation, StepResult, instant, METHODS
 from library.stage_tasks import StageTasks
+from library.webtoons import webtoon_origins
 
 
 class BusinessStages:
@@ -29,11 +31,14 @@ class BusinessStages:
             raise LibraryError('Independent stages require PostgreSQL authority')
         if keys is None:
             keys = [key for key, _ in backend.scan('assets', after=after, limit=limit)]
+        references = None
         for key in keys:
             state = self.catalog.working_set('identify', {'assets': [key]}, media=False)
             if key not in state['assets']:
                 continue
-            for obligation in self.obligations(state, key, now=now):
+            if references is None and state['assets'][key].get('work_result', {}).get('status') == 'webtoon':
+                references = read_references(self.catalog.directory)
+            for obligation in self.obligations(state, key, now=now, references=references):
                 prior = state['assets'][key].get('stage_metadata', {})
                 failures = prior.get('failed_dependencies', {})
                 if (obligation.stage == 'metadata' and prior.get('outcome') == 'retry' and failures
@@ -63,7 +68,8 @@ class BusinessStages:
         return count
 
     @staticmethod
-    def obligations(state: dict[str, Any], key: str, *, now: datetime) -> list[Obligation]:
+    def obligations(state: dict[str, Any], key: str, *, now: datetime,
+                    references: dict[str, dict[str, Any]] | None = None) -> list[Obligation]:
         """One domain policy for discovery and atomic completion successors."""
         asset = state['assets'][key]
         result: list[Obligation] = []
@@ -79,7 +85,12 @@ class BusinessStages:
             due = datetime.fromtimestamp(legacy.get('next_attempt', 0), timezone.utc)
             changed = False
         method_changed = prior.get('method', METHODS['metadata']) != METHODS['metadata']
-        if asset.get('work_result', {}).get('status') != 'identified' and (changed or due <= now or method_changed):
+        recorded = asset.get('work_result', {})
+        webtoon = bool(webtoon_origins(state, key))
+        webtoon_classified = recorded.get('collection') == 'webtoon'
+        metadata_due = (changed or not webtoon_classified) if webtoon else (
+            recorded.get('status') != 'identified' and (changed or due <= now or method_changed))
+        if metadata_due:
             if method_changed and not changed:
                 # A completed work item ignores a new due date for the same revision.
                 revision = digest({'evidence': evidence, 'evaluation': prior.get('evaluation', ''),
@@ -90,7 +101,9 @@ class BusinessStages:
                 revision = digest({'evidence': evidence, 'evaluation': prior.get('next_at', '')})
             result.append(Obligation('metadata', key, revision, METHODS['metadata'],
                 due_at=now if changed or method_changed else due))
-        desired = projection(state, key)
+        if webtoon and metadata_due:
+            return result
+        desired = projection(state, key, references=references)
         if asset.get('admission', {}).get('signature') != desired['signature']:
             result.append(Obligation('copies', key, desired['signature'], METHODS['copies']))
         return result
@@ -131,6 +144,9 @@ class BusinessStages:
             if outcome == 'done':
                 asset['stage_metadata']['next_at'] = instant(now + timedelta(seconds=WEEK))
             prepared = self.catalog.prepare(state)
+            references = (read_references(self.catalog.directory)
+                          if asset.get('work_result', {}).get('status') == 'webtoon' else None)
+            successors = self.obligations(state, task.entity, now=now, references=references)
             if outcome == 'defer':
                 client = self.providers.bdnex
                 due = client.cooldown_deadline() if cooldowns and client is not None else now
@@ -140,14 +156,14 @@ class BusinessStages:
                         timestamp = self.providers.admission.next_due()
                         if timestamp != float('inf'):
                             due = max(due, datetime.fromtimestamp(timestamp, timezone.utc))
-                return StepResult('defer', due_at=due, prepared=prepared, diagnostic=diagnostic, successors=self.obligations(state, task.entity, now=now))
-            return StepResult(outcome, prepared=prepared, diagnostic=diagnostic, successors=self.obligations(state, task.entity, now=now))
+                return StepResult('defer', due_at=due, prepared=prepared, diagnostic=diagnostic, successors=successors)
+            return StepResult(outcome, prepared=prepared, diagnostic=diagnostic, successors=successors)
         if task.stage == 'copies':
             from library.store import PreparedResult
             copy_results: list[PreparedResult]=[]
             writer = AdmissionPublisher(self.catalog, self.reception, self.library,
                 capacity=self.capacity, isolated=self.isolated, lab=not self.isolated, local_recovery=True,prepared=copy_results)
-            writer.publish_asset(task.entity)
+            writer.publish_asset(task.entity, expected_signature=task.input_revision)
             if len(copy_results)>1:
                 raise LibraryError('Copies prepared multiple terminal records; preserve journal')
             return StepResult('done',prepared=copy_results[0] if copy_results else None)

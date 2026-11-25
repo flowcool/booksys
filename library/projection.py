@@ -1,5 +1,6 @@
 """Rebuildable lightweight operator rows, updated with catalogue changes."""
 from __future__ import annotations
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from library.presentation import bounded, operator_reason
@@ -12,6 +13,27 @@ def digest(value: str) -> str:
     # Preserve the catalogue's canonical source reference rule.
     from library.primitives import digest as canonical
     return canonical(value)
+
+
+def collection_identity(result: dict[str, Any]) -> str:
+    if result.get('status') in ('periodical', 'webtoon'):
+        return str(result['status'])
+    return 'webtoon review' if result.get('collection') == 'webtoon' else ''
+
+
+def identification_counts(results: Iterable[dict[str, Any]]) -> dict[str, int]:
+    counts = dict(identified_assets=0, identification_attempted_assets=0, webtoon_assets=0, webtoon_review_assets=0)
+    for result in results:
+        collection = collection_identity(result)
+        if collection == 'webtoon':
+            counts['webtoon_assets'] += 1
+        elif collection == 'webtoon review':
+            counts['webtoon_review_assets'] += 1
+        elif not collection and result.get('status'):
+            counts['identification_attempted_assets'] += 1
+            if result['status'] == 'identified':
+                counts['identified_assets'] += 1
+    return counts
 
 
 def operator_row(oid: str, origin: dict[str, Any], asset: dict[str, Any],
@@ -37,10 +59,10 @@ def operator_row(oid: str, origin: dict[str, Any], asset: dict[str, Any],
     codes = sorted(printed_isbns(asset.get('printed', {}))[0])
     isbn = ', '.join(codes) or bounded(work.get('isbn') or asset.get('embedded', {}).get('ISBN'))
     admission = asset.get('admission', {})
-    publication = {'periodical': 'Périodiques', 'classified': 'classified',
+    publication = {'periodical': 'Périodiques', 'classified': 'classified', 'webtoon': 'webtoon',
                    'holding': 'À identifier'}.get(admission.get('status'), 'pending')
-    periodical = work_result.get('status') == 'periodical'
-    series = (work_result['work']['series'] if periodical else
+    collection = collection_identity(work_result)
+    series = (work_result['work']['series'] if collection in ('periodical', 'webtoon') else
               overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series'))
     row = {'id': oid, 'source_id': digest(origin['source']), 'title': bounded(title), 'author': bounded(overrides.get('author') or work.get('author')),
            'isbn': isbn, 'series': bounded(series),
@@ -49,7 +71,7 @@ def operator_row(oid: str, origin: dict[str, Any], asset: dict[str, Any],
            'retirement': bounded(origin.get('retirement', 'live')),
            'ocr': bounded(asset.get('printed', {}).get('status') or
                           (asset.get('printed_attempts') or [{}])[-1].get('status', 'not attempted')),
-           'identity': 'contested' if asset.get('contested') else 'periodical' if periodical else 'identified' if work else 'pending' if asset else 'not attempted',
+           'identity': 'contested' if asset.get('contested') else collection or ('identified' if work else 'pending' if asset else 'not attempted'),
            'publication': publication, 'reason': operator_reason(reason),
            'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
            'fiche': '/fiche/' + oid}

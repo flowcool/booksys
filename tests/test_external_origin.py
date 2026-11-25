@@ -73,8 +73,7 @@ class ExternalOriginTests(unittest.TestCase):
             self.assertEqual({item.stage for item in obligations}, {'metadata', 'copies'})
 
     def telegram_entry(self, originals: Path, channel: int, message: int, topic: int | None,
-                       *, caption: str | None = None) -> dict[str, Any]:
-        name = "L’Album.cbz"
+                       *, caption: str | None = None, name: str = 'L’Album.cbz') -> dict[str, Any]:
         document = {'id': message, 'file': name}
         if caption is not None:
             document['text'] = caption
@@ -83,8 +82,12 @@ class ExternalOriginTests(unittest.TestCase):
         relative = Path('booksys/telegram')/f'{channel}_{message}'/name
         path = originals/relative
         path.parent.mkdir(parents=True)
-        with zipfile.ZipFile(path, 'w') as archive:
-            archive.writestr(zipfile.ZipInfo('001.png'), image_bytes())
+        if path.suffix == '.pdf':
+            from PIL import Image
+            Image.new('RGB', (100, 100), 'white').save(path)
+        else:
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr(zipfile.ZipInfo('001.png'), image_bytes())
         data = path.read_bytes()
         return {'receipt': {'id': channel, 'messages': [document]}, 'topic': topic,
                 'path': str(relative), 'completed': True, 'size': len(data),
@@ -96,7 +99,7 @@ class ExternalOriginTests(unittest.TestCase):
         manifest = root/'telegram.jsonl'
         manifest.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
         args = [str(manifest), '--state-dir', str(root/'state'), '--scope', '101',
-                '--scope', '202:17']
+                '--scope', '202:17', '--scope', '1288796629']
         if dry_run:
             args.append('--dry-run')
         output = StringIO()
@@ -186,6 +189,85 @@ class ExternalOriginTests(unittest.TestCase):
                 self.assertEqual(actor.step(now=attempt + timedelta(minutes=22)), 'done')
                 self.assertEqual(catalog.read()['origins'][pending['origin']]['sha256'], aid)
                 scan.assert_not_called()
+
+    def test_telegram_cli_accepts_webtoonsvf_index_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            originals = root/'originals'
+            row = self.telegram_entry(originals, 1288796629, 12, None)
+            row['index_title'] = '  Série  de test ! '
+            with patch('library.intake.EXTERNAL_ROOT', originals):
+                [result] = self.submit_telegram(root, row, dry_run=True)
+                self.assertEqual(result['index_title'], row['index_title'])
+                with self.assertRaises(SystemExit), redirect_stderr(StringIO()) as refusal:
+                    self.submit_telegram(root, {**row, 'index_title': 'Invalid\0Title'}, dry_run=True)
+                self.assertIn('index title', refusal.getvalue())
+
+    def test_webtoon_pdf_publishes_and_a_series_decision_refreshes_the_cbz(self) -> None:
+        from xml.etree import ElementTree
+
+        from library.api import PublicAPI
+        from library.mangaupdates import lookup, STATE_FILE
+        from library.stage_runtime import StageRuntime
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            originals = root/'originals'
+            row = self.telegram_entry(originals, 1288796629, 12, None, name='Sample Chapter Chapitre 07.pdf')
+            row['index_title'] = 'Sample Series'
+            catalog = create_catalog(self, root/'state')
+            providers = MagicMock(events=[])
+            providers.admission.next_due.side_effect = AssertionError('Unexpected provider budget read')
+            providers.bdnex.match.side_effect = AssertionError('Unexpected BDneX request')
+            runtime = StageRuntime(root, root/'downloads', root/'collector', providers=providers,
+                                   client=None, browser=None, isolated=True)
+            (root/'work').mkdir()
+            with patch('library.intake.EXTERNAL_ROOT', originals), \
+                 patch('library.decode.WORK_ROOT', str(root/'work')), \
+                 patch('library.stage_runtime.require_nas'), \
+                 patch.dict('os.environ', {'BOOKSYS_WORK_STAGES': 'intake,metadata,copies'}):
+                [result] = self.submit_telegram(root, row)
+                self.assertEqual(result['status'], 'submitted')
+                self.assertEqual(catalog.get('origins', result['origin'])['telegram']['index_title'], 'Sample Series')
+                intake, metadata, copies = (runtime.actor(stage) for stage in ('intake', 'metadata', 'copies'))
+                for actor in (intake, metadata, copies):
+                    self.addCleanup(actor.work.close)
+                stamp = datetime.now(timezone.utc)
+                self.assertEqual(intake.step(now=stamp), 'done')
+                self.assertEqual(runtime.discover_business(now=stamp), 1)
+                self.assertEqual(metadata.step(now=stamp), 'done')
+                self.assertEqual(copies.step(now=stamp), 'done')
+                key = row['sha256']
+                first = catalog.get('assets', key)['admission']
+                self.assertTrue(first['target'].startswith('webtoon/Sample Series/7/'))
+                original_copy = root/'library'/first['target']/'book.cbz'
+                with zipfile.ZipFile(original_copy) as archive:
+                    self.assertIsNone(ElementTree.fromstring(archive.read('ComicInfo.xml')).find('Writer'))
+
+                record = {'series_id': 42, 'title': 'Original Series', 'type': 'Manhwa',
+                          'url': 'https://www.mangaupdates.com/series/abc/original-series',
+                          'associated': [{'title': 'Sample Series'}],
+                          'authors': [{'name': 'Sample Writer', 'type': 'Author'}]}
+                lookup(root/'state', ['Sample Series'], request=lambda *_: {'results': [{'record': record}]})
+                self.assertTrue((root/'state'/STATE_FILE).is_file())
+                self.assertEqual(runtime.business.discover(runtime.tasks, now=stamp, keys=[key]), 1)
+                self.assertEqual(copies.step(now=stamp), 'done')
+                second = catalog.get('assets', key)['admission']
+                self.assertNotEqual(second['signature'], first['signature'])
+                self.assertFalse(original_copy.exists())
+                with zipfile.ZipFile(root/'library'/second['target']/'book.cbz') as archive:
+                    xml = ElementTree.fromstring(archive.read('ComicInfo.xml'))
+                    self.assertEqual(xml.findtext('Series'), 'Sample Series')
+                    self.assertEqual(xml.findtext('AlternateSeries'), 'Original Series')
+                    self.assertEqual(xml.findtext('Writer'), 'Sample Writer')
+                self.assertEqual(hashlib.sha256((originals/row['path']).read_bytes()).hexdigest(), key)
+
+                api = PublicAPI(root, host='localhost', reception=root/'downloads')
+                status = api.invoke('status', {'host': 'localhost', 'origin': '', 'token': '', 'payload': {}})
+                self.assertEqual(status['counts']['webtoon_assets'], 1)
+                self.assertEqual(status['counts']['webtoon_copies'], 1)
+                self.assertEqual(status['counts']['identification_attempted_assets'], 0)
+                providers.bdnex.match.assert_not_called()
 
     def test_telegram_cli_refuses_unbound_or_unfinished_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
