@@ -12,7 +12,7 @@ from booksys_core.errors import ResultInputsChanged
 from library import intake
 from library.bundle_worker import MAX_SOURCE
 from library.catalog import Catalog
-from library.primitives import LibraryError, digest, telegram_origin_folder, telegram_origin_id
+from library.primitives import LibraryError, digest, telegram_origin_folder, telegram_origin_id, valid_telegram_index_title
 from library.readers import READER_POLICY, fingerprint, sha256
 from library.stage_model import METHODS, Obligation
 
@@ -87,6 +87,11 @@ def _origin(entry: Any, scopes: set[tuple[int, int | None]]) -> tuple[str, dict[
         raise LibraryError('Telegram file SHA-256 differs from the completed receipt or the file changed')
     provenance = {'channel': channel, 'message': message, 'topic': topic, 'original_name': original_name,
                   'sha256': checksum, 'receipt_sha256': digest(receipt), 'caption': caption}
+    if 'index_title' in entry:
+        index_title = entry['index_title']
+        if not valid_telegram_index_title(index_title):
+            raise LibraryError('Invalid Telegram index title')
+        provenance['index_title'] = index_title
     return telegram_origin_id(channel, message), {'source': 'external:' + relative, 'pid': None, 'fid': None,
         'path': relative, 'size': size, 'sha256': None, 'availability': 'pending', 'telegram': provenance}
 
@@ -149,6 +154,8 @@ def main(argv: list[str] | None = None) -> None:
         for oid, (line_number, origin) in entries.items():
             status = 'would-submit' if catalog is None else _submit(catalog, oid, origin, at=datetime.now(timezone.utc))
             report = {key: origin['telegram'][key] for key in ('channel', 'message', 'topic', 'sha256')}
+            if 'index_title' in origin['telegram']:
+                report['index_title'] = origin['telegram']['index_title']
             print(json.dumps({**report, 'origin': oid, 'path': origin['path'], 'size': origin['size'], 'status': status}))
     except (LibraryError, ValueError, OSError, RecursionError) as exc:
         parser.exit(1, f'Telegram manifest line {line_number}: {exc}\n')

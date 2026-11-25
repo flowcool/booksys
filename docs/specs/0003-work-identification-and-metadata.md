@@ -85,7 +85,25 @@ The running implementation is not evidence that this accepted change is delivere
     `Number` from file evidence. Two titles or two issue numbers keep the asset in
     review. Removal of a title from the list returns its assets to the normal
     identification queue. A later periodical source needs a new decision.
-13. Dated series (operator decision, 23 November 2026). A Bedetheque series label
+13. WEBTOONSVF chapters (operator decision, 25 November 2026). Apply this rule
+    only when all origins of an asset are documents from Telegram channel
+    `1288796629`. Use the `WEBTOONS_LISTS` index title from the manifest for
+    `Series`. Keep its display form after normalizing Unicode and spaces.
+    Read one chapter number from `Chapitre <number>` or a trailing number in
+    the original filename. Use `webtoon` when the origins agree on both fields.
+    Send missing or conflicting fields to review. Do not guess the series from
+    the filename or use BDneX. Report these chapters and their reviews apart
+    from the identification yield. Publish grouped chapters in CBZ under
+    `webtoon/<series>/<chapter>/`.
+    Booksys searches MangaUpdates once per normalized index title. Accept one
+    exact Manhwa title or associated title in the returned results. Ignore
+    case, accents and punctuation in this comparison. If there is no unique
+    match, keep the top candidates for operator review. Store the series
+    reference in keyed YAML. The operator can accept or reject a candidate.
+    An accepted reference adds `AlternateSeries`, `Web`, `Manga` and available
+    `Writer` and `Penciller` credits. The series reference does not establish
+    an album, edition or chapter identity.
+14. Dated series (operator decision, 23 November 2026). A Bedetheque series label
     can hold a year, for example "Ajax 1e Série SFPI 1964". The file has no year. In
     the whole numbered index, only this dated series matches the file series and
     issue number. Then this one album may be read as a proposal. Identity requires
@@ -93,7 +111,7 @@ The running implementation is not evidence that this accepted change is delivere
     exemptions do not apply to this case. A file year that differs from the series
     year keeps the asset in review. Two or more dated series with this issue number
     also keep it in review.
-14. Accept a finished ZIP or RAR download with the pages of one volume. Use
+15. Accept a finished ZIP or RAR download with the pages of one volume. Use
     the CBZ or CBR reader for the corresponding format. It checks page integrity
     and records the natural page order. It accepts JPEG, PNG, WebP and GIF pages
     and standard ancillary files. These include `ComicInfo.xml`, small `.txt`
@@ -122,7 +140,7 @@ ComicInfo version. Komga's future import behaviour must be tested separately.
 
 An automatic Bedetheque identification with series and number alone requires
 cover confirmation. A generic candidate title supplies no title proof. A series
-year absent from the file also requires cover confirmation, as decision 13 states.
+year absent from the file also requires cover confirmation, as decision 14 states.
 Pass a cover score of 40 or higher. Pass a score from 20 up to 40 only if the
 proposed album is the sole work with that number in the full BDneX index across
 families whose normalized names equal the label series or start with it at a
@@ -203,6 +221,7 @@ backup or production preparation is required for this lab.
 ## References
 
 - [Decision](../adr/0003-work-identification-before-edition.md)
+- [Webtoon collection decision](../adr/0004-webtoon-collection.md)
 - Tasks
 - [Reuse research](../research/2026-11-08-french-comic-metadata-reuse.md)
 - [Earlier library specification](0001-portable-comic-library.md)

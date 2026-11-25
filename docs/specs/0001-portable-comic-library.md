@@ -23,6 +23,9 @@ Do not repeat an uncertain downloader or file operation without reconciliation.
 Keep credentials and operational evidence outside Git.
 
 Organize classified copies by family, series and issue when supported.
+Publish WEBTOONSVF chapters separately under `webtoon/<series>/<chapter>/`.
+Each file version keeps its own managed directory with `book.cbz` and `fiche.md`.
+Use the Telegram index title and filename chapter from rule 13 of spec 0003.
 Keep missing metadata explicit. Preserve original files during later enrichment.
 Komga deployment and synchronization remain outside this scope.
 

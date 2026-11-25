@@ -28,7 +28,8 @@ def validate_xml(data: bytes) -> None:
 
 WORK_XML_FIELDS = {'title': 'Title', 'series': 'Series', 'number': 'Number',
     'summary': 'Summary', 'notes': 'Notes', 'author': 'Writer', 'publisher': 'Publisher',
-    'genres': 'Genre', 'url': 'Web', 'language': 'LanguageISO', 'age_rating': 'AgeRating'}
+    'genres': 'Genre', 'url': 'Web', 'language': 'LanguageISO', 'age_rating': 'AgeRating',
+    'alternate_series': 'AlternateSeries', 'manga': 'Manga'}
 
 
 def work_comicinfo(asset: dict[str, Any], work: dict[str, Any]) -> bytes:

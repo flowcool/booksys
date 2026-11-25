@@ -84,7 +84,7 @@ def lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
 
 
 TABLES = ('assets', 'origins')
-ADMISSION_ROOTS = {'holding': 'holding', 'classified': 'classified', 'periodical': 'Périodiques'}
+ADMISSION_ROOTS = {'holding': 'holding', 'classified': 'classified', 'periodical': 'Périodiques', 'webtoon': 'webtoon'}
 
 
 def empty() -> dict[str, Any]:
@@ -97,6 +97,11 @@ def telegram_origin_id(channel: int, message: int) -> str:
 
 def telegram_origin_folder(channel: int, message: int) -> Path:
     return Path('booksys/telegram') / f'{channel}_{message}'
+
+
+def valid_telegram_index_title(value: Any) -> bool:
+    return (isinstance(value, str) and not re.search(r'[\x00-\x1f\x7f-\x9f\ud800-\udfff\ufffe\uffff]', value)
+            and len(value.encode('utf-8')) <= 1024)
 
 
 def validate(state: Any) -> None:
@@ -153,6 +158,7 @@ def validate(state: Any) -> None:
                     or not isinstance(origin['path'], str) or type(origin.get('size')) is not int
                     or origin['size'] <= 0 or not isinstance(telegram.get('caption'), str)
                     or not isinstance(telegram.get('original_name'), str)
+                    or not valid_telegram_index_title(telegram.get('index_title', ''))
                     or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum)
                     or origin['sha256'] not in (None, checksum)):
                 raise LibraryError('Invalid Telegram origin provenance')
