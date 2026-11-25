@@ -31,6 +31,12 @@ the same number and title. R3 can route a prefix match to cover if exactly one
 matched family has that number. Map `Série N` label markers to the catalogue
 ordinal and allow an unmarked first series.
 
+Both catalogue routes require a shared informative title word when the label
+includes an informative title after its issue marker. Years, digits and
+punctuation supply no title words. A different album with the same number and
+a title that covers the label title blocks both routes. Check the returned
+candidates and the catalogue lookup for such an album.
+
 A recorded score below 10 for the same asset and album blocks identification.
 Keep number and disjoint label title rejections. Keep periodical and dated-series
 rules. Preserve accepted work in later cycles. Store the mode and matched words

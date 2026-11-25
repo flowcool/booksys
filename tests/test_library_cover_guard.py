@@ -68,6 +68,24 @@ class CoverGuardTests(unittest.TestCase):
                     self.assertIsNone(method)
                     self.assertEqual(receipt['threshold'], 40)
 
+    def test_reduced_threshold_requires_an_informative_title_match(self):
+        from library.cover_confirmation import apply_cover_threshold
+        from test_candidate_concordance import candidate, evidence, family_result
+
+        for issue, title, dated_title, ref in (
+            ('17', 'Noël blanc', '1983-1984', '283721'),
+            ('26', 'Snoopy se fait mousser', '1950-2000', '455221'),
+        ):
+            with self.subTest(issue=issue):
+                row = candidate('Snoopy les Peanuts', issue, dated_title, ref)
+                receipt: dict[str, Any] = {'score': 25, 'threshold': 40, 'result': 'review',
+                                           'reason': 'below_threshold'}
+                method = apply_cover_threshold(receipt, evidence(f'Snoopy T{issue} - {title}'), row,
+                                               lambda series, number: family_result(row))
+                self.assertIsNone(method)
+                self.assertEqual(receipt['result'], 'review')
+                self.assertEqual(receipt['threshold'], 40)
+
     def test_prefix_cover_pass_records_requeue_method_after_finalization(self):
         from types import SimpleNamespace
         from library.work_enrichment import save_work_result

@@ -39,6 +39,11 @@ one family whose normalized name equals or starts with the label series at a
 word boundary carries that number. `(Série N)`, `Série N` and `- Série N -`
 narrow the lookup to the catalogue ordinal `1re serie` or `Ne serie`. An
 unmarked family can represent the first series.
+If a label has an informative title after the issue marker, the selected album
+must share at least one informative title word. Years, digits and punctuation
+supply no title words. R3 records ambiguity if a different album with the same
+number covers the label title, among the returned candidates or in the lookup.
+If exact evidence supplies no match, the ambiguous case stays in review.
 
 A generic candidate title or an unsupported series year supplies
 no direct title exemption. Periodical and dated-series rules stay unchanged.
@@ -76,6 +81,7 @@ Cover confirmation uses `bdnex-9de29a73-sift-height600-ratio06-v1`. A score of
 40 or more passes. A score from 20 up to 40 passes only if the selected album
 is the sole work with the label number across all matched families in the
 full index. Editions with the same number and title count as one work.
+The reduced threshold also requires the title checks used by the prefix route.
 The comparison preserves the upstream 600-pixel height and ratio
 0.6. The proposed 1024-pixel long-edge variant changed the retained-lot yield
 from 20/31 to 12/31, so it is not used. Covers never choose another reference.

@@ -1,6 +1,7 @@
 """Candidate words against asset labels. No provider calls or score ranking."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from functools import cache
@@ -84,14 +85,15 @@ def label_issue(label: str) -> tuple[str, str, set[str]] | None:
 
 
 def catalogue_family_for(evidence: dict[str, Any], row: dict[str, Any], lookup: FamilyLookup, *,
-                         prefix: bool = False) -> dict[str, Any] | None:
-    """Bind the full-index family lookup to a proposed album and its file label."""
+                         candidates: Sequence[dict[str, Any]] = (),
+                         prefix: bool = False) -> tuple[dict[str, Any] | None, bool]:
+    """Return catalogue proof and whether a different album covers the label title."""
     if evidence.get('asset_bound') is not True or row.get('source') != 'bedetheque':
-        return None
+        return None, False
     ref = bedetheque_album_id(row.get('url'))
     issue = number(row.get('number'))
     if ref is None or ref != row.get('edition_ref') or issue is None:
-        return None
+        return None, False
     series = str(row.get('series') or '')
     labels = asset_labels(evidence)
     claims = [claim for label in labels if (claim := label_issue(label)) is not None]
@@ -103,19 +105,26 @@ def catalogue_family_for(evidence: dict[str, Any], row: dict[str, Any], lookup: 
     if embedded_issue := number(embedded.get('Number')):
         claims_numbers.add(embedded_issue)
     if claims_numbers != {issue}:
-        return None
+        return None, False
     if prefix:
         years = file_years(evidence)
         if embedded.get('Year'):
             years.add(str(embedded['Year']))
         dates = set(re.findall(r'\b(?:18|19|20)\d{2}\b', normalize(series)))
         if years and dates and dates != years:
-            return None
-        sw, tw = words(series), words(row.get('title'))
-        titles = [title for _, _, title in claims if title]
-        if (tw - sw and any(not title & tw for title in titles if title - (sw | tw))
-                and not any(title <= sw | tw for title in titles)):
-            return None
+            return None, False
+    titles = [title for _, _, title in claims if title]
+    candidate_title = words(row.get('title')) - JUNK
+    title_agrees = all(title & candidate_title for title in titles)
+
+    def competes(album_id: str | None, album_number: Any, title: Any) -> bool:
+        return (bool(titles) and album_id is not None and album_id != ref and number(album_number) == issue
+                and any(label_title <= words(title) for label_title in titles))
+
+    competing = any(competes(other.get('edition_ref'), other.get('number'), other.get('title'))
+                    for other in candidates if other.get('source') == 'bedetheque')
+    proof = None
+    found_album = False
     for query in dict.fromkeys(query for query, _, _ in claims):
         if not family_matches(query, series) or prefix and query == normalized(series, 'series'):
             continue
@@ -123,16 +132,24 @@ def catalogue_family_for(evidence: dict[str, Any], row: dict[str, Any], lookup: 
         if response is None:
             continue
         albums = response['albums']
+        competing = competing or any(competes(album['album_id'], album['number'], album['title']) for album in albums)
         if not any(album['album_id'] == ref and album['number'] == issue for album in albums):
+            continue
+        found_album = True
+        if competing:
+            return None, True
+        if not title_agrees or proof is not None:
             continue
         families = sorted({str(normalized(album['series'], 'series')) for album in albums})
         # The issue number is common to the response. Absent titles cannot prove edition equivalence.
         works = {title if (title := normalized(album['title'])) else ('untitled', album['album_id'])
                  for album in albums}
         if (prefix and len(families) == 1) or (not prefix and len(works) == 1):
-            return {'method': FAMILY_METHOD, 'version': FAMILY_SCHEMA, 'index': response['index'],
-                    'family_size': len(works), 'matched_families': families, 'series': query, 'number': issue}
-    return None
+            proof = {'method': FAMILY_METHOD, 'version': FAMILY_SCHEMA, 'index': response['index'],
+                     'family_size': len(works), 'matched_families': families, 'series': query, 'number': issue}
+            if not titles:
+                break
+    return (None, True) if found_album and competing else (proof, False)
 
 
 @dataclass
@@ -144,6 +161,7 @@ class Decision:
     matched_words: list[str] = field(default_factory=list)
     editions: list[dict[str, Any]] = field(default_factory=list)
     catalogue_family: dict[str, Any] | None = None
+    competing_catalogue_title: bool = False
 
     def receipt(self) -> dict[str, Any]:
         result = {'method': METHOD, 'mode': self.mode, 'needs_cover': self.needs_cover,
@@ -258,7 +276,10 @@ def decide(evidence: dict[str, Any], candidates: list[dict[str, Any]], *,
     if not matches and family_lookup is not None:
         lookup = cache(family_lookup)
         for row in candidates:
-            proof = catalogue_family_for(evidence, row, lookup, prefix=True)
+            proof, competing = catalogue_family_for(evidence, row, lookup, candidates=candidates, prefix=True)
+            if competing:
+                return Decision(mode='ambiguous', reason='Another album covers the asset label title and number',
+                                competing_catalogue_title=True)
             if proof is not None:
                 family_proofs[row['edition_ref']] = proof
                 matches.append((row, CATALOGUE_PREFIX_MODE, words(row.get('series')) & tokens))

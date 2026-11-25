@@ -32,6 +32,11 @@ The running implementation is not evidence that this accepted change is delivere
    route its album to cover confirmation. Map label markers `(Série N)`,
    `Série N` and `- Série N -` to the catalogue ordinal `1re serie` or
    `Ne serie`. An unmarked catalogue family can represent the first series.
+   When the label has an informative title after its issue marker, require a
+   shared informative title word. Years, digits and punctuation do not count.
+   Record ambiguity when another album with the same number covers the label
+   title in the returned candidates or in the catalogue lookup.
+   Keep the case in review if exact evidence supplies no match.
    If R3 finds no candidate, finds several works, or has an
    incomplete candidate set, apply the existing exact concordance rules.
    Accept one work when exact evidence proves it. Keep the exact proof and
@@ -113,6 +118,7 @@ Pass a cover score of 40 or higher. Pass a score from 20 up to 40 only if the
 proposed album is the sole work with that number in the full BDneX index across
 families whose normalized names equal the label series or start with it at a
 word boundary. Count editions with the same number and title as one work.
+Apply the same title checks as for the prefix route before using threshold 20.
 Use threshold 40 when the family lookup is unavailable. A recorded cover score
 below 10 for this asset and album blocks identification, including a title or
 Web exemption. Apply R3 before parsed-field

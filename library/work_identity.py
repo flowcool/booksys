@@ -159,6 +159,8 @@ def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]], *,
                 result['work'][field] = deepcopy(values[0])
         return result
     result = _evaluate_exact_work(evidence, candidates)
+    if decision.competing_catalogue_title and result['status'] == 'no_match':
+        result.update(status='review', reason=decision.reason)
     result['candidate_concordance'] = decision.receipt()
     return result
 

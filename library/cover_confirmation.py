@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from library import decode
@@ -30,15 +30,17 @@ CATALOGUE_IDENTIFICATION_METHOD = 'catalogue-unique-cover-v1'
 
 def apply_cover_threshold(receipt: dict[str, Any], evidence: dict[str, Any], row: dict[str, Any],
                           lookup: FamilyLookup | None, *,
-                          prefix_proof: dict[str, Any] | None = None) -> str | None:
+                          prefix_proof: dict[str, Any] | None = None,
+                          candidates: Sequence[dict[str, Any]] = ()) -> str | None:
     """Apply catalogue evidence to a cover comparison for the selected album."""
     if prefix_proof is not None:
         receipt['catalogue_family'] = prefix_proof
     score = receipt.get('score')
     if (receipt['reason'] == 'below_threshold' and isinstance(score, (float, int))
             and CATALOGUE_UNIQUE_THRESHOLD <= score < THRESHOLD):
-        proof = prefix_proof if prefix_proof and prefix_proof['family_size'] == 1 else (
-            catalogue_family_for(evidence, row, lookup) if lookup else None)
+        proof = prefix_proof if prefix_proof and prefix_proof['family_size'] == 1 else None
+        if proof is None and lookup is not None:
+            proof, _ = catalogue_family_for(evidence, row, lookup, candidates=candidates)
         if proof is not None:
             receipt.update(result='pass', reason='cover_agreement', threshold=CATALOGUE_UNIQUE_THRESHOLD,
                            catalogue_family=proof)
@@ -329,7 +331,8 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
             cache[reuse_key] = {'receipt': compared,
                 'expires': time.time() + (7 * 86400 if compared['result'] == 'pass' else 300)}
             receipt.update(compared)
-        method = apply_cover_threshold(receipt, evidence, row, lookup, prefix_proof=prefix_proof)
+        method = apply_cover_threshold(receipt, evidence, row, lookup, prefix_proof=prefix_proof,
+                                       candidates=result.get('candidates', rows))
         if receipt['result'] != 'pass':
             review(receipt['reason'])
         else:
