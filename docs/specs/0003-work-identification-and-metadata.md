@@ -27,7 +27,12 @@ The running implementation is not evidence that this accepted change is delivere
    can prove an informative title of at least two words and its number.
    Parsed filename, OCR and captured fields can support a candidate. They cannot
    veto a candidate that meets these rules. Edition variants of one work can
-   share a decision. If R3 finds no candidate, finds several works, or has an
+   share a decision. When R3 finds no candidate, a label series that is a
+   whole-word prefix of exactly one catalogue family with the issue number may
+   route its album to cover confirmation. Map label markers `(Série N)`,
+   `Série N` and `- Série N -` to the catalogue ordinal `1re serie` or
+   `Ne serie`. An unmarked catalogue family can represent the first series.
+   If R3 finds no candidate, finds several works, or has an
    incomplete candidate set, apply the existing exact concordance rules.
    Accept one work when exact evidence proves it. Keep the exact proof and
    the R3 receipt. Never choose by score.
@@ -104,14 +109,22 @@ ComicInfo version. Komga's future import behaviour must be tested separately.
 An automatic Bedetheque identification with series and number alone requires
 cover confirmation. A generic candidate title supplies no title proof. A series
 year absent from the file also requires cover confirmation, as decision 13 states.
-Keep threshold 40. A recorded cover score below 10 for this asset and album blocks
-identification, including a title or Web exemption. Apply R3 before parsed-field
+Pass a cover score of 40 or higher. Pass a score from 20 up to 40 only if the
+proposed album is the sole work with that number in the full BDneX index across
+families whose normalized names equal the label series or start with it at a
+word boundary. Count editions with the same number and title as one work.
+Use threshold 40 when the family lookup is unavailable. A recorded cover score
+below 10 for this asset and album blocks identification, including a title or
+Web exemption. Apply R3 before parsed-field
 conflicts and service score decisions in all enrichment and discovery paths.
 If exact concordance identifies a work, use its existing title, `Web`, creator
 and cover checks. An R3 abstention grants no cover exemption.
 Compare the first validated page with the selected album cover. Covers cannot
 select or rank candidates or establish an edition. Record both image digests,
-method, threshold and result. A missing or failed cover check leaves the proposal
+method, threshold and result. For a catalogue decision, also record the lookup
+method and version, matched families and number of works. Mark identifications
+made through the prefix route or reduced threshold for targeted requeue.
+A missing or failed cover check leaves the proposal
 in review. Keep the existing cache, robots policy, request budget and sequential
 pacing. Do not search alternate covers.
 

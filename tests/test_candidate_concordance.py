@@ -16,6 +16,43 @@ def candidate(series='Sky Patrol', number='3', title='The Silent Island', ref='1
 
 
 class CandidateConcordanceTests(unittest.TestCase):
+    def test_catalogue_prefix_requires_one_family_and_respects_the_series_marker(self):
+        row = candidate(series='Sky Patrol 2e serie Publisher')
+        second = candidate(series='Sky Patrol Original Press', title='The Last Gate', ref='456')
+        calls = []
+
+        def lookup(series, issue):
+            calls.append((series, issue))
+            albums = [row] if 'serie 2' in series else [row, second]
+            return {'index': 'a' * 64, 'albums': [
+                {'album_id': r['edition_ref'], **{key: r[key] for key in ('series', 'number', 'title')}}
+                for r in albums]}
+
+        for label in ('Sky Patrol (Série 2) - Tome 3', 'Sky Patrol Série 2 T3', 'Sky Patrol - Série 2 - Tome 3'):
+            with self.subTest(label=label):
+                asset = evidence(label)
+                self.assertEqual(decide(asset, [row]).mode, 'none')
+                result = decide(asset, [row], family_lookup=lookup)
+                self.assertEqual(result.mode, 'catalogue_prefix:cover')
+                self.assertTrue(result.needs_cover)
+                assert result.candidate is not None
+                self.assertEqual(result.candidate['edition_ref'], '123')
+                self.assertEqual(calls[-1], ('sky patrol serie 2', '3'))
+        self.assertEqual(decide(evidence('Sky Patrol T3'), [row], family_lookup=lookup).mode, 'none')
+        self.assertEqual(decide(evidence('Sky Patrol Série 2 T3 - Unrelated Caption'), [row],
+                                family_lookup=lookup).mode, 'none')
+        self.assertEqual(decide(evidence('Sky Patrol Série 2 T3', embedded={'Number': '4'}), [row],
+                                family_lookup=lookup).mode, 'none')
+
+        first = candidate(series='Sky Patrol Original Press', ref='456')
+        def unmarked_first(series, issue):
+            return {'index': 'a' * 64, 'albums': [{'album_id': '456', 'series': first['series'],
+                    'number': issue, 'title': first['title']}]}
+        self.assertEqual(decide(evidence('Sky Patrol (Série 1) - Tome 3'), [first],
+                                family_lookup=unmarked_first).mode, 'catalogue_prefix:cover')
+        self.assertEqual(decide(evidence('Sky Patrol (Série 2) - Tome 3'), [first],
+                                family_lookup=unmarked_first).mode, 'none')
+
     def test_complete_label_words_identify_despite_parsed_field_noise(self):
         asset = evidence('zzSky Patrol - tome 03 : The Silent Island @source [Digital]')
         asset.update(title='Scanner Name', identity_conflicts={'title': ['noise']})

@@ -13,8 +13,9 @@ from typing import Any
 
 from library import decode
 from library.asset_evidence import file_years
-from library.bdnex_protocol import bedetheque_album_id
-from library.candidate_concordance import decide
+from library.bdnex import family_lookup_for
+from library.bdnex_protocol import FamilyLookup, bedetheque_album_id
+from library.candidate_concordance import catalogue_family_for, decide
 from library.cover_sift import METHOD, THRESHOLD, FUNCTION_VERSION, PREPROCESSING
 from library.primitives import LibraryError, digest
 from library.work_identity import (
@@ -23,6 +24,28 @@ from library.work_identity import (
 )
 
 CoverSource = Callable[[], Path]
+CATALOGUE_UNIQUE_THRESHOLD = 20.0  # Florent, 2026-11-25: only for a catalogue-unique album.
+CATALOGUE_IDENTIFICATION_METHOD = 'catalogue-unique-cover-v1'
+
+
+def apply_cover_threshold(receipt: dict[str, Any], evidence: dict[str, Any], row: dict[str, Any],
+                          lookup: FamilyLookup | None, *,
+                          prefix_proof: dict[str, Any] | None = None) -> str | None:
+    """Apply catalogue evidence to a cover comparison for the selected album."""
+    if prefix_proof is not None:
+        receipt['catalogue_family'] = prefix_proof
+    score = receipt.get('score')
+    if (receipt['reason'] == 'below_threshold' and isinstance(score, (float, int))
+            and CATALOGUE_UNIQUE_THRESHOLD <= score < THRESHOLD):
+        proof = prefix_proof if prefix_proof and prefix_proof['family_size'] == 1 else (
+            catalogue_family_for(evidence, row, lookup) if lookup else None)
+        if proof is not None:
+            receipt.update(result='pass', reason='cover_agreement', threshold=CATALOGUE_UNIQUE_THRESHOLD,
+                           catalogue_family=proof)
+            return CATALOGUE_IDENTIFICATION_METHOD
+    if prefix_proof is not None and receipt['result'] == 'pass':
+        return CATALOGUE_IDENTIFICATION_METHOD
+    return None
 
 
 def identity_conflict(evidence: dict[str, Any], row: dict[str, Any], *, indexed: bool) -> bool:
@@ -117,7 +140,7 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
     """Finalize every automatic Bedetheque proposal before classification.
 
     R3 title/Web decisions record their basis. Series-only and dated decisions
-    require the existing cover threshold. Parsed fields cannot veto an R3 pick.
+    require cover confirmation. Parsed fields cannot veto an R3 pick.
     """
     if result['status'] != 'identified':
         return
@@ -143,12 +166,18 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
         return
     concordance = result.get('candidate_concordance', {})
     r3 = uses_candidate_concordance(result)
+    lookup = family_lookup_for(providers)
+    prefix_proof = None
     if r3:
-        checked = decide(evidence, result.get('candidates', rows))
+        checked = decide(evidence, result.get('candidates', rows),
+                         family_lookup=lookup if 'catalogue_family' in concordance else None)
         if checked.candidate is None or checked.receipt() != concordance:
             review('candidate_concordance_changed')
             return
         evidence['candidate_concordance'] = concordance
+        prefix_proof = checked.catalogue_family
+        if prefix_proof is not None:
+            receipt['catalogue_family'] = prefix_proof
         row = rows[0]
         receipt.update(album_id=row.get('edition_ref'), album_url=row.get('url'),
                        candidate_concordance=concordance)
@@ -295,10 +324,13 @@ def finalize(asset: dict[str, Any], result: dict[str, Any], providers: Any,
             cache[reuse_key] = {'receipt': compared,
                 'expires': time.time() + (7 * 86400 if compared['result'] == 'pass' else 300)}
             receipt.update(compared)
+        method = apply_cover_threshold(receipt, evidence, row, lookup, prefix_proof=prefix_proof)
         if receipt['result'] != 'pass':
             review(receipt['reason'])
         else:
             receipt['basis'] = 'cover'
+            if method is not None:
+                result['identification_method'] = method
     except (LibraryError, OSError, ValueError, KeyError, TypeError):
         review('confirmation_unavailable')
 

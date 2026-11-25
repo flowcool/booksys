@@ -326,14 +326,15 @@ def add_assertions(asset: dict[str, Any], response: dict[str, Any]) -> None:
 
 
 def _corroborated_heading_candidates(state: dict[str, Any], asset_id: str,
-                                     candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                                     candidates: list[dict[str, Any]], providers: Providers) -> list[dict[str, Any]]:
     from library.asset_evidence import bind_evidence
+    from library.bdnex import family_lookup_for
     from library.work_enrichment import printed_concordance
     from library.work_identity import _evaluate_exact_work, evaluate_work, uses_candidate_concordance
 
     asset = state['assets'][asset_id]
     evidence = bind_evidence(state, asset_id)
-    outcome = evaluate_work(evidence, candidates)
+    outcome = evaluate_work(evidence, candidates, family_lookup=family_lookup_for(providers))
     if uses_candidate_concordance(outcome):
         matches: list[dict[str, Any]] = outcome['concordant_candidates']
         return matches
@@ -358,7 +359,7 @@ def _search_bookys_heading(state: dict[str, Any], asset_id: str, client: BDneXCl
     if fallback['status'] != 'ok':
         providers.events.append({**fallback, 'retrieved_at': now()})
         return []
-    return _corroborated_heading_candidates(state, asset_id, fallback['candidates'])
+    return _corroborated_heading_candidates(state, asset_id, fallback['candidates'], providers)
 
 
 def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
@@ -402,7 +403,8 @@ def prepare_enrichment(store: Catalog, asset_id: str, providers: Providers,
         local_candidates = asset.get('bdnex', {}).get('candidates', [])
         heading_candidates = asset.get('bdnex', {}).get('bookys_heading_fallback', {}).get('candidates', [])
         if heading_candidates:
-            local_candidates = [*local_candidates, *_corroborated_heading_candidates(state, asset_id, heading_candidates)]
+            local_candidates = [*local_candidates, *_corroborated_heading_candidates(
+                state, asset_id, heading_candidates, providers)]
         enrich_work(state, asset_id, providers, local_candidates, discovery=False, hydrate=True,
                     exact_page_attempts=exact_page_attempts, cover_source=cover_source)
         if asset['work_result']['status'] == 'identified' and not references:

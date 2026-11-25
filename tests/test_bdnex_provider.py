@@ -19,6 +19,35 @@ from library.work_identity import evaluate_work
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_family_lookup_is_versioned_and_optional(self) -> None:
+        def match(request):
+            return {'index': 'a' * 64, 'candidates': []}
+
+        def lookup(query):
+            if query['number'] == '4':
+                return {'index': 'a' * 64, 'albums': [{'album_id': '123', 'series': 'Wrong Series',
+                        'number': '4', 'title': 'The Silent Island'}]}
+            return {'index': 'a' * 64, 'albums': [{'album_id': '123', 'series': 'Sky Patrol Press',
+                    'number': '3', 'title': 'The Silent Island'}]}
+
+        services = (handler('test-secret', match), handler('test-secret', match, lookup))
+        for service in services:
+            server = HTTPServer(('127.0.0.1', 0), service)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
+                result = client.lookup_family('Sky Patrol', '3')
+                if result is not None:
+                    self.assertEqual(result['albums'][0]['album_id'], '123')
+                self.assertEqual(result is None, service is services[0])
+                self.assertIsNone(client.lookup_family('Sky Patrol', '4'))
+                self.assertEqual(client.match('a' * 64, [{'path': 'Sky Patrol.cbz', 'embedded': {}}])['status'], 'ok')
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+
     def test_scan_prefix_fallback_uses_spare_slots_only_after_an_empty_match(self) -> None:
         hint = {'Series': 'Navy', 'Number': '149'}
         original = {'path': 'Navy/ZzNavy - 149.cbz', 'embedded': hint}

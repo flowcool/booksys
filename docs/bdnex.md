@@ -33,8 +33,14 @@ set, the worker applies the existing exact concordance rules. Exact evidence can
 identify one work in these cases. The result records the exact proof and the R3
 receipt.
 
-`cov:cover` and `series_number:cover` require the existing cover confirmation at
-threshold 40. A generic candidate title or an unsupported series year supplies
+`cov:cover` and `series_number:cover` require cover confirmation. When R3
+finds no candidate, `catalogue_prefix:cover` can route a proposal if exactly
+one family whose normalized name equals or starts with the label series at a
+word boundary carries that number. `(Série N)`, `Série N` and `- Série N -`
+narrow the lookup to the catalogue ordinal `1re serie` or `Ne serie`. An
+unmarked family can represent the first series.
+
+A generic candidate title or an unsupported series year supplies
 no direct title exemption. Periodical and dated-series rules stay unchanged.
 A recorded score below 10 for the same asset and album blocks every R3 mode.
 A missing or failed cover check leaves the proposal in review.
@@ -66,11 +72,18 @@ Already queued metadata tasks return the accepted result before any provider cal
 Explicit reference requests retain their enrichment path. The cover guard applies
 to new automatic acceptances. It does not start a bulk replay of accepted work.
 
-Cover confirmation uses `bdnex-9de29a73-sift-height600-ratio06-v1` and the
-provisional threshold 40. It preserves the upstream 600-pixel height and ratio
+Cover confirmation uses `bdnex-9de29a73-sift-height600-ratio06-v1`. A score of
+40 or more passes. A score from 20 up to 40 passes only if the selected album
+is the sole work with the label number across all matched families in the
+full index. Editions with the same number and title count as one work.
+The comparison preserves the upstream 600-pixel height and ratio
 0.6. The proposed 1024-pixel long-edge variant changed the retained-lot yield
 from 20/31 to 12/31, so it is not used. Covers never choose another reference.
-The worker stores the receipt in `work_result.evidence.cover_confirmation`.
+The worker stores the applied threshold in `work_result.evidence.cover_confirmation`.
+Catalogue receipts also store the lookup method, version, index, work count
+and matched families. A pass via the prefix route or reduced threshold sets
+`work_result.identification_method` to `catalogue-unique-cover-v1` for
+targeted requeue. Metadata method v9 progressively reopens unresolved tasks.
 The reader child validates the first manifest member and both archive/member
 hashes. PDFs without an exemption remain in review until calibrated.
 The child has resource limits. It has no new filesystem or network sandbox.
@@ -102,6 +115,13 @@ to the asset, input digest and pinned engine. Requests are limited to 16 KiB;
 responses to 64 KiB. The timeout is five seconds, with a 60-second local
 cooldown after failure. A request can carry optional identity hints. The service
 can return a decision tied to a reference in its candidate list. Redirects and ambient HTTP proxies are disabled.
+
+`POST /v1/family` uses the same authentication and size limits. Send schema
+`1`, the label series and the issue number. The read-only lookup returns the
+album IDs, series, numbers and titles from the full warm index. It binds the
+response to the request digest and engine. Older service images keep the
+standard threshold and earlier R3 rules. Rebuild the BDneX image from the public
+release commit to enable the lookup.
 
 Rollback: unset `BOOKSYS_BDNEX_URL` and restart the metadata role. Existing
 providers continue. Retain the service index and original archives.

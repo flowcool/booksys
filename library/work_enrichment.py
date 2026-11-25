@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from library.asset_evidence import bind_evidence
+from library.bdnex import family_lookup_for
 from library.cover_confirmation import CoverSource, finalize
 from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
@@ -134,6 +135,7 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 cover_source: CoverSource | None = None) -> None:
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
+    family_lookup = family_lookup_for(providers)
     queries: list[str] = []
     # Structured fields are preferred. Unstructured labels only locate references.
     for field in ('series', 'title'):
@@ -161,7 +163,8 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     # unknown and records the existing provider retry event.
     candidates.extend(extra or [])
     if hydrate:
-        local_result = evaluate_work(printed_concordance(evidence, asset, candidates), candidates)
+        local_result = evaluate_work(printed_concordance(evidence, asset, candidates), candidates,
+                                     family_lookup=family_lookup)
         early_reference = local_result['status'] == 'no_match'
         matching: list[dict[str, Any]] = []
         file_series_alias = None
@@ -221,7 +224,8 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             attempts.append({'query': query, 'status': found.status, 'reason': found.reason,
                              'truncated': found.truncated, 'retrieved_at': now()})
             rows = [row.to_match_candidate() for row in found.candidates]
-            preliminary = evaluate_work(printed_concordance(evidence, asset, rows), rows)
+            preliminary = evaluate_work(printed_concordance(evidence, asset, rows), rows,
+                                        family_lookup=family_lookup)
             matching = preliminary.get('concordant_candidates', [])
             # Series listings omit creators. OCR may select complete title
             # phrases for bounded page retrieval; final title+creator proof below
@@ -251,7 +255,7 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     candidates = list({(row.get('source'), row.get('edition_ref')): row for row in candidates}.values())
     evidence = printed_concordance(evidence, asset, candidates)
     evidence['discovery_truncated'] = truncated
-    result = evaluate_work(evidence, candidates)
+    result = evaluate_work(evidence, candidates, family_lookup=family_lookup)
     result['attempts'] = attempts
     result['exact_page_attempts'] = exact_page_attempts
     result['evidence'] = evidence
@@ -301,7 +305,7 @@ def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
     candidates = response.get('candidates', [])
-    concordant = evaluate_work(evidence, candidates)
+    concordant = evaluate_work(evidence, candidates, family_lookup=family_lookup_for(providers))
     receipt = concordant['candidate_concordance']
     r3 = uses_candidate_concordance(concordant)
     asset_labels = any(a.get('scope') == 'asset' for a in evidence.get('provenance', {}).get('labels', []))
