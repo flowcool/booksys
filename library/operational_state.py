@@ -479,6 +479,16 @@ class CopyOperations:
                     AND phase IN ('prepared','verified','published') LIMIT 1
                 """, (self.namespace,)).fetchone() is not None
 
+    def has_nonterminal(self) -> bool:
+        with self._database.connection() as db:
+            row = db.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM copy_operations WHERE namespace=%s
+                        AND (phase IS NULL OR phase NOT IN ('committed','interrupted','capacity_aborted'))
+                )
+                """, (self.namespace,)).fetchone()
+            return row is not None and bool(row[0])
+
     def records(self) -> list[dict[str,Any]]:
         def load(db: DeadlineConnection) -> Any:
             return [row[-1] for row in operational_records(db,'copy_operations','WHERE namespace=%s ORDER BY id',(self.namespace,))]

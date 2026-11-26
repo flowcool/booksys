@@ -1,23 +1,27 @@
 """Reader selection through admission and the catalogue presentation."""
 import io
+import json
 import shutil
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
 from library.admission import AdmissionPublisher
-from library.cli import parser, run
+from library.cli import main, parser, run
 from library.intake import receive
+from library.operational_state import CopyOperations
 from library.primitives import LibraryError
 from library.projection import operator_row
 from library.readers import sha256
 from test_library_intake import SOURCE
 from test_library_publish import setup_library
 from test_library_readers import image_bytes, rar_bytes
+from tests.postgres_fixture import create_catalog
 
 
 class ReaderSelectionTests(unittest.TestCase):
@@ -188,6 +192,29 @@ class ReaderSelectionTests(unittest.TestCase):
         self.assertEqual(publisher.publish_asset(second)['duplicate_of'], first)
         self.assertTrue((publisher.root / holding['target'] / 'book.cbz').exists())
         self.assertEqual(len(list(publisher.root.glob('classified/**/book.cbz'))), 1)
+
+    def test_apply_precheck_uses_journal_phases_without_loading_records(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            store = create_catalog(self, root / 'state')
+            operations = CopyOperations(store.backend()._database, 'admission')
+            for phase in ('committed', 'interrupted', 'capacity_aborted'):
+                operations.phase({'id': phase, 'phase': phase})
+            command = ['booksys', '--state', str(store.directory), 'reader-selection', '--isolated',
+                       '--library', str(root / 'library'), '--reception', str(root / 'reception'),
+                       '--select', 'keep', 'retain', '--apply']
+            with (patch('sys.argv', command),
+                  patch('library.cli.run', return_value={'status': 'retained'}) as apply,
+                  patch.object(CopyOperations, 'records', side_effect=LibraryError('Full journal read'))):
+                for phase in ('published', None, 'interrupted'):
+                    with self.subTest(phase=phase), redirect_stdout(io.StringIO()) as output:
+                        operations.phase({'id': 'candidate', 'phase': phase})
+                        expected = {'status': 'retained'} if phase == 'interrupted' else {
+                            'status': 'blocked', 'reason': 'Reconcile copy journals before a local catalogue write',
+                        }
+                        self.assertEqual((main(), json.loads(output.getvalue())),
+                                         (0 if phase == 'interrupted' else 2, expected))
+            apply.assert_called_once()
 
     def test_selection_cli_defaults_to_read_only_and_recovers_both_directions(self):
         store, reception, first, publisher = self.copies()
