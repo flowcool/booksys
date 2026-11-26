@@ -1,3 +1,4 @@
+import hashlib
 import io
 import os
 import shutil
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from PIL import Image
 import pikepdf
 
+from library.primitives import LibraryError
 from library.readers import inspect_file
 
 UNRAR = Path(__file__).resolve().parents[1] / 'tmp/qualification/native/unrar-root/usr/bin/unrar-nonfree'
@@ -30,13 +32,54 @@ def rar_bytes(name, content, flags=0):
     return b'Rar!\x1a\x07\x00' + main + header(0x74, 0x8000 | flags, body) + content + header(0x7b, 0, b'')
 
 
-def image_bytes():
+def image_bytes() -> bytes:
     output = io.BytesIO()
     Image.new('RGB', (8, 8), 'white').save(output, format='PNG')
     return output.getvalue()
 
 
 class ReaderTests(unittest.TestCase):
+
+    def check_small_ancillary_member(self, name: str) -> None:
+        from library.reader_worker import inspect_archive
+
+        content = b'x' * (64 * 1024)
+        page = image_bytes()
+        retained: dict[str, bytes] = {}
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'volume.cbz'
+            with zipfile.ZipFile(source, 'w') as archive:
+                archive.writestr('1.png', page)
+                archive.writestr(name, content)
+            result = inspect_archive(source, '.cbz', sink=retained.__setitem__)
+        self.assertEqual(result['ignored_ancillary'], [name])
+        self.assertEqual(result['ancillary_manifest'], {name: hashlib.sha256(content).hexdigest()})
+        self.assertEqual(retained, {'1.png': page, name: content})
+
+    def test_small_sfv_is_ancillary(self) -> None:
+        self.check_small_ancillary_member('checksums.sfv')
+
+    def test_small_url_is_ancillary(self) -> None:
+        self.check_small_ancillary_member('shortcut.url')
+
+    def test_small_csv_is_ancillary(self) -> None:
+        self.check_small_ancillary_member('table.csv')
+
+    def test_small_csv_with_trailing_hash_is_ancillary(self) -> None:
+        self.check_small_ancillary_member('table.csv#')
+
+    def test_oversized_ancillary_members_are_rejected(self) -> None:
+        from library.reader_worker import inspect_archive
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'volume.cbz'
+            for suffix in ('.sfv', '.url', '.csv', '.csv#'):
+                with self.subTest(suffix=suffix):
+                    with zipfile.ZipFile(source, 'w') as archive:
+                        archive.writestr('1.png', image_bytes())
+                        archive.writestr('ancillary' + suffix, b'x' * (64 * 1024 + 1))
+                    with self.assertRaisesRegex(LibraryError, '^Nested container or unauthorized archive content$'):
+                        inspect_archive(source, '.cbz')
 
     def test_generic_zip_uses_the_comic_reader_and_publishes_cbz(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -62,7 +62,7 @@ def member(name: str, data: bytes, output: dict[str, Any]) -> None:
         output.setdefault('ignored_ancillary', []).append(name)
         return
     # Ignore text notes and one thumbnail database of any name (20 archives of one series carry '<series> - NN - NNN.db').
-    if path.suffix.lower() in ('.txt', '.nfo') and len(data) <= 64 * 1024:
+    if path.suffix.lower() in ('.txt', '.nfo', '.sfv', '.url', '.csv', '.csv#') and len(data) <= 64 * 1024:
         output.setdefault('ignored_ancillary', []).append(name)
         return
     if path.suffix.lower() == '.db' and len(data) <= 4 * 1024**2:
