@@ -11,6 +11,7 @@ import io
 import shutil
 import tarfile
 from contextlib import redirect_stdout
+from urllib.error import HTTPError, URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ops"))
 from release_images import publish, release_event, reconcile, registry_manifest, recovery_report
@@ -315,6 +316,19 @@ class ArtifactQualificationTests(unittest.TestCase):
 
 
 class SourceReuseTests(unittest.TestCase):
+    def test_failed_source_download_reports_the_requested_url_and_status(self):
+        url = "https://example.test/source.dsc"
+        errors = (
+            (HTTPError(url, 404, "Not Found", {}, None), f"{url}: HTTP 404"),
+            (URLError("connection refused"), f"{url}: connection refused"),
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            for error, detail in errors:
+                with self.subTest(error=error), patch("release_sources.urlopen", side_effect=error):
+                    with self.assertRaises(ValueError) as caught:
+                        fetch(url, "a" * 64, Path(folder) / "source.dsc")
+                    self.assertIn(detail, str(caught.exception))
+
     def test_parallel_assembly_retains_sources_notices_and_exact_git_revision(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

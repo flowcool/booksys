@@ -13,6 +13,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -120,11 +121,16 @@ def fetch(url: str, expected: str, destination: Path, *, cache: Path | None = No
             raise ValueError("Preserved download differs; never overwrite it")
     else:
         request = Request(url, headers={"User-Agent": "Booksys-Source-Qualification/1.0"})
-        with urlopen(request, timeout=120) as response, destination.open("xb") as output:
-            if urlparse(response.url).scheme != "https":
-                raise ValueError("Source download redirected outside HTTPS")
-            while chunk := response.read(1024 * 1024):
-                output.write(chunk)
+        try:
+            with urlopen(request, timeout=120) as response, destination.open("xb") as output:
+                if urlparse(response.url).scheme != "https":
+                    raise ValueError("Source download redirected outside HTTPS")
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+        except HTTPError as error:
+            raise ValueError(f"Source download failed for {url}: HTTP {error.code} {error.reason}") from error
+        except URLError as error:
+            raise ValueError(f"Source download failed for {url}: {error.reason}") from error
         if file_digest(destination) != "sha256:" + expected:
             raise ValueError("Source checksum mismatch; preserved for investigation")
     if retained is not None and not retained.exists():
