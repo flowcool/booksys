@@ -7,6 +7,8 @@ See the [architecture](../architecture.md) and the
 Keep a local library usable without Bookys or a specific reading application.
 Process tracked Booksys PDF, CBZ and CBR inputs and finished single-volume ZIP
 and RAR page archives. Preserve original downloads.
+Track completed Telegram receipts as reception input. Validate the retained
+file through the shared external reader before metadata or copy work starts.
 Keep unrelated downloader files outside this pipeline.
 Publish independent CBZ copies with supported ComicInfo.xml metadata.
 Keep source and output hashes, file origins and transformation journals.

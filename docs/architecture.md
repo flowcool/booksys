@@ -48,9 +48,10 @@ chapter folders. Intake records multiple volume groups as pending for review.
 Archives of complete PDF, CBZ or CBR files go through bundle intake. The copies
 stage publishes CBZ and keeps the original bytes in reception.
 
-Telegram intake accepts an explicit list of completed files under
-`booksys/telegram` in the originals mount. The originals scan skips this
-directory. Each accepted channel and message creates one origin and one intake
+Telegram discovery can pull completed receipts from a read-only feed and refer
+to their files on the read-only archive mount. The manual input also accepts
+an explicit list from `booksys/telegram` in the originals mount. The originals
+scan skips this managed directory. Each accepted channel and message creates one origin and one intake
 item in the same transaction. The external reader verifies the file against
 the submitted SHA-256. Messages with identical bytes share one asset. Business
 discovery creates the normal metadata and copies items. Telegram captions

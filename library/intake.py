@@ -12,9 +12,11 @@ from urllib.parse import urlsplit
 
 from library.catalog import Catalog
 from library.multipart_model import is_multipart
+from library.origins import TelegramSourceUnavailable, archive_source_stamp, external_source_path, is_archive_origin
 from library.store import PreparedResult
 from library.primitives import LibraryError, WorkingState, digest, now
-from library.readers import GENERIC_ARCHIVE_SUFFIXES, inspect_file, fingerprint, sha256, READER_POLICY
+from library.reader_inputs import SOURCE_UNAVAILABLE_ERRNOS
+from library.readers import GENERIC_ARCHIVE_SUFFIXES, MAX_FILE, inspect_file, fingerprint, sha256, READER_POLICY
 
 
 from library.reception import reception_path as reception_path
@@ -73,6 +75,7 @@ def external_origins(root: Path) -> Iterator[tuple[str, dict[str, Any]]]:
     visited = 0
     for folder, directories, files in os.walk(root, onerror=fail):
         directories[:] = [name for name in directories if name not in ('booksys', '@eaDir')
+                          and not (name == 'telegram-archive' and Path(folder) == root)
                           and not name.startswith('ug-tmp') and not (Path(folder)/name).is_symlink()]
         visited += len(directories) + len(files)
         if visited > 4096:
@@ -95,19 +98,29 @@ def receive_external(store: Catalog, oid: str) -> PreparedResult:
     if origin is None or not origin['source'].startswith('external:'):
         raise LibraryError('External origin is missing')
     relative = Path(origin['path'])
-    path = reception_path(EXTERNAL_ROOT, str(relative.parent), relative.name)
-    stamp = fingerprint(path)
+    archive = is_archive_origin(origin)
+    if archive:
+        path, stamp = archive_source_stamp(origin)
+    else:
+        path = external_source_path(origin)
+        stamp = fingerprint(path)
     telegram = origin.get('telegram')
     if telegram is not None:
         if stamp[2] != origin['size']:
             raise LibraryError('Telegram file size changed since submission')
     elif digest({'external': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3]}) != oid:
         raise LibraryError('External origin bytes changed since discovery')
-    result = inspect_file(path)
-    if telegram is not None:
-        inspected_hash = result.get('sha256') or sha256(path)
-        if inspected_hash != telegram['sha256'] or fingerprint(path) != stamp:
-            raise LibraryError('Telegram file bytes changed since submission')
+    try:
+        result = (inspect_file(path, expected_sha256=telegram['sha256'])
+                  if archive and telegram is not None else inspect_file(path))
+        if telegram is not None and not (archive and stamp[2] > MAX_FILE):
+            inspected_hash = result.get('sha256') or sha256(path)
+            if inspected_hash != telegram['sha256'] or fingerprint(path) != stamp:
+                raise LibraryError('Telegram file bytes changed since submission')
+    except OSError as exc:
+        if archive and exc.errno in SOURCE_UNAVAILABLE_ERRNOS:
+            raise TelegramSourceUnavailable('Telegram archive source unavailable') from exc
+        raise
     if result.get('reason'):
         from booksys_core.diagnostics import emit, diagnostic_fields
         emit(service='library', stage='local', code='failed' if result['status'] == 'rejected' else 'waiting',

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -12,24 +13,14 @@ from booksys_core.errors import ResultInputsChanged
 from library import intake
 from library.bundle_worker import MAX_SOURCE
 from library.catalog import Catalog
+from library.postgres import CommitUnknown
 from library.primitives import LibraryError, digest, telegram_origin_folder, telegram_origin_id, valid_telegram_index_title
 from library.readers import READER_POLICY, fingerprint, sha256
 from library.stage_model import METHODS, Obligation
+from library.telegram_paths import telegram_filename as _name
 
-FORMATS = frozenset(('.cbz', '.cbr', '.pdf'))
 MAX_ENTRIES = 4096
 MAX_LINE = 64 * 1024
-
-
-def _name(value: object) -> str:
-    if (not isinstance(value, str) or not value or value.startswith(('.', 'ug-tmp'))
-            or re.search(r'[/\\\x00-\x1f\x7f-\x9f]', value) or len(value.encode('utf-8')) > 255):
-        raise LibraryError('Unsafe Telegram filename')
-    if Path(value).suffix.lower() not in FORMATS:
-        raise LibraryError('Unsupported Telegram format')
-    if Path(value).stem.lower().endswith(('.part', '.partial', '.tmp', '.crdownload', '.download')):
-        raise LibraryError('Partial Telegram filename')
-    return value
 
 
 def _scope(value: str) -> tuple[int, int | None]:
@@ -101,11 +92,12 @@ def _check_repeat(existing: dict[str, Any], proposed: dict[str, Any]) -> None:
         raise LibraryError('Telegram receipt changed for an already submitted channel and message')
 
 
-def _submit(catalog: Catalog, oid: str, origin: dict[str, Any], *, at: datetime) -> str:
+def submit_origin(catalog: Catalog, oid: str, origin: dict[str, Any], *, at: datetime,
+                  repeat: Callable[[dict[str, Any], dict[str, Any]], None] = _check_repeat) -> str:
     state = catalog.result_set('retire', {'origins': [oid]}, media=False)
     existing = state['origins'].get(oid)
     if existing is not None:
-        _check_repeat(existing, origin)
+        repeat(existing, origin)
         return 'already-submitted'
     state['origins'][oid] = origin
     result = catalog.prepare(state)
@@ -114,12 +106,12 @@ def _submit(catalog: Catalog, oid: str, origin: dict[str, Any], *, at: datetime)
     try:
         catalog.backend().commit(result.change, expected_revision=result.revision, conflict=result.conflict,
                                  obligations=[obligation], now=at)
-    except ResultInputsChanged:
-        # Another submitter may have committed the same receipt since the snapshot.
-        existing = catalog.get('origins', oid)
-        if existing is None:
+    except (ResultInputsChanged, CommitUnknown):
+        # Check the exact transaction effects together before accepting an ambiguous commit.
+        recorded = catalog.backend().registered_intake_origin(oid)
+        if recorded is None:
             raise
-        _check_repeat(existing, origin)
+        repeat(recorded, origin)
         return 'already-submitted'
     return 'submitted'
 
@@ -152,7 +144,7 @@ def main(argv: list[str] | None = None) -> None:
             raise LibraryError('Telegram manifest is empty')
         catalog = None if args.dry_run else Catalog(args.state_dir)
         for oid, (line_number, origin) in entries.items():
-            status = 'would-submit' if catalog is None else _submit(catalog, oid, origin, at=datetime.now(timezone.utc))
+            status = 'would-submit' if catalog is None else submit_origin(catalog, oid, origin, at=datetime.now(timezone.utc))
             report = {key: origin['telegram'][key] for key in ('channel', 'message', 'topic', 'sha256')}
             if 'index_title' in origin['telegram']:
                 report['index_title'] = origin['telegram']['index_title']

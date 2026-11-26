@@ -298,6 +298,26 @@ class Store:
             self.verify(db)
             return [row[0] for row in db.execute(f'SELECT id FROM {kind} ORDER BY id')]
 
+    def external_folder_origins(self, prefix: str) -> list[tuple[str, dict[str, Any]]]:
+        """Read at most two origins to verify a historical single-file folder."""
+        if not prefix.startswith('external:') or not prefix.endswith('/'):
+            raise LibraryError('Invalid external origin folder prefix')
+        with self._database.connection() as db:
+            self.verify(db)
+            # The source_ref index uses C collation. '0' sorts immediately after '/'.
+            rows = db.execute('SELECT id,payload FROM origins WHERE source_ref >= %s AND source_ref < %s '
+                              'ORDER BY source_ref,id LIMIT 2', (prefix, prefix[:-1] + '0')).fetchall()
+        return [(oid, self.restore(payload, media=False)) for oid, payload in rows]
+
+    def registered_intake_origin(self, oid: str) -> dict[str, Any] | None:
+        """Read both durable effects of external intake registration in one snapshot."""
+        with self._database.connection() as db:
+            self.verify(db)
+            row = db.execute("SELECT o.payload FROM origins o JOIN work_items w "
+                             "ON w.stage='intake' AND w.item=%s WHERE o.id=%s",
+                             ('external-' + oid, oid)).fetchone()
+        return self.restore(row[0], media=False) if row else None
+
     def page(self, kind: str, *, filters: dict[str, Any] | None = None,
              cursor: str | None = None, limit: int = 50, media: bool = False) -> dict[str, Any]:
         self._kind(kind)

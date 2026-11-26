@@ -114,11 +114,19 @@ def main() -> None:
     try:
         if args.queue == 'discovery':
             from library.recovery_schedule import RecoverySchedule
+            from library.telegram_pull import POLL_SECONDS, TelegramPull
+            try:
+                telegram = TelegramPull.configured(runtime.catalog)
+            except LibraryError as exc:
+                emit(service=service, stage='diagnostics', queue=args.queue, code='degraded',
+                     reason='invalid_content', detail=str(exc))
+                telegram = None
             with lock(args.root/'state/stage-discovery.lock', blocking=False):
                 with (args.root/'state/library-cycle.lock').open('a') as serial:
                     fcntl.flock(serial, fcntl.LOCK_SH | fcntl.LOCK_NB)
                     notify('READY=1')
                     snapshot_at = time.monotonic()
+                    telegram_at = snapshot_at
                     intake_at = snapshot_at + 5
                     release_at = snapshot_at + 10
                     trim_at = snapshot_at + 20
@@ -130,6 +138,9 @@ def main() -> None:
                             except BlockingIOError:
                                 stop.wait(1)
                                 continue
+                            if telegram is not None and time.monotonic() >= telegram_at:
+                                telegram_at = time.monotonic() + POLL_SECONDS
+                                telegram.poll(now=stamp)
                             if time.monotonic() >= snapshot_at:
                                 snapshot_at = time.monotonic() + 60
                                 try:

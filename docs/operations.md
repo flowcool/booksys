@@ -27,6 +27,56 @@ The session API closes its browser after each solve. It does not persist cookies
 
 See the [limit audit](audit-limits.md) for the relevant resource guards.
 
+## Pull Telegram receipts
+
+Deploy a compatible worker with pull disabled first. Mount the qualified
+Telegram archive at `/data/booksys/telegram-archive` on discovery, intake,
+metadata and copies. Mount the published feed at
+`/data/booksys/telegram-receipts`. Use read-only binds with
+`create_host_path: false`. Keep the producer's private state outside Booksys.
+Verify the export, worker UID/GID and sample hashes through the worker paths.
+Record the worker tag and the disabled stack commit as the rollback pair.
+
+Freeze the prior managed origin and intake IDs at cutover. Include both
+historical trials and all completed manual lots. Keep the lot evidence.
+Enable only on discovery with `BOOKSYS_TELEGRAM_PULL=1` and
+`BOOKSYS_TELEGRAM_SCOPES=BD_X18,bd_fr`. Pull starts disabled by default.
+Add `webtoons-vf` after acceptance of the manual 50-chapter pilot and
+confirmation that the producer limits its feed to the confirmed manifest.
+
+Discovery polls at startup and every 30 seconds. Each poll selects one scope
+in turn and reads its `head.json` and exact next page. A page has at most
+32 rows and each UTF-8 JSON Lines row is at most 64 KiB including the newline.
+The producer uses schema 1. Each scope directory contains a head with
+`schema`, `stream_id` and `ready_page`, plus numbered pages such as
+`00000001.jsonl`. Each row provides `schema`, `peer`, `topic`, `message`,
+`path`, `original_name`, `size`, `sha256`, `completion_proof` and
+`completion_ref`. Webtoon rows can also provide `origins`, `reposts`,
+`index_title` or `index_review`. The stored path adds the
+`telegram-archive/` prefix to the feed's archive-relative path.
+
+Use Activity diagnostics for discovery. The event detail gives the scope and
+page. A current head is idle. A missing head or committed page retries on its
+next turn. A damaged page or conflicting receipt blocks that scope. Ask the
+producer to verify a new stream. Disable pull during the stream change. Select
+the new stream with `BOOKSYS_TELEGRAM_STREAMS=BD_X18=<stream-id>` on discovery
+and enable pull. Use comma-separated `scope=stream-id` entries for several
+scopes. The selected stream starts at page 1 and reconciles previous origins
+by message identity. Keep the failed stream and its proofs.
+
+A missing or unreadable archive file waits in intake. A size or SHA-256
+mismatch uses the bounded intake retry path. Keep the receipt, original and
+prior result for investigation. Both managed and archive sources use the
+normal metadata and copies queues after intake. The 1 GiB per-comic limit,
+source retention and CBZ publication rules apply.
+
+To disable pull after an archive origin exists, restore the disabled stack
+commit and its compatible worker tag. Keep the archive bind, PostgreSQL
+state, originals, copies and receipts. Intake and downstream readers still
+use recorded archive paths. Re-enable with the same stream to resume at the
+last committed page. Before any archive origin exists, the pre-change worker
+tag and stack commit are also a valid rollback pair.
+
 ## Submit completed Telegram documents
 
 Prepare a private JSON Lines file with one line per completed document.

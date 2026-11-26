@@ -222,6 +222,16 @@ class CollectorState:
         db.execute('INSERT INTO collection_checkpoints(kind,payload) VALUES (%s,%s) ON CONFLICT(kind) DO UPDATE SET payload=excluded.payload',(kind,encode(metadata)))
         sync(db,'collection_checkpoints',(kind,),metadata)
 
+    def telegram_checkpoint(self, scope: str) -> dict[str, Any]:
+        with self._database.connection() as db:
+            row = db.execute('SELECT payload FROM collection_checkpoints WHERE kind=%s',
+                             ('telegram:' + scope,)).fetchone()
+        return dict(decode(row[0])) if row else {}
+
+    def save_telegram_checkpoint(self, scope: str, value: dict[str, Any]) -> None:
+        with self._database.connection(write=True) as db:
+            self._checkpoint(db, 'telegram:' + scope, value)
+
     def patch_monitor(self, **changes: Any) -> None:
         if set(changes)-{'schedule'}:
             raise LibraryError('Invalid collection checkpoint')
