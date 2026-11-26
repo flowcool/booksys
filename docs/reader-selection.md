@@ -29,9 +29,11 @@ copy first. It covers classified copies with current committed journals.
 
 ## Apply and restore
 
-Apply only an approved pair during an exclusive maintenance window with the
-copies worker stopped. Use the qualified writer and the normal writer
-preflight options for this library. In the Booksys lab, use `--lab`.
+Apply only an approved pair during an exclusive maintenance window. Stop the
+discovery and copies workers before you apply or restore a selection. The
+discovery worker holds a shared `library-cycle.lock` while it runs. Use the
+qualified writer and the normal writer preflight options for this library.
+In the Booksys lab, use `--lab`.
 
 ```sh
 python -m library.cli --state "$STATE" reader-selection --library "$LIBRARY" \
@@ -48,3 +50,5 @@ protected. Keep the journal and recovery directory. To resume an interrupted
 operation, run the same command again. Stop if the journal, catalogue or
 file hashes disagree. Restore an applied selection with this version before
 rolling back the worker if the old exposures are required.
+
+At the end of the maintenance window, restart discovery first, then copies.

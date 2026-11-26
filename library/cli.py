@@ -176,10 +176,9 @@ def main() -> int:
             with lock(args.state / 'library-cycle.lock', blocking=False):
                 if args.command not in ('admit', 'reconcile'):
                     from library.operational_state import CopyOperations
-                    operations=CopyOperations(Catalog(args.state).backend()._database,'admission')
-                    for operation in operations.records():
-                        if operation.get('phase') not in ('committed','interrupted','capacity_aborted'):
-                            raise LibraryError('Reconcile copy journals before a local catalogue write')
+                    operations = CopyOperations(Catalog(args.state).backend()._database, 'admission')
+                    if operations.has_nonterminal():
+                        raise LibraryError('Reconcile copy journals before a local catalogue write')
                 output = run(args)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         if isinstance(output, list) and any(isinstance(item, dict) and item.get('status') in ('stale', 'rejected') for item in output):

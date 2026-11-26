@@ -10916,7 +10916,7 @@
     "ubuntu_expat_2.7.4-1ubuntu0.2": {
       "package": "expat",
       "version": "2.7.4-1ubuntu0.2",
-      "url": "https://archive.ubuntu.com/ubuntu/pool/main/e/expat/expat_2.7.4-1ubuntu0.2.dsc",
+      "url": "https://snapshot.ubuntu.com/ubuntu/20261126T120000Z/pool/main/e/expat/expat_2.7.4-1ubuntu0.2.dsc",
       "sha256": "44529a83af757d6f5e1073da65125dfc440ff4777c4d6479a9d144373896b4ac"
     },
     "ubuntu_libffi_3.5.2-4": {
