@@ -4,13 +4,25 @@ from __future__ import annotations
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import unicodedata
+
+if TYPE_CHECKING:
+    from library.bdnex_protocol import FamilyLookup
+
 
 IDENTITY_FIELDS = ('title', 'series', 'number', 'integral')
 WORK_FIELDS = (*IDENTITY_FIELDS, 'author', 'contributors', 'summary', 'language',
                'publisher', 'date', 'isbn', 'genres', 'adult', 'recommended_age', 'family')
-NUMBERED_SERIES_ALIASES = {'big bull': 'big bull imperia', 'garry': 'garry imperia 2e serie'}
+NUMBERED_SERIES_ALIASES = {
+    'attack serie 1': 'attack 1re serie imperia',
+    'big bull': 'big bull imperia',
+    'cassidy': 'hopalong cassidy puis cassidy imperia',
+    'cyclone serie 1': 'cyclone 1re serie aredit',
+    'garry': 'garry imperia 2e serie',
+    'hulk l incroyable ed heritage': 'incroyable hulk editions heritage',
+    'the witch and the beast': 'witch and the beast',
+}
 
 
 def normalized(value: Any, field: str = '') -> Any:
@@ -32,7 +44,7 @@ def normalized(value: Any, field: str = '') -> Any:
     text = text.replace('œ', 'oe').replace('’', "'")
     if field in ('title', 'series'):
         text = re.sub(r"\s*\((?:le|la|les|l'|un|une|des)\)\s*$", '', text)
-        text = re.sub(r"^(?:le |la |les |l'|un |une |des )", '', text)
+        text = re.sub(r"^(?:(?:le|la|les|un|une|des)[ .]+|[ld]'(?=\w)|[ld][ _.-]+(?=[aeiouhy]))", '', text)
     return ' '.join(re.findall(r'\w+', text))
 
 
@@ -53,7 +65,8 @@ def informative(value: Any) -> bool:
     if not present(value):
         return False
     text = normalized(value, 'title')
-    generic = {'album', 'integrale', 'tome', 'volume', 'vol', 'bd', 'comic', 'comics', 'manga', 'numero'}
+    generic = {'album', 'integrale', 'tome', 'volume', 'vol', 'bd', 'comic', 'comics',
+               'manga', 'numero', 'issue', 'untitled', 'n'}
     return any(not token.isdigit() and token not in generic for token in text.split())
 
 
@@ -82,7 +95,7 @@ def asset_assertions(evidence: dict[str, Any]) -> list[dict[str, Any]]:
         provenance = evidence.get('field_provenance', {}).get(field, {})
         if present(evidence.get(field)) and (evidence.get('asset_bound') is True or provenance.get('scope') == 'asset'):
             assertions.append({**deepcopy(provenance), 'field': field, 'value': evidence[field], 'scope': 'asset'})
-    return assertions
+    return [a for a in assertions if a['field'] != 'title' or informative(a['value'])]
 
 
 def creator_names(candidate: dict[str, Any]) -> dict[str, set[str]]:
@@ -108,13 +121,51 @@ def creator_names(candidate: dict[str, Any]) -> dict[str, set[str]]:
     return names
 
 
-def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    """Require exact informative file/reference concordance; never pick a top score.
+def uses_candidate_concordance(result: dict[str, Any]) -> bool:
+    # Local import: the BDneX image copies this module without candidate_concordance.
+    from library.candidate_concordance import METHOD as R3_METHOD
+    receipt = result.get('candidate_concordance', {})
+    return (receipt.get('method') == R3_METHOD
+            and receipt.get('mode', 'none') not in ('none', 'ambiguous', 'incomplete'))
 
-    Direct evidence requires asset_bound=True or per-field provenance scope=asset.
-    Parent bundle/capture labels alone cannot identify a member. Candidate values
-    are source assertions, not operator decisions or exact-edition confirmations.
+
+def evaluate_work(evidence: dict[str, Any], candidates: list[dict[str, Any]], *,
+                  family_lookup: FamilyLookup | None = None) -> dict[str, Any]:
+    """Try R3 candidate concordance, then exact concordance if R3 abstains.
+
+    R3 uses asset labels and embedded ComicInfo. Parsed fields cannot veto it.
+    Exact concordance uses its own evidence and vetoes. Keep the R3 receipt
+    for both routes. Never choose by score.
     """
+    from library.candidate_concordance import decide
+    decision = decide(evidence, candidates, family_lookup=family_lookup)
+    if decision.candidate is not None:
+        chosen = decision.candidate
+        result: dict[str, Any] = {
+            'status': 'identified', 'reason': decision.reason, 'work': {}, 'field_conflicts': {},
+            'concordant_candidates': [deepcopy(chosen)], 'candidates': deepcopy(candidates),
+            'candidate_concordance': decision.receipt(),
+            'provenance': [{k: deepcopy(c[k]) for k in ('source', 'edition_ref', 'url', 'field_provenance')
+                            if k in c} for c in decision.editions]}
+        for field in WORK_FIELDS:
+            values = [c[field] for c in decision.editions if known_work_value(field, c.get(field))]
+            if field == 'series' and known_work_value(field, chosen.get(field)):
+                result['work'][field] = deepcopy(chosen[field])
+            elif len({normalized(v, field) for v in values}) > 1:
+                result['field_conflicts'][field] = [
+                    {'value': deepcopy(c.get(field)), 'url': c.get('url'), 'source': c.get('source')}
+                    for c in decision.editions if present(c.get(field))]
+            elif values and len(values) == len(decision.editions):
+                result['work'][field] = deepcopy(values[0])
+        return result
+    result = _evaluate_exact_work(evidence, candidates)
+    if decision.competing_catalogue_title and result['status'] == 'no_match':
+        result.update(status='review', reason=decision.reason)
+    result['candidate_concordance'] = decision.receipt()
+    return result
+
+
+def _evaluate_exact_work(evidence: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {'status': 'review', 'reason': 'No informative asset-bound evidence',
         'work': {}, 'field_conflicts': {}, 'provenance': [],
         'candidates': deepcopy(candidates)}

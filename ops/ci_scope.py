@@ -45,9 +45,11 @@ def scope(paths: list[str] | None) -> dict[str, bool]:
         return dict.fromkeys(SLICES, True)
     selected = dict.fromkeys(SLICES, False)
     for path in paths:
-        if path in ("library/__init__.py", "library/bdnex_protocol.py"):
+        if path in ("library/__init__.py", "library/bdnex_protocol.py", "library/work_identity.py"):
             selected["bdnex"] = True
-        if path == "Dockerfile":
+        if path in ("tests/probes/worker.py", "tests/probes/library.py") or path.startswith("tests/test_library_cover_"):
+            selected["worker"] = selected["library"] = True
+        elif path == "Dockerfile":
             selected["worker"] = True
         elif path == "Dockerfile.library" or path.startswith("library/"):
             selected["library"] = True

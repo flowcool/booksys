@@ -7,12 +7,15 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from urllib.parse import urlsplit
 
-from library.bdnex_protocol import PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates, valid_match_counts
+from library.bdnex_protocol import (
+    FAMILY_PATH, FAMILY_SCHEMA, FamilyLookup, PIN, MAX_BODY, MAX_RESPONSE, digest, validate_request, validate_candidates,
+    validate_decision, validate_family_request, validate_family_result, valid_match_counts,
+)
 from library.names import parse_name
 
 
@@ -29,9 +32,45 @@ class BDneXClient:
             raise ValueError('Invalid private BDneX configuration')
         self.endpoint, self.token, self.timeout = endpoint.rstrip('/'), token, timeout
         self.retry_at = 0.0
+        self.family_retry_at = 0.0
 
-    def match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
-        result = self._match(asset, inputs)
+    def _post(self, path: str, body: bytes) -> Any:
+        req = Request(self.endpoint + path, data=body,
+                      headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
+        # Private credentials must never follow redirects or ambient proxy settings.
+        with build_opener(ProxyHandler({}), NoRedirect()).open(req, timeout=self.timeout) as response:
+            raw = response.read(MAX_RESPONSE + 1)
+        if len(raw) > MAX_RESPONSE:
+            raise ValueError('BDneX response too large')
+        return json.loads(raw)
+
+    def lookup_family(self, series: str, number: str) -> dict[str, Any] | None:
+        if time.monotonic() < max(self.retry_at, self.family_retry_at):
+            return None
+        request = {'schema': FAMILY_SCHEMA, 'series': series, 'number': number}
+        try:
+            query = validate_family_request(request)
+        except ValueError:
+            return None
+        try:
+            result = self._post(FAMILY_PATH, json.dumps(request).encode())
+            validate_family_result(result, query)
+            if (type(result.get('schema')) is not int or result['schema'] != FAMILY_SCHEMA
+                    or result.get('request') != digest(request) or result.get('engine') != PIN):
+                raise ValueError('Invalid BDneX family binding')
+        except HTTPError as exc:
+            exc.close()
+            if exc.code == 404:
+                # A worker can start before the service image gains this endpoint.
+                self.family_retry_at = time.monotonic() + 60
+            return None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return {'index': result['index'], 'albums': result['albums']}
+
+    def match(self, asset: str, inputs: list[dict[str, Any]], *,
+              identity: dict[str, list[str]] | None = None) -> dict[str, Any]:
+        result = self._match(asset, inputs, identity)
         if result['status'] != 'ok' or result['candidates']:
             return result
 
@@ -50,7 +89,7 @@ class BDneXClient:
         if not variants:
             return result
 
-        fallback = self._match(asset, variants)
+        fallback = self._match(asset, variants, identity)
         receipt = {'original_request': result['request']}
         if 'match_counts' in result:
             receipt['original_match_counts'] = result['match_counts']
@@ -61,29 +100,28 @@ class BDneXClient:
         remaining = max(self.retry_at - time.monotonic(), 0)
         return datetime.fromtimestamp(time.time() + remaining, timezone.utc)
 
-    def _match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    def _match(self, asset: str, inputs: list[dict[str, Any]],
+               identity: dict[str, list[str]] | None) -> dict[str, Any]:
         if time.monotonic() < self.retry_at:
             return {'status': 'unavailable', 'reason': 'BDneX cooldown', 'dependency': 'bdnex'}
         try:
-            request = validate_request({'schema': 1, 'asset': asset, 'inputs': inputs})
+            request = {'schema': 1, 'asset': asset, 'inputs': inputs}
+            if identity is not None:
+                request['identity'] = identity
+            validate_request(request)
             body = json.dumps(request).encode()
             if len(body) > MAX_BODY:
                 raise ValueError('BDneX request too large')
         except ValueError:
             return {'status': 'unavailable', 'reason': 'BDneX request invalid', 'dependency': 'bdnex'}
         try:
-            req = Request(self.endpoint + '/v1/match', data=body,
-                headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
-            # Private credentials must never follow redirects or ambient proxy settings.
-            with build_opener(ProxyHandler({}), NoRedirect()).open(req, timeout=self.timeout) as response:
-                raw = response.read(MAX_RESPONSE + 1)
-            if len(raw) > MAX_RESPONSE:
-                raise ValueError('BDneX response too large')
-            result = json.loads(raw)
+            result = self._post('/v1/match', body)
             if (result.get('schema') != 1 or result.get('asset') != asset or result.get('request') != digest(request)
                     or result.get('engine') != PIN or not re.fullmatch('[a-f0-9]{64}', str(result.get('index', '')))):
                 raise ValueError('Invalid BDneX binding')
             rows = validate_candidates(result['candidates'])
+            if 'decision' in result:
+                validate_decision(result['decision'], rows)
             if not valid_match_counts(result.get('match_counts'), len(rows)):
                 result.pop('match_counts', None)
             for row in rows:
@@ -108,6 +146,32 @@ def configured_client() -> BDneXClient | None:
     # Misconfiguration is a deployment error, never silently disable an enabled provider.
     token = Path(os.environ['BOOKSYS_BDNEX_TOKEN_FILE']).read_text().strip()
     return BDneXClient(endpoint, token)
+
+
+def family_lookup_for(providers: Any) -> FamilyLookup | None:
+    return cast(FamilyLookup | None, getattr(getattr(providers, 'bdnex', None), 'lookup_family', None))
+
+
+def identity_for(state: dict[str, Any], key: str) -> dict[str, list[str]]:
+    from library.asset_evidence import bind_evidence, file_years
+    from library.work_identity import asset_assertions, normalized
+
+    fields: dict[str, set[str]] = {}
+    evidence = bind_evidence(state, key)
+    for assertion in asset_assertions(evidence):
+        field = assertion['field']
+        # Resolve a possible filename creator suffix after reading the exact
+        # album. The complete caption still applies during worker validation.
+        if field == 'title' and assertion.get('title_suffix_hint'):
+            continue
+        value = str(normalized(assertion['value'], field)).lower()
+        if value:
+            fields.setdefault(field, set()).add(value if len(value) <= 512 else '#' + digest(value))
+    years = file_years(evidence)
+    if years:
+        fields['year'] = years
+    # Two distinct values suffice to report conflicting file evidence.
+    return {field: sorted(choices)[:2] for field, choices in fields.items()}
 
 
 def inputs_for(state: dict[str, Any], key: str) -> list[dict[str, Any]]:

@@ -232,7 +232,7 @@ def discover(source: Any, query: str, *, max_series: int = 3) -> DiscoveryResult
     """Public index adapter. Every bound is visible; truncation prevents auto-choice.
 
     Source has get(url)->ProviderPage. It owns robots, cache and request budget.
-    No arbitrary URLs, AJAX, image fetches, first result or cover ranking is used.
+    Discovery uses no arbitrary URLs, AJAX, image fetches, first-result selection or cover ranking. A separate post-selection confirmation step may fetch one qualified album cover under spec 0003. Discovery itself remains text-only.
     """
     if not 1 <= max_series <= 3:
         raise LibraryError('Discovery series bound must be between one and three')

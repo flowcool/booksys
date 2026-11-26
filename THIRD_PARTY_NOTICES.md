@@ -46,3 +46,25 @@ the additional native-library bundle from the psycopg-binary wheel.
 The worker UnRAR and Poppler runtime dependency notices are retained in the
 [worker decode notice manifest](third_party/native/worker-decode-manifest.json).
 The manifest covers the exact added packages and their distribution sources.
+
+## Cover confirmation
+
+The SIFT matching function in `library/cover_sift.py` is adapted from BDneX
+0.10.0, commit `9de29a73859a527a0c8ab4b0173d2f1e0e1e6f33`,
+`bdnex/importer/covers.py`, by Laurent Besnard. The upstream distributed
+[LICENSE](third_party/bdnex-cover-LICENSE.txt) is CC0-1.0. Its package metadata
+also declares MIT. Preserve this provenance distinction. Booksys retains the
+600-pixel height, grayscale, Lowe ratio 0.6, FLANN and scoring formula. It adds
+input/resource bounds, deterministic RNG and receipts. BDneX is not installed
+in the Python 3.14 worker.
+
+OpenCV Python headless 4.13.0.92 includes MIT packaging terms, Apache-2.0
+OpenCV terms and bundled native component terms. NumPy 2.4.6 includes BSD-3-Clause
+and bundled native component terms, including OpenBLAS and runtime libraries.
+The exact wheel notices are retained under [cover notices](third_party/native/cover/manifest.json).
+They remain installed in the worker and library images. The locked amd64
+wheels are `cp37-abi3-manylinux_2_28_x86_64` (OpenCV, compatible with CPython 3.14)
+and `cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64` (NumPy).
+`uv.lock` records their hashes. Image builds reject source builds for both.
+Release qualification still requires the exact built inventory, bundled-native
+source review, SBOM and vulnerability gates. This local change is not release proof.

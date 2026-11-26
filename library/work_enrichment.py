@@ -1,15 +1,19 @@
 """Reference discovery, exact asset binding and work-level metadata orchestration."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from library.asset_evidence import bind_evidence
+from library.bdnex import family_lookup_for
+from library.cover_confirmation import CoverSource, finalize
 from library.primitives import LibraryError, now
 from library.french_metadata import BASE, discover, parse_album_editions
 from library.french_source import ProviderPage, robots_allowed
 from library.names import METHOD as NAME_METHOD
 from library.work_identity import (
-    NUMBERED_SERIES_ALIASES, asset_assertions, evaluate_work, classify_work, informative, normalized,
+    NUMBERED_SERIES_ALIASES, WORK_FIELDS, asset_assertions, evaluate_work, classify_work,
+    informative, known_work_value, normalized, present, uses_candidate_concordance,
 )
 
 COMPETING_NUMBERED_SERIES = {'garry': frozenset({
@@ -92,22 +96,46 @@ def exact_bdnex_reference(evidence: dict[str, Any], candidates: list[dict[str, A
     return [row], file_series
 
 
-def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any]) -> None:
+def qualify_filename_titles(evidence: dict[str, Any], reference: dict[str, Any],
+                            *, allow_bare_creator: bool = True) -> None:
     title = reference.get('title') or ''
-    if not informative(title):
-        return
     creators = {normalized(name) for field in ('writers', 'artists') for name in reference.get(field, [])}
     for entry in evidence['provenance'].get('title', []):
-        if (entry.get('method') == NAME_METHOD and normalized(entry['value']) in creators
+        if entry.get('method') != NAME_METHOD:
+            continue
+        hint = entry.get('title_suffix_hint')
+        if hint:
+            parts = {normalized(name) for name in re.split(r'[-,]', hint)}
+            if (informative(title)
+                    and normalized(entry['title_without_suffix'], 'title') == normalized(title, 'title')
+                    and (normalized(hint) in creators or parts <= creators)):
+                entry.update(value=entry['title_without_suffix'], raw_value=entry['value'],
+                             creator_reference=reference['url'])
+        elif (allow_bare_creator and normalized(entry['value']) in creators
                 and normalized(entry['value'], 'title') != normalized(title, 'title')):
             entry.update(scope='discovery', creator_reference=reference['url'])
 
 
+def bind_cover(rows: list[dict[str, Any]], selected: dict[str, Any]) -> None:
+    """Only the checked canonical album owns its page cover, never edition cards."""
+    canonical = rows[0]
+    if (canonical.get('edition_ref') == selected.get('edition_ref')
+            and canonical.get('provenance', {}).get('canonical_album_ref') == selected.get('edition_ref')
+            and canonical.get('url') == selected.get('url') and canonical.get('cover_url')):
+        canonical['cover_binding'] = {'album_id': selected['edition_ref'], 'album_url': selected['url'],
+                                      'cover_url': canonical['cover_url']}
+    canonical['candidate_lineage'] = selected.get('candidate_lineage', {
+        key: selected.get(key) for key in ('source', 'edition_ref', 'url', 'provenance')})
+
+
 def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 extra: list[dict[str, Any]] | None = None, *, discovery: bool = True,
-                hydrate: bool = False, exact_page_attempts: list[dict[str, str]] | None = None) -> None:
+                hydrate: bool = False, exact_page_attempts: list[dict[str, str]] | None = None,
+                bdnex_decision: dict[str, Any] | None = None,
+                cover_source: CoverSource | None = None) -> None:
     asset = state['assets'][key]
     evidence = bind_evidence(state, key)
+    family_lookup = family_lookup_for(providers)
     queries: list[str] = []
     # Structured fields are preferred. Unstructured labels only locate references.
     for field in ('series', 'title'):
@@ -135,7 +163,8 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     # unknown and records the existing provider retry event.
     candidates.extend(extra or [])
     if hydrate:
-        local_result = evaluate_work(printed_concordance(evidence, asset, candidates), candidates)
+        local_result = evaluate_work(printed_concordance(evidence, asset, candidates), candidates,
+                                     family_lookup=family_lookup)
         early_reference = local_result['status'] == 'no_match'
         matching: list[dict[str, Any]] = []
         file_series_alias = None
@@ -161,13 +190,25 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                 continue
             page_attempt['status'] = 'parsed'
             canonical = page_candidates[0]
+            from library.candidate_concordance import words as candidate_words
+            if uses_candidate_concordance(local_result) and (
+                    canonical.get('edition_ref') != row.get('edition_ref')
+                    or numbered_work(canonical)[1] != numbered_work(row)[1]
+                    or candidate_words(canonical.get('series')) != candidate_words(row.get('series'))
+                    or re.findall(r'\d+', str(canonical.get('series'))) != re.findall(r'\d+', str(row.get('series')))):
+                page_attempt['status'] = 'reference_mismatch'
+                continue
+            bind_cover(page_candidates, row)
             if early_reference:
-                if (canonical['edition_ref'] != row['edition_ref']
-                        or numbered_work(canonical) != numbered_work(row)
+                reference_series, reference_number = numbered_work(row)
+                canonical_series, canonical_number = numbered_work(canonical)
+                page_matches_file_series = canonical_series == file_series_alias
+                if (canonical['edition_ref'] != row['edition_ref'] or canonical_number != reference_number
+                        or (canonical_series != reference_series and not page_matches_file_series)
                         or (file_series_alias and canonical['provenance'].get('canonical_album_ref') != row['edition_ref'])):
                     page_attempt['status'] = 'reference_mismatch'
                     continue
-                if file_series_alias:
+                if file_series_alias and not page_matches_file_series:
                     for candidate in page_candidates:
                         candidate['field_provenance']['series'] = {
                             **candidate['field_provenance']['series'], 'file_series_alias': file_series_alias,
@@ -183,7 +224,8 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
             attempts.append({'query': query, 'status': found.status, 'reason': found.reason,
                              'truncated': found.truncated, 'retrieved_at': now()})
             rows = [row.to_match_candidate() for row in found.candidates]
-            preliminary = evaluate_work(printed_concordance(evidence, asset, rows), rows)
+            preliminary = evaluate_work(printed_concordance(evidence, asset, rows), rows,
+                                        family_lookup=family_lookup)
             matching = preliminary.get('concordant_candidates', [])
             # Series listings omit creators. OCR may select complete title
             # phrases for bounded page retrieval; final title+creator proof below
@@ -203,7 +245,9 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
                     attempts.append({'url': row['url'], 'status': response.status, 'reason': response.reason})
                     continue
                 editions = parse_album_editions(response.body, row['url'], response.retrieved_at)
-                candidates.extend(item.to_match_candidate() for item in editions)
+                page_rows = [item.to_match_candidate() for item in editions]
+                bind_cover(page_rows, row)
+                candidates.extend(page_rows)
             truncated = truncated or found.truncated
         except LibraryError as exc:
             attempts.append({'status': 'unexpected_response', 'reason': str(exc)})
@@ -211,10 +255,12 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     candidates = list({(row.get('source'), row.get('edition_ref')): row for row in candidates}.values())
     evidence = printed_concordance(evidence, asset, candidates)
     evidence['discovery_truncated'] = truncated
-    result = evaluate_work(evidence, candidates)
+    result = evaluate_work(evidence, candidates, family_lookup=family_lookup)
     result['attempts'] = attempts
     result['exact_page_attempts'] = exact_page_attempts
     result['evidence'] = evidence
+    if bdnex_decision is not None:
+        result['bdnex_decision'] = bdnex_decision
     result['updated_at'] = now()
     if not candidates and not evidence.get('identity_conflicts'):
         statuses = {a['status'] for a in attempts}
@@ -222,6 +268,22 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
     if any(event.get('reason') == 'Request budget exhausted'
            for event in getattr(providers, 'events', [])[event_start:]):
         result['source_status'] = 'budget_exhausted'
+    save_work_result(asset, result, providers, cover_source)
+
+
+def save_work_result(asset: dict[str, Any], result: dict[str, Any], providers: Any = None,
+                     cover_source: CoverSource | None = None) -> None:
+    finalize(asset, result, providers, cover_source)
+    previous = asset.get('work_result', {})
+    prior_receipt = previous.get('evidence', {}).get('cover_confirmation')
+    if (result['status'] != 'identified' and prior_receipt
+            and prior_receipt.get('result') == 'review'
+            and 'cover_confirmation' not in result.get('evidence', {})):
+        result.update(status='review', reason=previous['reason'],
+                      reason_code=previous.get('reason_code', 'cover_confirmation_unavailable'), work={})
+        result.setdefault('evidence', {})['cover_confirmation'] = prior_receipt
+        result['candidates'] = list({(row.get('source'), row.get('edition_ref')): row
+            for row in [*previous.get('candidates', []), *result.get('candidates', [])]}.values())
     if result['status'] == 'identified':
         assertions = []
         for row in result['concordant_candidates']:
@@ -234,3 +296,90 @@ def enrich_work(state: dict[str, Any], key: str, providers: Any,
         result['work'].update({k: classification[k] for k in ('family', 'genres', 'adult', 'recommended_age')})
         result['field_conflicts'].update(classification['field_conflicts'])
     asset['work_result'] = result
+
+
+def apply_bdnex_decision(state: dict[str, Any], key: str, providers: Any,
+                        response: dict[str, Any], *, cover_source: CoverSource | None = None) -> bool:
+    decision = response.get('decision', {})
+    decision_status = decision.get('status')
+    asset = state['assets'][key]
+    evidence = bind_evidence(state, key)
+    candidates = response.get('candidates', [])
+    concordant = evaluate_work(evidence, candidates, family_lookup=family_lookup_for(providers))
+    receipt = concordant['candidate_concordance']
+    r3 = uses_candidate_concordance(concordant)
+    asset_labels = any(a.get('scope') == 'asset' for a in evidence.get('provenance', {}).get('labels', []))
+    # Preserve the separate service proposal path when R3 has no asset labels to check.
+    if receipt['mode'] != 'none' or (asset_labels and any(c.get('source') == 'bedetheque' for c in candidates)):
+        concordant.update(evidence=evidence, attempts=[], exact_page_attempts=[], updated_at=now(),
+                          bdnex_decision=decision)
+        if concordant['status'] == 'no_match':
+            save_work_result(asset, concordant, providers, cover_source)
+            return False  # Keep discovery available; never revive a rejected service proposal.
+        if concordant['status'] == 'identified' and (not r3 or receipt['needs_cover']):
+            enrich_work(state, key, providers, candidates, discovery=False, hydrate=True,
+                        bdnex_decision=decision, cover_source=cover_source)
+        else:
+            save_work_result(asset, concordant, providers, cover_source)
+        return True
+    if decision_status not in ('selected', 'proposed', 'review') or decision.get('reason') == 'insufficient':
+        return False
+    result: dict[str, Any] = {
+        'status': 'review', 'reason': 'BDneX found no decisive reference', 'work': {},
+        'field_conflicts': {}, 'provenance': [], 'candidates': candidates, 'concordant_candidates': [],
+        'evidence': evidence, 'attempts': [], 'exact_page_attempts': [], 'updated_at': now(),
+        'bdnex_decision': decision, 'candidate_concordance': receipt,
+    }
+    if decision_status in ('selected', 'proposed'):
+        selected = next(row for row in candidates if row['edition_ref'] == decision['edition_ref'])
+        previous = asset.get('work_result', {})
+        retained = previous.get('concordant_candidates', []) if previous.get('bdnex_decision') == decision else []
+        row = retained[0] if retained else selected
+        page = FrenchSource(providers).get(selected['url'])
+        status = page.status
+        if status == 'ok':
+            try:
+                editions = [edition.to_match_candidate() for edition in
+                            parse_album_editions(page.body, selected['url'], page.retrieved_at)]
+                canonical = editions[0]
+            except LibraryError:
+                status = 'unexpected_response'
+            else:
+                if canonical['provenance'].get('canonical_album_ref') != selected['edition_ref']:
+                    status = 'reference_mismatch'
+                else:
+                    status = 'parsed'
+                    bind_cover(editions, selected)
+                    qualify_filename_titles(evidence, canonical, allow_bare_creator=False)
+                    row = dict(selected)
+                    row.pop('cover_binding', None)
+                    if 'cover_binding' in canonical:
+                        row['cover_binding'] = canonical['cover_binding']
+                    row['candidate_lineage'] = canonical['candidate_lineage']
+                    # Keep source identity contradictions visible to the finalizer.
+                    row['canonical_identity'] = {field: canonical.get(field) for field in WORK_FIELDS}
+                    for field in WORK_FIELDS:
+                        value = canonical.get(field)
+                        if present(value) and all(
+                            normalized(edition.get(field), field) == normalized(value, field)
+                            for edition in editions
+                        ):
+                            if not present(selected.get(field)) or normalized(selected[field], field) == normalized(value, field):
+                                row[field] = value
+                                field_source = canonical.get('field_provenance', {}).get(field)
+                                if field_source:
+                                    row.setdefault('field_provenance', {})[field] = field_source
+        result['attempts'] = [{'url': selected['url'], 'status': status, 'reason': page.reason}]
+        result['exact_page_attempts'] = [{'edition_ref': selected['edition_ref'], 'status': status}]
+        if status != 'parsed':
+            # A retained pre-guard page is not current authority after a failed fetch.
+            row.pop('cover_binding', None)
+        result.update(
+            status='identified', reason=f'BDneX {decision_status} one reference', concordant_candidates=[row],
+            work={field: row[field] for field in WORK_FIELDS if known_work_value(field, row.get(field))},
+            provenance=[{'source': selected['source'], 'edition_ref': selected['edition_ref'],
+                         'url': selected['url'], 'score': selected['score'],
+                         'decision': decision['reason'], **selected.get('provenance', {})}],
+        )
+    save_work_result(asset, result, providers, cover_source)
+    return True

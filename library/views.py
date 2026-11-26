@@ -14,6 +14,7 @@ import yaml
 
 from library.catalog import Catalog
 from library.primitives import digest, now
+from library.projection import collection_identity, identification_counts
 
 
 def read_yaml(path: Path) -> dict[str, Any]:
@@ -23,7 +24,7 @@ def read_yaml(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-from library.presentation import bounded, source_url, fields, description_text, operator_reason
+from library.presentation import bounded, source_url, fields, description_text, operator_reason, reader_publication
 
 
 def build_projection(root: Path, *, state: dict[str, Any] | None = None, captured: dict[str, Any] | None = None, write_covers: bool = True) -> dict[str, Any]:
@@ -62,17 +63,21 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
         codes = sorted(printed_isbns(asset.get('printed', {}))[0])
         isbn = ', '.join(codes) or bounded(work.get('isbn') or asset.get('embedded', {}).get('ISBN'))
         admission = asset.get('admission', {})
-        classified = admission.get('status') == 'classified'
-        holding = admission.get('status') == 'holding'
+        publication, reader_reason = reader_publication(asset)
+        if reader_reason and origin.get('availability') == 'validated' and not origin.get('transfer_error'):
+            reason = reader_reason
+        collection = collection_identity(work_result)
+        series = (work_result['work']['series'] if collection in ('periodical', 'webtoon') else
+                  overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series'))
         row = {'id': oid, 'source_id': digest(origin['source']), 'title': bounded(title), 'author': bounded(overrides.get('author') or work.get('author')),
-               'isbn': isbn, 'series': bounded(overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series')),
+               'isbn': isbn, 'series': bounded(series),
                'transfer': 'finished' if origin.get('transfer_status') == 0 else 'not finished (code ' + bounded(origin.get('transfer_status', 'unknown')) + ')',
                'intake': bounded(origin['availability']),
                'retirement': bounded(origin.get('retirement', 'live')),
                'ocr': bounded(asset.get('printed', {}).get('status') or
                               (asset.get('printed_attempts') or [{}])[-1].get('status', 'not attempted')),
-               'identity': 'contested' if asset.get('contested') else 'identified' if work else 'pending' if asset else 'not attempted',
-               'publication': 'classified' if classified else 'À identifier' if holding else 'pending', 'reason': operator_reason(reason),
+               'identity': 'contested' if asset.get('contested') else collection or ('identified' if work else 'pending' if asset else 'not attempted'),
+               'publication': publication, 'reason': operator_reason(reason),
                'observed_at': bounded(origin.get('observed_at')), 'attempt_at': bounded(automation.get('updated_at')),
                'fiche': '/fiche/' + oid}
         if origin.get('retirement'):
@@ -83,7 +88,7 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
             row.update(title='Lot : ' + bounded(title), publication='not applicable', identity='not applicable', ocr='not applicable')
         elif origin.get('parent_origin'):
             row['title'] = 'Membre : ' + row['title']
-        row['status'] = 'rejected' if row['intake'] == 'rejected' else 'classified' if classified else 'À identifier' if holding else 'pending'
+        row['status'] = 'rejected' if row['intake'] == 'rejected' else publication
         rows.append(row)
         assertions = []
         for assertion in asset.get('assertions', [])[:30]:
@@ -141,8 +146,11 @@ def build_projection(root: Path, *, state: dict[str, Any] | None = None, capture
             'cycle': {key: cycle[key] for key in ('status', 'started_at', 'finished_at', 'duration_seconds',
                       'next_cycle_at', 'stage', 'stage_started_at', 'error_source', 'reason', 'backlog', 'intake_backlog', 'assets', 'origins', 'published') if key in cycle},
             'rows': rows, 'counts': {'sources': len({r['source_id'] for r in rows}), 'origins': len(rows),
+                **identification_counts(a.get('work_result', {}) for a in state['assets'].values()),
+                'webtoon_copies': sum(a.get('admission', {}).get('status') == 'webtoon' for a in state['assets'].values()),
                 'classified_assets': sum(a.get('admission', {}).get('status') == 'classified' for a in state['assets'].values()),
-                'holding_assets': sum(a.get('admission', {}).get('status') == 'holding' for a in state['assets'].values())}, 'fiches': fiches}
+                'holding_assets': sum(a.get('admission', {}).get('status') == 'holding' for a in state['assets'].values()),
+                'periodical_assets': sum(a.get('admission', {}).get('status') == 'periodical' for a in state['assets'].values())}, 'fiches': fiches}
 
 
 def fiche_html(fiche: dict[str, Any]) -> str:

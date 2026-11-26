@@ -19,6 +19,35 @@ from library.work_identity import evaluate_work
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_family_lookup_is_versioned_and_optional(self) -> None:
+        def match(request):
+            return {'index': 'a' * 64, 'candidates': []}
+
+        def lookup(query):
+            if query['number'] == '4':
+                return {'index': 'a' * 64, 'albums': [{'album_id': '123', 'series': 'Wrong Series',
+                        'number': '4', 'title': 'The Silent Island'}]}
+            return {'index': 'a' * 64, 'albums': [{'album_id': '123', 'series': 'Sky Patrol Press',
+                    'number': '3', 'title': 'The Silent Island'}]}
+
+        services = (handler('test-secret', match), handler('test-secret', match, lookup))
+        for service in services:
+            server = HTTPServer(('127.0.0.1', 0), service)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'test-secret')
+                result = client.lookup_family('Sky Patrol', '3')
+                if result is not None:
+                    self.assertEqual(result['albums'][0]['album_id'], '123')
+                self.assertEqual(result is None, service is services[0])
+                self.assertIsNone(client.lookup_family('Sky Patrol', '4'))
+                self.assertEqual(client.match('a' * 64, [{'path': 'Sky Patrol.cbz', 'embedded': {}}])['status'], 'ok')
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+
     def test_scan_prefix_fallback_uses_spare_slots_only_after_an_empty_match(self) -> None:
         hint = {'Series': 'Navy', 'Number': '149'}
         original = {'path': 'Navy/ZzNavy - 149.cbz', 'embedded': hint}
@@ -196,7 +225,58 @@ class ProtocolTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
-    def test_bookys_heading_fallback_needs_independent_file_evidence(self) -> None:
+    def test_bdnex_selection_preserves_review_when_file_series_conflicts(self) -> None:
+        from copy import deepcopy
+
+        key = 'a' * 64
+        candidate = {'source': 'bedetheque', 'edition_ref': '123',
+                     'url': 'https://www.bedetheque.com/BD-Example-English-Tome-2-123.html',
+                     'series': 'Example English', 'number': '2', 'title': 'London', 'score': 94}
+        state = {'assets': {key: {'sha256': key, 'origins': ['o'],
+                                 'embedded': {'Series': 'Example', 'Number': '2', 'Title': 'London'}}},
+                 'origins': {'o': {'sha256': key, 'path': 'Example - T02 - London.cbz'}}}
+        decision = {'status': 'selected', 'edition_ref': '123', 'reason': 'strong'}
+
+        class Snapshot:
+            def result_set(self, *args: Any) -> dict[str, Any]:
+                return deepcopy(state)
+
+        class Local:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                choice = ({'status': 'review', 'reason': 'conflicting_file_evidence'}
+                          if kwargs['identity'].get('number') == ['2', '3'] else decision)
+                return {'status': 'ok', 'candidates': [candidate], 'decision': choice}
+
+        class Public:
+            bdnex = Local()
+
+            def get(self, url: str) -> dict[str, Any]:
+                if url.endswith('/robots.txt'):
+                    return {'status': 'ok', 'body': 'User-agent: *\nAllow: /\n'}
+                return {'status': 'unavailable', 'http_status': 503}
+
+            def discover(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                return {}
+
+            def resolve_discovery(self, discovery: dict[str, Any]) -> list[dict[str, Any]]:
+                return []
+
+        result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
+        work = result['assets'][key]['work_result']
+        self.assertEqual(work['status'], 'no_match')
+        self.assertEqual(work['work'], {})
+        self.assertEqual(work['candidate_concordance']['mode'], 'none')
+        self.assertEqual(work['candidates'][0]['edition_ref'], '123')
+
+        state['assets'][key] = result['assets'][key]
+        state['assets'][key]['origins'].append('new')
+        state['origins']['new'] = {'sha256': key, 'path': 'Example - T03 - London.cbz'}
+        updated = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
+        self.assertEqual(updated['assets'][key]['work_result']['status'], 'review')
+        self.assertEqual(updated['assets'][key]['work_result']['reason'], 'Contradictory asset identity evidence')
+
+
+    def test_bookys_heading_fallback_uses_only_asset_bound_labels(self) -> None:
         from copy import deepcopy
 
         key = 'a'*64
@@ -206,11 +286,12 @@ class IdentityTests(unittest.TestCase):
                      'series': 'Nains', 'number': '1', 'score': 100}
         heading = 'Nains - Tome 1 - Redwin de la Forge'
 
-        for embedded, parent, page_title, expected_paths, identified in (
-            ({'Title': candidate['title']}, None, heading, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
-            ({}, None, heading, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], False),
-            ({}, 'bundle', heading, ['scan.cbz'], False),
-            ({}, None, 'Nains - Tomes 1-3', ['scan.cbz'], False),
+        for embedded, parent, page_title, page_available, expected_paths, identified in (
+            ({'Title': candidate['title']}, None, heading, True, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
+            ({'Title': candidate['title']}, None, heading, False, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
+            ({}, None, heading, True, ['scan.cbz', 'Nains - T01 - Redwin de la Forge.cbz'], True),
+            ({}, 'bundle', heading, True, ['scan.cbz'], False),
+            ({}, None, 'Nains - Tomes 1-3', True, ['scan.cbz'], False),
         ):
             with self.subTest(embedded=embedded, parent=parent, page_title=page_title):
                 state = {'assets': {key: {'sha256': key, 'origins': ['o'], 'embedded': embedded,
@@ -226,7 +307,7 @@ class IdentityTests(unittest.TestCase):
                     def __init__(self) -> None:
                         self.paths: list[str] = []
 
-                    def match(self, asset: str, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+                    def match(self, asset: str, inputs: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
                         self.paths.extend(item['path'] for item in inputs)
                         return {'status': 'ok', 'candidates': [candidate] if 'T01' in self.paths[-1] else []}
 
@@ -236,7 +317,12 @@ class IdentityTests(unittest.TestCase):
                         self.events: list[dict[str, Any]] = []
 
                     def get(self, url: str) -> dict[str, Any]:
-                        return {'status': 'unavailable'}
+                        if not page_available:
+                            return {'status': 'unavailable'}
+                        return {'status': 'ok', 'body': 'User-agent: *\nAllow: /' if url.endswith('robots.txt') else (
+                            '<link rel="canonical" href="https://www.bedetheque.com/BD-Nains-123.html">'
+                            '<h1><a>Nains</a></h1><meta itemprop="name" content="Nains - Redwin de la Forge">'
+                            '<meta itemprop="alternativeheadline" content="Tome 1">')}
 
                     def discover(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                         return {}
@@ -250,7 +336,7 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(result['assets'][key]['work_result']['status'] == 'identified', identified)
 
     def numbered_alias_result(self, filename: str, candidates: list[dict[str, Any]],
-                              html: str | None) -> dict[str, Any]:
+                              html: str | None, *, insufficient: bool = False) -> dict[str, Any]:
         from copy import deepcopy
 
         key = 'a'*64
@@ -262,8 +348,11 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
-                return {'status': 'ok', 'candidates': candidates}
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+                response: dict[str, Any] = {'status': 'ok', 'candidates': candidates}
+                if insufficient:
+                    response['decision'] = {'status': 'review', 'reason': 'insufficient'}
+                return response
 
         class Public:
             bdnex = Local()
@@ -298,12 +387,66 @@ class IdentityTests(unittest.TestCase):
                         f'<meta itemprop="alternativeheadline" content="Tome {number}">'
                         '<meta itemprop="genre" content="Franco-Belge"><span itemprop="publisher">Imperia</span>')
                 work = self.numbered_alias_result(f'{alias} - T{number}.cbz', [row], html)
-                self.assertEqual(work['status'], 'identified')
-                self.assertEqual(work['work']['series'], canonical)
-                self.assertEqual(work['work']['title'], title)
-                self.assertEqual(work['work']['publisher'], 'Imperia')
+                self.assertEqual(work['status'], 'review')
+                self.assertEqual(work['work'], {})
+                self.assertEqual(work['candidate_concordance']['mode'], 'none')
+                self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
+                self.assertEqual(work['concordant_candidates'][0]['series'], canonical)
+                self.assertEqual(work['concordant_candidates'][0]['title'], title)
                 self.assertEqual(work['evidence']['provenance']['series'][0]['value'], alias)
                 self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
+
+    def test_insufficient_series_alias_reads_only_one_exact_numbered_reference(self) -> None:
+        from html import escape
+
+        canonical = 'Hopalong Cassidy puis Cassidy (Impéria)'
+        title = 'La cité perdue'
+        ref = '292428'
+        url = f'https://www.bedetheque.com/album/index/i/{ref}'
+        candidate = {'source': 'bedetheque', 'edition_ref': ref, 'url': url, 'title': title,
+                     'series': canonical, 'number': '82', 'score': 87,
+                     'provenance': {'method': 'bdnex-sitemap-1'}}
+        html = (f'<link rel="canonical" href="{url}"><h1><a>{escape(canonical)}</a></h1>'
+                f'<meta itemprop="name" content="{escape(canonical + " - " + title)}">'
+                '<meta itemprop="alternativeheadline" content="Tome 82">')
+        work = self.numbered_alias_result('Cassidy - T82.cbz', [candidate], html, insufficient=True)
+        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
+
+        other = {**candidate, 'edition_ref': '999', 'url': 'https://www.bedetheque.com/album/index/i/999'}
+        for filename, choices in (
+                ('Cassidy - T83.cbz', [candidate]),
+                ('Other Cassidy - T82.cbz', [candidate]),
+                ('Cassidy - T82.cbz', [candidate, other])):
+            with self.subTest(filename=filename, candidates=len(choices)):
+                work = self.numbered_alias_result(filename, choices, html, insufficient=True)
+                self.assertEqual(work['exact_page_attempts'], [])
+                self.assertEqual(work['status'], 'no_match')
+
+    def test_index_alias_can_hydrate_the_file_series_with_verified_creator_credit(self) -> None:
+        ref = '451252'
+        url = f'https://www.bedetheque.com/album/index/i/{ref}'
+        candidate = {'source': 'bedetheque', 'edition_ref': ref, 'url': url,
+                     'title': 'Tome 7', 'series': 'Witch and the Beast', 'number': '7', 'score': 87,
+                     'provenance': {'method': 'bdnex-sitemap-1'}}
+        html = (f'<link rel="canonical" href="{url}"><h1><a>The Witch and the Beast</a></h1>'
+                '<meta itemprop="name" content="The Witch and the Beast - Tome 7">'
+                '<meta itemprop="alternativeheadline" content="Tome 7">'
+                '<div class="liste-auteurs"><span><a>Satake, Kousuke</a>'
+                '<small>Scénario</small></span></div>')
+        filename = 'The Witch and the Beast - T07 - Kousuke Satake.cbz'
+        work = self.numbered_alias_result(filename, [candidate], html, insufficient=True)
+        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'parsed'}])
+        self.assertEqual(work['candidates'][0]['series'], 'The Witch and the Beast')
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['reason_code'], 'cover_canonical_cover_unavailable')
+
+        wrong = html.replace('The Witch and the Beast', 'The Other Witch')
+        work = self.numbered_alias_result(filename, [candidate], wrong, insufficient=True)
+        self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': 'reference_mismatch'}])
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['reason_code'], 'cover_page_reference_mismatch')
 
     def test_numbered_series_aliases_refuse_unverified_or_conflicting_candidates(self) -> None:
         base = 'https://www.bedetheque.com/album/index/i/'
@@ -336,7 +479,7 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(work['status'], 'no_match')
                 self.assertEqual(work['exact_page_attempts'], [{'edition_ref': ref, 'status': attempt}] if attempt else [])
 
-    def test_exact_page_contradiction_survives_public_discovery_fallback(self) -> None:
+    def test_r3_complete_title_identifies_without_page_hydration(self) -> None:
         from copy import deepcopy
         key = 'a'*64
         state = {'assets': {key: {'sha256': key, 'origins': ['o'], 'embedded': {'Title': 'Old title'}}},
@@ -347,7 +490,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 return {'status': 'ok', 'candidates': [{'source': 'bedetheque', 'edition_ref': '123',
                     'url': 'https://www.bedetheque.com/BD-Old-title-123.html', 'title': 'Old title', 'score': 100}]}
 
@@ -367,12 +510,11 @@ class IdentityTests(unittest.TestCase):
                 return []
 
         result = prepare_enrichment(Snapshot(), key, Public(), [])  # type: ignore[arg-type]
-        self.assertNotEqual(result['assets'][key]['work_result']['status'], 'identified')
+        self.assertEqual(result['assets'][key]['work_result']['status'], 'identified')
         work = result['assets'][key]['work_result']
-        self.assertEqual(work['candidates'][0]['title'], 'New title')
-        self.assertEqual(work['exact_page_attempts'], [{
-            'edition_ref': '123', 'status': 'parsed',
-        }])
+        self.assertEqual(work['work']['title'], 'Old title')
+        self.assertEqual(work['candidate_concordance']['mode'], 'cov')
+        self.assertEqual(work['exact_page_attempts'], [])
 
     def test_scores_and_wrong_embedded_web_do_not_override_asset_identity(self) -> None:
         evidence = {'asset_bound': True, 'series': 'Nains', 'number': '1'}
@@ -400,7 +542,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 raise AssertionError('Identified assets are excluded from local replay')
 
         class Offline:
@@ -420,7 +562,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 return {'status': 'unavailable', 'dependency': 'bdnex', 'reason': 'Offline'}
 
         class Public:
@@ -457,7 +599,7 @@ class IdentityTests(unittest.TestCase):
                 return deepcopy(state)
 
         class Local:
-            def match(self, *args: Any) -> dict[str, Any]:
+            def match(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
                 return {'status': 'ok', 'candidates': [{'source': 'bedetheque', 'edition_ref': '245127',
                     'url': 'https://www.bedetheque.com/BD-Nains-Tome-1-Redwin-de-la-Forge-245127.html',
                     'title': 'Redwin de la Forge', 'series': 'Nains', 'number': '1', 'score': 89}]}
@@ -475,7 +617,7 @@ class IdentityTests(unittest.TestCase):
 
         result = prepare_enrichment(Snapshot(), key, Offline(), [])  # type: ignore[arg-type]
         work = result['assets'][key]['work_result']
-        self.assertEqual(work['status'], 'identified')
-        self.assertIsNone(work['work'].get('language'))
-        self.assertIsNone(work['work']['family'])
+        self.assertEqual(work['status'], 'review')
+        self.assertEqual(work['work'], {})
+        self.assertEqual(work['reason_code'], 'cover_page_unavailable')
         self.assertEqual(work['concordant_candidates'][0]['score'], 89)

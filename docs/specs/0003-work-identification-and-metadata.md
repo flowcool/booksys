@@ -21,9 +21,30 @@ The running implementation is not evidence that this accepted change is delivere
 2. Several edition records may describe one album. Retain their common supported
    information and continue. Keep edition-specific differences unknown. Do not
    combine conflicting records into an invented edition.
-3. Classify automatically when file evidence agrees with a reference record.
-   Keep ambiguous cases for review. Retain candidates and the reason for doubt.
-   A first search result or highest score alone is not a sufficient decision.
+3. Identify one album when asset labels contain every informative series and title
+   word of a Bedetheque candidate and its number agrees. The file's own Bedetheque
+   `Web` can identify that candidate when the numbers agree. A number-first label
+   can prove an informative title of at least two words and its number.
+   Parsed filename, OCR and captured fields can support a candidate. They cannot
+   veto a candidate that meets these rules. Edition variants of one work can
+   share a decision. When R3 finds no candidate, a label series that is a
+   whole-word prefix of exactly one catalogue family with the issue number may
+   route its album to cover confirmation. Map label markers `(Série N)`,
+   `Série N` and `- Série N -` to the catalogue ordinal `1re serie` or
+   `Ne serie`. An unmarked catalogue family can represent the first series.
+   When the label has an informative title after its issue marker, require a
+   shared informative title word. Years, digits and punctuation do not count.
+   Record ambiguity when another album with the same number covers the label
+   title in the returned candidates or in the catalogue lookup.
+   Keep the case in review if exact evidence supplies no match.
+   If R3 finds no candidate, finds several works, or has an
+   incomplete candidate set, apply the existing exact concordance rules.
+   Accept one work when exact evidence proves it. Keep the exact proof and
+   the R3 receipt. Never choose by score.
+   A contradictory number blocks. An informative label title after the issue
+   marker blocks a candidate title with no shared word. A valid own `Web` can
+   explain a noisy title. Record the mode and matched words with method
+   `candidate-concordance-r3-v1`. Keep accepted identities in later cycles.
 4. Start with existing metadata, filename and captured source information.
    Reuse valid prior inspection and metadata evidence. A second upstream source is not mandatory for
    work-level identification; an unresolved contradiction still prevents it.
@@ -45,10 +66,60 @@ The running implementation is not evidence that this accepted change is delivere
 10. Convert technically valid unidentified comics into CBZ in the holding area
     labelled “À identifier”. Keep them available outside the classified collection.
     Keep identification and classification status separate from technical validity.
-11. Retry unresolved identification weekly. Retry sooner after a method improvement
-    or useful new evidence. Reuse inspection and extraction results when their
-    inputs and method remain valid. A temporary provider error uses bounded retry;
-    it is not a contradiction, a missing record, or a permanent negative match.
+11. Retry unresolved identification weekly. Make the task due immediately when
+    the method changes or useful new evidence arrives. Keep accepted identities.
+    Reuse inspection and extraction results when their inputs and method remain
+    valid. A temporary provider error uses bounded retry.
+12. Periodical issues (operator decision, 23 November 2026). A closed list in data
+    names periodical titles. The list includes Fluide Glacial, Fillette, Tintin
+    Hebdoptimiste and Nouveau Tintin. On 24 November 2026, the operator added Les
+    Amis de Jacobs, Schtroumpf Fanzine, La Semaine de Charlie, Psikopat,
+    Tchô ! Le mégazine, Vécu and Pif le Mag. An asset whose file evidence
+    names one listed title and one issue number is a periodical issue. Booksys does
+    not send it to BDneX or to album discovery. A Bedetheque album record is not
+    evidence for a periodical issue, even with the same number (for example a
+    Fluide Glacial recueil). The title and the issue number come from file evidence
+    with their provenance. The status is "periodical, named from file". It is
+    separate from "identified" and from "À identifier". The CBZ goes to a separate
+    `Périodiques` area, then title and issue. ComicInfo holds only `Series` and
+    `Number` from file evidence. Two titles or two issue numbers keep the asset in
+    review. Removal of a title from the list returns its assets to the normal
+    identification queue. A later periodical source needs a new decision.
+13. WEBTOONSVF chapters (operator decision, 25 November 2026). Apply this rule
+    only when all origins of an asset are documents from Telegram channel
+    `1288796629`. Use the `WEBTOONS_LISTS` index title from the manifest for
+    `Series`. Keep its display form after normalizing Unicode and spaces.
+    Read one chapter number from `Chapitre <number>` or a trailing number in
+    the original filename. Use `webtoon` when the origins agree on both fields.
+    Send missing or conflicting fields to review. Do not guess the series from
+    the filename or use BDneX. Report these chapters and their reviews apart
+    from the identification yield. Publish grouped chapters in CBZ under
+    `webtoon/<series>/<chapter>/`.
+    Booksys searches MangaUpdates once per normalized index title. Accept one
+    exact Manhwa title or associated title in the returned results. Ignore
+    case, accents and punctuation in this comparison. If there is no unique
+    match, keep the top candidates for operator review. Store the series
+    reference in keyed YAML. The operator can accept or reject a candidate.
+    An accepted reference adds `AlternateSeries`, `Web`, `Manga` and available
+    `Writer` and `Penciller` credits. The series reference does not establish
+    an album, edition or chapter identity.
+14. Dated series (operator decision, 23 November 2026). A Bedetheque series label
+    can hold a year, for example "Ajax 1e Série SFPI 1964". The file has no year. In
+    the whole numbered index, only this dated series matches the file series and
+    issue number. Then this one album may be read as a proposal. Identity requires
+    cover confirmation at the calibrated threshold. The title, `Web` and creator
+    exemptions do not apply to this case. A file year that differs from the series
+    year keeps the asset in review. Two or more dated series with this issue number
+    also keep it in review.
+15. Accept a finished ZIP or RAR download with the pages of one volume. Use
+    the CBZ or CBR reader for the corresponding format. It checks page integrity
+    and records the natural page order. It accepts JPEG, PNG, WebP and GIF pages
+    and standard ancillary files. These include `ComicInfo.xml`, small `.txt`
+    and `.nfo` files, one thumbnail `.db` and `.picasa.ini`. Keep multiple page
+    groups pending for review. One volume can contain contiguous numbered
+    chapter folders. Do not split volumes. Keep the source and publish a CBZ copy.
+    Bundles of complete PDF, CBZ and CBR files use the bundle rules. Nested containers
+    and misleading suffixes remain subject to the existing checks.
 
 ## Metadata and provenance
 
@@ -66,6 +137,29 @@ Keep a readable fiche and the central machine-readable reference. Write supporte
 ComicInfo fields into each CBZ. Preserve ISBN centrally even if a chosen codec
 cannot represent it. Verify the codec/schema pair before adding GTIN or changing
 ComicInfo version. Komga's future import behaviour must be tested separately.
+
+An automatic Bedetheque identification with series and number alone requires
+cover confirmation. A generic candidate title supplies no title proof. A series
+year absent from the file also requires cover confirmation, as decision 14 states.
+Pass a cover score of 40 or higher. Pass a score from 20 up to 40 only if the
+proposed album is the sole work with that number in the full BDneX index across
+families whose normalized names equal the label series or start with it at a
+word boundary. Count editions with the same number and title as one work.
+Apply the same title checks as for the prefix route before using threshold 20.
+Use threshold 40 when the family lookup is unavailable. A recorded cover score
+below 10 for this asset and album blocks identification, including a title or
+Web exemption. Apply R3 before parsed-field
+conflicts and service score decisions in all enrichment and discovery paths.
+If exact concordance identifies a work, use its existing title, `Web`, creator
+and cover checks. An R3 abstention grants no cover exemption.
+Compare the first validated page with the selected album cover. Covers cannot
+select or rank candidates or establish an edition. Record both image digests,
+method, threshold and result. For a catalogue decision, also record the lookup
+method and version, matched families and number of works. Mark identifications
+made through the prefix route or reduced threshold for targeted requeue.
+A missing or failed cover check leaves the proposal
+in review. Keep the existing cache, robots policy, request budget and sequential
+pacing. Do not search alternate covers.
 
 ## Reuse boundaries
 
@@ -115,6 +209,10 @@ backup or production preparation is required for this lab.
   not cause a busy loop.
 - Work-level identification needs no invented edition data.
   The monitoring page exposes actual stage and reason.
+- Periodical issues never receive a Bedetheque album identity. Removal from the
+  list returns them to the queue. Dated-series proposals without cover
+  confirmation stay in review. Both rules are measured on a holdout lot with zero
+  wrong identifications.
 - Run relevant seam tests and type checks during work. Run one full integrated
   suite for the final candidate, complete independent review, then commit.
 - Record the exact lab candidate, operation plan, source preservation, readback and
@@ -123,6 +221,7 @@ backup or production preparation is required for this lab.
 ## References
 
 - [Decision](../adr/0003-work-identification-before-edition.md)
+- [Webtoon collection decision](../adr/0004-webtoon-collection.md)
 - Tasks
 - [Reuse research](../research/2026-11-08-french-comic-metadata-reuse.md)
 - [Earlier library specification](0001-portable-comic-library.md)

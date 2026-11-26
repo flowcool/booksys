@@ -5,7 +5,8 @@ See the [architecture](../architecture.md) and the
 [work identification scope](0003-work-identification-and-metadata.md).
 
 Keep a local library usable without Bookys or a specific reading application.
-Process tracked Booksys PDF, CBZ and CBR inputs. Preserve original downloads.
+Process tracked Booksys PDF, CBZ and CBR inputs and finished single-volume ZIP
+and RAR page archives. Preserve original downloads.
 Keep unrelated downloader files outside this pipeline.
 Publish independent CBZ copies with supported ComicInfo.xml metadata.
 Keep source and output hashes, file origins and transformation journals.
@@ -22,6 +23,9 @@ Do not repeat an uncertain downloader or file operation without reconciliation.
 Keep credentials and operational evidence outside Git.
 
 Organize classified copies by family, series and issue when supported.
+Publish WEBTOONSVF chapters separately under `webtoon/<series>/<chapter>/`.
+Each file version keeps its own managed directory with `book.cbz` and `fiche.md`.
+Use the Telegram index title and filename chapter from rule 13 of spec 0003.
 Keep missing metadata explicit. Preserve original files during later enrichment.
 Komga deployment and synchronization remain outside this scope.
 

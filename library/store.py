@@ -143,6 +143,7 @@ class Store:
         from library.media_paths import media_root
         self.payloads = media_root('BOOKSYS_ATTACHMENT_ROOT', self.directory/'catalogue/payloads')
         self.authority = authority
+        self._classified_works: tuple[int, dict[str, dict[str, Any]]] = (-1, {})
 
     @classmethod
     def create(cls, directory: Path, *, database: Database, authority: str,
@@ -336,6 +337,38 @@ class Store:
         with self._database.connection() as db:
             self.verify(db)
             return [row[0] for row in db.execute(f'SELECT id FROM {kind} WHERE revision > %s ORDER BY id', (since_revision,))]
+
+    def classified_works(self) -> list[tuple[str, dict[str, Any]]]:
+        """Read identity evidence without pages, originals, covers or full-asset exports."""
+        previous_revision, previous = self._classified_works
+        with self._database.connection() as db:
+            revision, _ = self.verify(db)
+            if revision < previous_revision:
+                previous_revision, previous = -1, {}
+            rows = db.execute("""
+                SELECT a.id, a.edition_id, CASE WHEN a.revision > %s OR NOT (a.id=ANY(%s))
+                    THEN COALESCE(a.payload::jsonb->'record'->'work_result', '{}'::jsonb)
+                         - ARRAY['candidates','provenance','evidence','candidate_concordance']
+                    END
+                FROM assets a JOIN asset_admission p ON p.asset=a.id
+                JOIN copy_operations o ON o.namespace='admission' AND o.id=p.operation
+                WHERE a.technical_status='validated' AND a.identity_status='identified'
+                    AND (a.disposition IS NULL OR a.disposition NOT IN ('exclude','defer'))
+                    AND p.status='classified' AND o.phase='committed'
+                ORDER BY o.created_at, a.id
+                """, (previous_revision, list(previous))).fetchall()
+        current = {key: previous[key] if result is None else {'edition': edition, 'work_result': result}
+                   for key, edition, result in rows}
+        self._classified_works = (revision, current)
+        return list(current.items())
+
+    def default_in_use(self, key: str) -> bool:
+        with self._database.connection() as db:
+            self.verify(db)
+            return db.execute("""
+                SELECT 1 FROM assets WHERE payload::jsonb #>> '{record,reader_selection,duplicate_of}'=%s
+                LIMIT 1
+                """, (key,)).fetchone() is not None
 
     def scan(self, kind: str, *, after: str = '', limit: int = 100,
              filters: dict[str, Any] | None = None) -> list[tuple[str, dict[str, Any]]]:

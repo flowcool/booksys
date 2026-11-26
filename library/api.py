@@ -69,20 +69,28 @@ class PublicAPI:
                 raise LibraryError('Invalid library query')
             return {**backend.operator_page(**payload), 'cycle': self.cycle_view()}
         if action == 'status' and not payload and backend is not None:
-            from library.projection import operator_row
+            from library.projection import identification_counts, operator_row
             with backend._database.connection() as db:
                 revision, _ = backend.check(db)
-                rows = [operator_row(oid, backend.restore(origin, media=False),
-                            backend.restore(asset, media=False) if asset else {}, {})
-                        for oid, origin, asset in db.execute('SELECT o.id,o.payload,a.payload FROM origins o '
-                            'LEFT JOIN assets a ON a.id=o.asset_id ORDER BY o.id')]
+                rows = []
+                results = {}
+                for oid, origin, payload in db.execute('SELECT o.id,o.payload,a.payload FROM origins o '
+                                                       'LEFT JOIN assets a ON a.id=o.asset_id ORDER BY o.id'):
+                    asset = backend.restore(payload, media=False) if payload else {}
+                    if asset:
+                        result = asset.get('work_result', {})
+                        results[asset['sha256']] = {field: result.get(field) for field in ('status', 'collection')}
+                    rows.append(operator_row(oid, backend.restore(origin, media=False), asset, {}))
                 source_count = db.execute('SELECT count(DISTINCT source_ref) FROM origins').fetchall()[0][0]
-                classified, holding = db.execute("SELECT count(*) FILTER (WHERE admission_status='classified'),"
-                    "count(*) FILTER (WHERE admission_status='holding') FROM assets").fetchall()[0]
+                classified, holding, periodicals, webtoons = db.execute("SELECT count(*) FILTER (WHERE admission_status='classified'),"
+                    "count(*) FILTER (WHERE admission_status='holding'),"
+                    "count(*) FILTER (WHERE admission_status='periodical'),"
+                    "count(*) FILTER (WHERE admission_status='webtoon') FROM assets").fetchall()[0]
             return {'schema': 1, 'generated_at': now(), 'catalogue_revision': revision,
                     'cycle': self.cycle_view(), 'rows': rows,
                     'counts': {'sources': source_count, 'origins': len(rows),
-                               'classified_assets': classified, 'holding_assets': holding},
+                               'classified_assets': classified, 'holding_assets': holding, 'periodical_assets': periodicals,
+                               'webtoon_copies': webtoons, **identification_counts(results.values())},
                     'source': 'saved queue and catalogue snapshots; not live pyLoad'}
         if action in ('fiche', 'cover'):
             if set(payload) != {'id'} or not isinstance(payload['id'], str) or not re.fullmatch('[a-zA-Z0-9_-]{1,64}', payload['id']):

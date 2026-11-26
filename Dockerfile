@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev l
     && rm -rf /var/lib/apt/lists/* \
     && test -f /opt/python/include/python3.14/Python.h \
     && pip install --no-cache-dir uv==0.9.9 \
-    && CC=gcc LDSHARED='gcc -shared' uv sync --frozen --no-dev --no-install-project --python /opt/python/bin/python3.14
+    && CC=gcc LDSHARED='gcc -shared' uv sync --frozen --no-dev --no-install-project --no-build-package opencv-python-headless --no-build-package numpy --python /opt/python/bin/python3.14
 
 FROM python:3.14-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS application
 ARG BOOKSYS_REVISION
@@ -19,7 +19,7 @@ COPY --from=qualified-python /home/byparr/.local/share/uv/python/cpython-3.14.10
 COPY --from=dependencies /app/.venv /app/.venv
 # Keep user font caches out of the decoder output on read-only roots.
 RUN printf 'deb http://deb.debian.org/debian trixie non-free\n' > /etc/apt/sources.list.d/unrar.list \
-    && apt-get update && apt-get install -y --no-install-recommends unrar=1:7.1.8-1 poppler-utils=25.03.0-5+deb13u4 fonts-liberation=1:2.1.5-3 fontconfig=2.15.0-2.3 libpq5=17.12-0+deb13u1 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && apt-get update && apt-get install -y --no-install-recommends unrar=1:7.1.8-1 poppler-utils=25.03.0-5+deb13u4 fonts-liberation=1:2.1.5-3 fontconfig=2.15.0-2.3 libpq5=17.12-0+deb13u1 libzstd1=1.5.7+dfsg-1+deb13u1 libgssapi-krb5-2=1.21.3-5+deb13u2 libk5crypto3=1.21.3-5+deb13u2 libkrb5-3=1.21.3-5+deb13u2 libkrb5support0=1.21.3-5+deb13u2 zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
     && sed -i '/<cachedir prefix="xdg">fontconfig<\/cachedir>/d; /<cachedir>~\/.fontconfig<\/cachedir>/d' /etc/fonts/fonts.conf \
     && rm -rf /var/lib/apt/lists/*
 RUN /opt/python/bin/python3.14 -m pip uninstall --break-system-packages -y pip && python -m pip uninstall -y pip

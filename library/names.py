@@ -12,7 +12,12 @@ from typing import Any
 
 from library._vendor.comictagger_filenameparser import FileNameParser
 
-METHOD = 'comictagger-fa11a345-legacy-french-shapes-3'
+METHOD = 'comictagger-fa11a345-legacy-french-shapes-5'
+
+
+def is_volume_title(value: str) -> bool:
+    """A bare volume caption supplies no album title."""
+    return re.fullmatch(r'(?:Tome|Volume|Vol|T)\.?\s*\d+|#\s*\d+', value.strip(), re.I) is not None
 
 
 def parse_name(value: str) -> dict[str, Any]:
@@ -26,8 +31,12 @@ def parse_name(value: str) -> dict[str, Any]:
         name = name.replace('.', ' ')
         name = re.split(r'\b(?:FRENCH|TRUEFRENCH|MULTi|RETAiL|COMiC|HYBRiD|iNTERNAL|eBook|SCAN|CBZ|CBR|PDF|DIGITAL|\d{4})\b', name, maxsplit=1, flags=re.I)[0].strip()
     name = name.replace('_', ' ')
+    name, release_tags = re.subn(r'\[(?:DIGITAL\b[^]]*|BD FR)\]|\((?:TONER|DIGITAL-\d+)\)',
+                                 ' ', name, flags=re.I)
     name = ' '.join(name.split())
     name = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', name)
+    # Psikopat's second series uses the final number as its issue number.
+    name = re.sub(r'^(Psikopat) [-–] Série 2 ([-–] \d{1,3})$', r'\1 \2', name, flags=re.I)
     if (not name or len(name) > 500 or re.search(
             r'\b(?:tomes|volumes|best\s+of|pages?|pack|collection)\b|\d\s*[-–]\s*\d|\+', name, re.I)):
         return {}
@@ -59,9 +68,18 @@ def parse_name(value: str) -> dict[str, Any]:
     parser.parse_filename(match[1] + ' #' + match[2] + '.cbz')
     if not parser.series or not parser.issue:
         return {}
+    # ComicTagger drops parenthetical phrases. Keep qualified series labels,
+    # as for explicit issue markers, rather than asserting a different series.
     series = (re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', match[1]).strip()
-              if explicit_issue else parser.series)
+              if explicit_issue or re.search(r'\([^)]*\)', match[1]) else parser.series)
     result: dict[str, Any] = {'series': series, 'number': parser.issue}
-    if match[3] and not encoded and not dotted and not re.fullmatch(r'(?:Tome|Volume)\s+\d+', match[3], re.I):
-        result['title'] = match[3].strip()
+    if match[3] and not encoded and not dotted and not is_volume_title(match[3]):
+        title = re.sub(r'\s+[-–]\s+Mythic$', '', match[3].strip(), flags=re.I)
+        # Parentheses can also be part of the album title. Keep the original
+        # assertion for validation until exact album credits qualify the suffix.
+        suffix = re.fullmatch(r'(.+?)\s+\(([^()]+)\)', title) if release_tags else None
+        if suffix:
+            result.update(title=suffix[1], title_suffix_hint=suffix[2], raw_title=title)
+        else:
+            result['title'] = title
     return result

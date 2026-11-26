@@ -55,6 +55,12 @@ class SnapshotMatcher:
         self.next_check = 0.0
 
     def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
+        return self.current_engine().match(request)
+
+    def lookup_family(self, query: dict[str, str]) -> dict[str, Any]:
+        return self.current_engine().lookup_family(query)
+
+    def current_engine(self) -> Engine:
         if time.monotonic() >= self.next_check:
             self.next_check = time.monotonic() + 60
             try:
@@ -64,7 +70,7 @@ class SnapshotMatcher:
                     self.engine, self.stamp = updated, changed
             except (OSError, ValueError, sqlite3.Error):
                 print(json.dumps({'event': 'index_reload_failed', 'retained': self.engine.index}), flush=True)
-        return self.engine.match(request)
+        return self.engine
 
 
 def serve(path: Path, token: str, port: int, interval: int) -> None:
@@ -80,7 +86,7 @@ def serve(path: Path, token: str, port: int, interval: int) -> None:
 
     threading.Thread(target=daily, daemon=True).start()
     print(json.dumps({'event': 'ready', 'index': match.engine.index, 'albums': match.engine.count}), flush=True)
-    HTTPServer(('0.0.0.0', port), handler(token, match)).serve_forever()
+    HTTPServer(('0.0.0.0', port), handler(token, match, match.lookup_family)).serve_forever()
 
 
 def main() -> None:

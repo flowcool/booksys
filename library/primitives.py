@@ -84,10 +84,24 @@ def lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
 
 
 TABLES = ('assets', 'origins')
+ADMISSION_ROOTS = {'holding': 'holding', 'classified': 'classified', 'periodical': 'Périodiques', 'webtoon': 'webtoon'}
 
 
 def empty() -> dict[str, Any]:
     return {'schema': 1, 'revision': 0, 'ledger': [], **{key: {} for key in TABLES}}
+
+
+def telegram_origin_id(channel: int, message: int) -> str:
+    return digest({'telegram': [channel, message]})
+
+
+def telegram_origin_folder(channel: int, message: int) -> Path:
+    return Path('booksys/telegram') / f'{channel}_{message}'
+
+
+def valid_telegram_index_title(value: Any) -> bool:
+    return (isinstance(value, str) and not re.search(r'[\x00-\x1f\x7f-\x9f\ud800-\udfff\ufffe\uffff]', value)
+            and len(value.encode('utf-8')) <= 1024)
 
 
 def validate(state: Any) -> None:
@@ -119,17 +133,39 @@ def validate(state: Any) -> None:
         admission = asset.get('admission')
         if admission is not None:
             target = Path(str(admission.get('target', '')))
-            if (admission.get('status') not in ('holding', 'classified') or target.is_absolute()
-                    or '..' in target.parts or not target.parts
-                    or target.parts[0] != ('holding' if admission['status'] == 'holding' else 'classified')
+            status = admission.get('status')
+            if (not isinstance(status, str) or target.is_absolute() or '..' in target.parts or not target.parts
+                    or target.parts[0] != ADMISSION_ROOTS.get(status)
                     or not re.fullmatch('[0-9a-f]{32}', str(admission.get('operation', '')))
                     or not re.fullmatch('[0-9a-f]{64}', str(admission.get('signature', '')))
                     or set(admission.get('manifest', {})) != {'book.cbz', 'fiche.md'}
                     or any(not re.fullmatch('[0-9a-f]{64}', str(v)) for v in admission['manifest'].values())):
                 raise LibraryError('Invalid work admission record')
     for key, origin in state['origins'].items():
-        external = (origin['source'] == 'external:' + str(origin['path'])
-                    and key == digest({'external': origin['path'], 'size': origin.get('size'), 'mtime_ns': origin.get('mtime_ns')}))
+        telegram = origin.get('telegram')
+        external_path = origin['source'] == 'external:' + str(origin['path'])
+        if telegram is None:
+            external = external_path and key == digest({'external': origin['path'], 'size': origin.get('size'),
+                                                        'mtime_ns': origin.get('mtime_ns')})
+        else:
+            if not isinstance(telegram, dict):
+                raise LibraryError('Invalid Telegram origin provenance')
+            channel, message, topic = (telegram.get(field) for field in ('channel', 'message', 'topic'))
+            checksum = telegram.get('sha256')
+            if (type(channel) is not int or not 0 < channel < 2**63
+                    or type(message) is not int or not 0 < message < 2**31
+                    or (topic is not None and (type(topic) is not int or not 0 < topic < 2**31))
+                    or not isinstance(origin['path'], str) or type(origin.get('size')) is not int
+                    or origin['size'] <= 0 or not isinstance(telegram.get('caption'), str)
+                    or not isinstance(telegram.get('original_name'), str)
+                    or not valid_telegram_index_title(telegram.get('index_title', ''))
+                    or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum)
+                    or origin['sha256'] not in (None, checksum)):
+                raise LibraryError('Invalid Telegram origin provenance')
+            external = (external_path and key == telegram_origin_id(channel, message)
+                        and Path(origin['path']).parent == telegram_origin_folder(channel, message))
+            if not external or origin['pid'] is not None or origin['fid'] is not None:
+                raise LibraryError('Invalid Telegram origin ID or path')
         if (not all(isinstance(origin[k], str) for k in ('source', 'path')) or
                 not ((type(origin['pid']) is int and type(origin['fid']) is int) or
                      (external and origin['pid'] is None and origin['fid'] is None))):

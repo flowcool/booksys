@@ -22,7 +22,8 @@ class WorkEnrichmentTests(unittest.TestCase):
                      'provenance': {'method': 'bdnex-sitemap-1'}}
         candidates = [candidate]
         if ambiguous:
-            candidates.append({**candidate, 'url': url.replace('24065', '22222'), 'edition_ref': '22222'})
+            candidates.append({**candidate, 'title': 'Uzumaki',
+                               'url': url.replace('24065', '22222'), 'edition_ref': '22222'})
 
         class RetainedPages:
             def get(self, requested_url):
@@ -42,7 +43,9 @@ class WorkEnrichmentTests(unittest.TestCase):
 
     def test_exact_page_author_can_explain_a_filename_suffix(self):
         result = self.match_naruto('Naruto - 1 - Masashi Kishimoto.cbz')
-        self.assertEqual(result['work'].get('title'), 'Naruto Uzumaki')
+        self.assertEqual(result['status'], 'no_match')
+        self.assertEqual(result['work'], {})
+        self.assertEqual(result['candidate_concordance']['mode'], 'none')
         self.assertTrue(any(entry['value'] == 'Masashi Kishimoto'
                             for entry in result['evidence']['provenance']['title']))
 
@@ -50,7 +53,7 @@ class WorkEnrichmentTests(unittest.TestCase):
         cases = (
             ('Naruto - 1 - Other Caption.cbz', None, '1', 'no_match'),
             ('Naruto - 1 - Masashi Kishimoto.cbz', {'Title': 'Other Caption'}, '1', 'review'),
-            ('Naruto - 2 - Naruto Uzumaki.cbz', None, '2', 'no_match'),
+            ('Naruto - 2 - Naruto Uzumaki.cbz', None, '2', 'review'),
         )
         for label, embedded, number, status in cases:
             with self.subTest(label=label, embedded=embedded):
@@ -59,6 +62,7 @@ class WorkEnrichmentTests(unittest.TestCase):
     def test_exact_page_does_not_choose_between_two_numbered_proposals(self):
         result = self.match_naruto('Naruto - 1 - Naruto Uzumaki.cbz', ambiguous=True)
         self.assertEqual(result['status'], 'no_match')
+        self.assertEqual(result['candidate_concordance']['mode'], 'ambiguous')
 
     def test_opening_ocr_identifies_work_without_isbn_but_not_rear_advertisement(self):
         from library.work_enrichment import printed_concordance

@@ -40,6 +40,22 @@ Reconcile uncertain operations before dependent effects.
 Heavy media uses qualified NAS binds with exact identity and fresh health checks.
 There is no local media fallback.
 
+## Comic intake and copies
+
+Intake reads finished, tracked ZIP and RAR downloads. It sends a single volume
+of page images to the comic reader. One volume can contain contiguous numbered
+chapter folders. Intake records multiple volume groups as pending for review.
+Archives of complete PDF, CBZ or CBR files go through bundle intake. The copies
+stage publishes CBZ and keeps the original bytes in reception.
+
+Telegram intake accepts an explicit list of completed files under
+`booksys/telegram` in the originals mount. The originals scan skips this
+directory. Each accepted channel and message creates one origin and one intake
+item in the same transaction. The external reader verifies the file against
+the submitted SHA-256. Messages with identical bytes share one asset. Business
+discovery creates the normal metadata and copies items. Telegram captions
+remain discovery hints on their message origins.
+
 ## Bookys browser session
 
 `Dockerfile.byparr` adds `ops/byparr/session_api.py` to the pinned Byparr image.

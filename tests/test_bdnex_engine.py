@@ -11,6 +11,118 @@ from bdnex_service.engine import Engine, SitemapCache, validate_xml
 
 @unittest.skipUnless(importlib.util.find_spec('bdnex'), 'Pinned engine lives in the separate container')
 class EngineTests(unittest.TestCase):
+    def test_family_lookup_reads_every_album_with_that_number(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls
+
+        albums = [
+            'Sky-Patrol-Tome-3-The-Silent-Island-900003',
+            'Sky-Patrol-Tome-3a-The-Silent-Island-900013',
+            'Sky-Patrol-2e-serie-Publisher-Tome-3-The-Last-Gate-900023',
+            'Sky-Patroller-Tome-3-The-Crossing-900033',
+            'Sky-Patrol-Tome-4-The-Crossing-900043',
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            urls = sitemap_urls()
+            cache = SitemapCache(path, writable=True)
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums
+            ) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', urls[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', urls[1],
+                            b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            result = engine.lookup_family({'series': 'Sky Patrol', 'number': '3'})
+            self.assertEqual({row['album_id'] for row in result['albums']}, {'900003', '900013', '900023'})
+            self.assertEqual(result['index'], engine.index)
+            narrowed = engine.lookup_family({'series': 'Sky Patrol - Série 2 -', 'number': '3'})
+            self.assertEqual([row['album_id'] for row in narrowed['albums']], ['900023'])
+
+    def test_decorated_lookup_and_web_proposal_without_native_hits(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            cache = SitemapCache(path, writable=True)
+            albums = ['Navy-Imperia-Tome-100-900100', 'Akim-1re-serie-Tome-296-900296',
+                      'Bob-et-Bobette-3e-Serie-Rouge-Tome-8-900008', 'Jim-Canada-Imperia-Tome-36-900036',
+                      'Archie-Editions-Tome-4-900004', 'Archie-Autre-serie-Tome-4-900014',
+                      'Lady-Travel-Tome-2-Miss-Travel-215240']
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', sitemap_urls()[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', sitemap_urls()[1],
+                            b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            for series, number, ref in [('navy', '100', '900100'), ('akim', '296', '900296'),
+                    ('bob et bobette', '8', '900008'), ('jim canada', '36', '900036')]:
+                with self.subTest(series=series):
+                    result = engine.match({'inputs': [{'path': 'unrelated.cbz', 'embedded': {}}],
+                        'identity': {'series': [series], 'number': [number]}})
+                    self.assertEqual(result['decision'], {'status': 'selected', 'reason': 'numbered', 'edition_ref': ref})
+            result = engine.match({'inputs': [{'path': 'unrelated.cbz', 'embedded': {}}],
+                'identity': {'series': ['archie'], 'number': ['4']}})
+            self.assertEqual(result['decision'], {'status': 'review', 'reason': 'ambiguous'})
+            web = 'https://www.bedetheque.com/BD-Lady-Travel-Tome-2-Miss-Travel-215240.html'
+            result = engine.match({'inputs': [{'path': 'Navy T100.cbz', 'embedded': {'Web': web}}],
+                'identity': {'series': ['lady travel'], 'number': ['1'], 'title': ['miss travel']}})
+            self.assertEqual(result['decision']['edition_ref'], '215240')
+            for value in (web.replace('www.bedetheque.com', 'evil.example'), web + '?x=1',
+                          web + '#x', web.replace('215240', 'not-an-id'), web.replace('215240', '999999')):
+                result = engine.match({'inputs': [{'path': 'unrelated.cbz', 'embedded': {'Web': value}}], 'identity': {}})
+                self.assertEqual(result['candidates'], [], value)
+
+    def test_numbered_choice_uses_the_full_index_and_accepts_a_lower_score(self) -> None:
+        from bdnex.importer.bedetheque.sitemap import sitemap_urls
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'index.sqlite'
+            cache = SitemapCache(path, writable=True)
+            urls = sitemap_urls()
+            albums = [
+                'Akim-1re-serie-aventures-voyages-Tome-296-La-colere-du-tigre-900296',
+                'Akim-1re-serie-aventures-voyages-Tome-297-Titre-long-900297',
+                'Archie-Editions-Tome-4-Anniversaire-900004',
+                'Archie-Autre-serie-Tome-4-Aventure-900014',
+                'Example-2016-Tome-1-Return-900201',
+            ]
+            xml = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + ''.join(
+                f'<url><loc>https://www.bedetheque.com/BD-{album}.html</loc></url>' for album in albums
+            ) + '</urlset>'
+            cache.cache_put('bedetheque', 'sitemap', urls[0], xml.encode())
+            cache.cache_put('bedetheque', 'sitemap', urls[1], b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"/>')
+            cache.close()
+            engine = Engine(path)
+            response = engine.match({
+                'inputs': [{'path': 'Akim - 296.cbz', 'embedded': {}}],
+                'identity': {'series': ['akim'], 'number': ['296']},
+            })
+            self.assertLess(response['candidates'][0]['score'], 70)
+            self.assertEqual(response.get('decision'),
+                             {'status': 'selected', 'edition_ref': '900296', 'reason': 'numbered'})
+            response = engine.match({
+                'inputs': [{'path': 'Archie - 4.cbz', 'embedded': {}}],
+                'identity': {'series': ['archie'], 'number': ['4']},
+            })
+            self.assertEqual(response['decision'], {'status': 'review', 'reason': 'ambiguous'})
+            response = engine.match({
+                'inputs': [{'path': 'Example - T01 - Return.cbz', 'embedded': {}}],
+                'identity': {'series': ['example'], 'number': ['1'], 'title': ['return'], 'year': ['1987']},
+            })
+            self.assertIn('900201', [row['edition_ref'] for row in response['candidates']])
+            self.assertEqual(response['decision'], {'status': 'review', 'reason': 'insufficient'})
+            dated = next(row for row in response['candidates'] if row['edition_ref'] == '900201')
+            for embedded in ({}, {'Web': dated['url']}):
+                with self.subTest(embedded=embedded):
+                    proposed = engine.match({
+                        'inputs': [{'path': 'Example - T01 - Return.cbz', 'embedded': embedded}],
+                        'identity': {'series': ['example'], 'number': ['1'], 'title': ['return']},
+                    })
+                    self.assertEqual(proposed['decision'],
+                                     {'status': 'proposed', 'reason': 'dated_unique', 'edition_ref': '900201'})
+
+
     def test_high_score_without_volume_survives_many_wanted_albums(self) -> None:
         from bdnex.importer.bedetheque.sitemap import sitemap_urls
         with tempfile.TemporaryDirectory() as folder:
@@ -119,6 +231,13 @@ class EngineTests(unittest.TestCase):
                     [{'path': 'Nains T01.cbz', 'embedded': {}}])
                 self.assertEqual(response['status'], 'ok')
                 self.assertEqual(response['index'], old_index)
+                response = BDneXClient(f'http://127.0.0.1:{server.server_port}', 'secret').match(
+                    'a'*64, [{'path': 'does-not-exist.cbz', 'embedded': {
+                        'Web': 'https://www.bedetheque.com/BD-Nains-Tome-1-Redwin-de-la-Forge-245127.html'}}],
+                    identity={},
+                )
+                self.assertEqual(response['decision'],
+                                 {'status': 'selected', 'edition_ref': '245127', 'reason': 'strong'})
             finally:
                 server.shutdown()
                 server.server_close()

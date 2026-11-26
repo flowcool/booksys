@@ -12,10 +12,15 @@ import uuid
 
 import yaml
 
-from library.primitives import LibraryError, digest, now, sync_dir
+from booksys_core.errors import ResultInputsChanged
+from library.mangaupdates import comicinfo_reference, read_references
+from library.operational_state import CopyOperations
+from library.primitives import ADMISSION_ROOTS, LibraryError, digest, now, sync_dir
 from library.publication import Publisher, private_tree, publication_lock, rename_atomic, verify
+from library.reader_selection import identity, keeps_edition, output_pages, work_comparison
 from library.readers import sha256
 from library.transform import transform_archive
+from library.webtoons import series_key
 from library.xmlmetadata import work_comicinfo
 
 
@@ -25,7 +30,10 @@ def work_fields(state: dict[str, Any], key: str) -> dict[str, Any] | None:
 
 
 def eligible(state: dict[str, Any], key: str) -> bool:
-    asset = state['assets'][key]
+    return eligible_asset(state['assets'][key])
+
+
+def eligible_asset(asset: dict[str, Any]) -> bool:
     return bool(asset.get('status') == 'validated'
                 and not asset.get('contested') and asset.get('disposition') not in ('exclude', 'defer'))
 
@@ -35,8 +43,23 @@ def slug(value: Any) -> str:
     return text if text and text not in ('.', '..') else 'unknown'
 
 
-def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
+def projection(state: dict[str, Any], key: str, *,
+               references: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     asset = state['assets'][key]
+    result = asset.get('work_result', {})
+    status = result.get('status')
+    if status in ('periodical', 'webtoon'):
+        fields = {field: result['work'][field] for field in ('series', 'number')}
+        if status == 'webtoon' and references:
+            fields.update(comicinfo_reference(references.get(series_key(fields['series']), {})))
+        signature = digest({'asset': key, status: fields})
+        leaf = ('chapter--' if status == 'webtoon' else 'issue--') + key + '--' + signature[:12]
+        folder = slug(fields['series'])
+        if status == 'webtoon':
+            folder = folder.encode()[:240].decode(errors='ignore').rstrip(' .-')
+        target = str(Path(ADMISSION_ROOTS[status]) / folder / slug(fields['number']) / leaf)
+        return {'status': status, 'signature': signature, 'target': target, 'fields': fields,
+                'fiche_title': fields['series'] + ' ' + fields['number']}
     work = work_fields(state, key)
     fields = {**(work or {}), **asset.get('overrides', {})}
     status = 'classified' if work else 'holding'
@@ -62,16 +85,43 @@ def projection(state: dict[str, Any], key: str) -> dict[str, Any]:
             'fiche_title': str(work_title or series_fallback or 'À identifier')}
 
 
+def current_projection(state: dict[str, Any], key: str, directory: Path) -> dict[str, Any]:
+    webtoon = state['assets'][key].get('work_result', {}).get('status') == 'webtoon'
+    return projection(state, key, references=read_references(directory) if webtoon else None)
+
+
+def publication_comicinfo(asset: dict[str, Any], desired: dict[str, Any], key: str) -> bytes:
+    fields = desired['fields']
+    if desired['status'] in ('periodical', 'webtoon'):
+        return work_comicinfo({}, fields)
+    notes = 'Booksys; source_asset_sha256=' + key + '; admission=' + desired['status']
+    old_notes = asset.get('embedded', {}).get('Notes', '')
+    return work_comicinfo(asset, {**fields, 'notes': str(old_notes) + '\n' + notes})
+
+
+def admission_path(root: Path, relative: str) -> Path:
+    path = Path(relative)
+    if (path.is_absolute() or '..' in path.parts or not path.parts
+            or path.parts[0] not in ADMISSION_ROOTS.values()):
+        raise LibraryError('Unsafe admission path')
+    target = root / path
+    if any(p.is_symlink() for p in (target, *target.parents)):
+        raise LibraryError('Symlink in admission path')
+    return target
+
+
+def verify_admission(operations: CopyOperations, key: str, admission: dict[str, Any]) -> None:
+    operation = operations.get(admission['operation'])
+    if (not operation or operation.get('phase') != 'committed' or operation.get('asset') != key
+            or operation.get('kind') != 'admission'
+            or any(admission.get(field) != operation.get(field) for field in
+                   ('status', 'signature', 'target', 'manifest', 'transformation'))):
+        raise LibraryError('Reader copy differs from its committed operation')
+
+
 class AdmissionPublisher(Publisher):
     def target_path(self, relative: str) -> Path:
-        path = Path(relative)
-        if (path.is_absolute() or '..' in path.parts or not path.parts
-                or path.parts[0] not in ('holding', 'classified')):
-            raise LibraryError('Unsafe admission path')
-        target = self.root / path
-        if any(p.is_symlink() for p in (target, *target.parents)):
-            raise LibraryError('Symlink in admission path')
-        return target
+        return admission_path(self.root, relative)
 
     def prepare_parent(self, target: Path) -> None:
         for length in range(1, len(target.parent.relative_to(self.root).parts) + 1):
@@ -117,10 +167,65 @@ class AdmissionPublisher(Publisher):
             elif previous.exists() or not recovery.exists():
                 raise LibraryError('Admission recovery divergence')
             verify(recovery, current['manifest'])
-        state['assets'][operation['asset']]['admission'] = {
+        asset = state['assets'][operation['asset']]
+        asset['admission'] = {
             key: operation[key] for key in ('target', 'manifest', 'signature', 'status', 'transformation')}
-        state['assets'][operation['asset']]['admission']['operation'] = operation['id']
+        asset['admission']['operation'] = operation['id']
+        asset.pop('reader_selection', None)
+        if operation.get('reader_selection'):
+            asset['reader_selection'] = operation['reader_selection']
         self._terminal(operation,self.store.prepare(state))
+
+    def select_reader_copy(self, state: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any] | None:
+        key = operation['asset']
+        incoming = identity(state['assets'][key])
+        if not incoming:
+            return None
+        pages = output_pages(key, operation)
+        review = ''
+        for peer, summary in self.store.backend().classified_works():
+            if peer == key:
+                continue
+            lead, _ = work_comparison(incoming, identity(summary))
+            if not lead:
+                continue
+            compared = self.store.result_set('admit', {'assets': [key, peer]})
+            if operation['conflict']:
+                self.store.verify_result(operation['conflict'])
+            else:
+                raise LibraryError('Reader selection requires scoped catalogue authority')
+            other = compared['assets'][peer]
+            current = other.get('admission', {})
+            default = identity(other)
+            _, same_work = work_comparison(incoming, default)
+            if not same_work:
+                review = 'work_unconfirmed'
+                continue
+            if not keeps_edition(incoming, default):
+                review = 'distinct_edition'
+                continue
+            previous = output_pages(peer, current)
+            if not pages or not previous or current.get('status') != 'classified':
+                review = 'pages_unavailable'
+                continue
+            if pages != previous:
+                review = 'pages_differ'
+                continue
+            try:
+                verify_admission(self.operations, peer, current)
+                verify(self.target_path(current['target']), current['manifest'])
+            except (LibraryError, OSError):
+                review = 'copy_unverified'
+                continue
+            selected = {'signature': operation['signature'], 'duplicate_of': peer,
+                        'default_operation': current['operation'], 'operation': operation['id']}
+            compared['assets'][key]['reader_selection'] = selected
+            operation['reader_selection'] = selected
+            self._terminal(operation, self.store.prepare(compared))
+            return selected
+        if review:
+            operation['reader_selection'] = {'signature': operation['signature'], 'review': review}
+        return None
 
     def reconcile(self, *, locked: bool = False, asset: str | None = None) -> list[dict[str, Any]]:
         if not locked:
@@ -175,7 +280,7 @@ class AdmissionPublisher(Publisher):
                 verify(self.target_path(current['target']), current['manifest'])
         return operations
 
-    def publish_asset(self, key: str) -> dict[str, Any]:
+    def publish_asset(self, key: str, *, expected_signature: str | None = None) -> dict[str, Any]:
         with publication_lock(self.store.directory, self.root):
             self.reconcile(locked=True, asset=key if self.local_recovery else None)
             if self.prepared:
@@ -184,10 +289,19 @@ class AdmissionPublisher(Publisher):
             if not eligible(state, key):
                 raise LibraryError('Asset is not eligible for work admission')
             asset = state['assets'][key]
-            desired = projection(state, key)
+            desired = current_projection(state, key, self.store.directory)
+            if expected_signature is not None and desired['signature'] != expected_signature:
+                raise ResultInputsChanged('Copy inputs changed after discovery')
             current = asset.get('admission')
             if current and current['signature'] == desired['signature']:
                 return self.load_operation(current['operation'])
+            selection: dict[str, Any] = asset.get('reader_selection', {})
+            if selection.get('signature') == desired['signature'] and selection.get('duplicate_of'):
+                return selection
+            compare = (not current or current['status'] == 'holding') and desired['status'] == 'classified'
+            compare = compare and bool(identity(asset))
+            if compare and self.operations.pending_classified():
+                raise ResultInputsChanged('Another classified copy has pending publication readback')
             source = self.resolve_origin(state, key)
             target = self.target_path(desired['target'])
             if target.exists():
@@ -196,10 +310,7 @@ class AdmissionPublisher(Publisher):
                         'work': asset.get('work_result'), 'origins': [state['origins'][oid] for oid in asset['origins']]}
             fiche = ('# ' + html.escape(desired['fiche_title']) +
                      '\n\n<pre>' + html.escape(json.dumps(evidence, ensure_ascii=False, indent=2)) + '</pre>\n').encode()
-            fields = desired['fields']
-            notes = 'Booksys; source_asset_sha256=' + key + '; admission=' + desired['status']
-            old_notes = asset.get('embedded', {}).get('Notes', '')
-            xml = work_comicinfo(asset, {**fields, 'notes': str(old_notes) + '\n' + notes})
+            xml = publication_comicinfo(asset, desired, key)
             required = (2*1024**3 if asset['format'] == 'pdf' else sum(p['size'] for p in asset.get('page_manifest', []))) + len(fiche) + 8*1024**2
             self.capacity.check(self.root, required)
             op: dict[str, Any] = {'schema': 1, 'id': uuid.uuid4().hex, 'kind': 'admission',
@@ -217,6 +328,15 @@ class AdmissionPublisher(Publisher):
                     or result['pages'] != asset['pages'] or sha256(source) != key):
                 raise LibraryError('Admission page readback or source hash changed')
             op['transformation'] = result
+            op['manifest']['book.cbz'] = result['artifact_sha256']
+            if compare:
+                selected = self.select_reader_copy(state, op)
+                if selected is not None:
+                    (converted/'book.cbz').unlink()
+                    converted.rmdir()
+                    stage.rmdir()
+                    sync_dir(self.staging)
+                    return selected
             rename_atomic(converted/'book.cbz', stage/'book.cbz')
             converted.rmdir()
             op['manifest']['book.cbz'] = sha256(stage/'book.cbz')
