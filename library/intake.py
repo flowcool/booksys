@@ -12,10 +12,10 @@ from urllib.parse import urlsplit
 
 from library.catalog import Catalog
 from library.multipart_model import is_multipart
-from library.origins import (TelegramSourceUnavailable, archive_source_stamp, archive_source_wait,
-                             external_source_path, is_archive_origin)
+from library.origins import TelegramSourceUnavailable, archive_source_stamp, external_source_path, is_archive_origin
 from library.store import PreparedResult
 from library.primitives import LibraryError, WorkingState, digest, now
+from library.reader_inputs import SOURCE_UNAVAILABLE_ERRNOS
 from library.readers import GENERIC_ARCHIVE_SUFFIXES, MAX_FILE, inspect_file, fingerprint, sha256, READER_POLICY
 
 
@@ -110,17 +110,17 @@ def receive_external(store: Catalog, oid: str) -> PreparedResult:
             raise LibraryError('Telegram file size changed since submission')
     elif digest({'external': str(relative), 'size': stamp[2], 'mtime_ns': stamp[3]}) != oid:
         raise LibraryError('External origin bytes changed since discovery')
-    result = (inspect_file(path, expected_sha256=telegram['sha256'])
-              if archive and telegram is not None else inspect_file(path))
-    if telegram is not None and not (archive and stamp[2] > MAX_FILE):
-        try:
+    try:
+        result = (inspect_file(path, expected_sha256=telegram['sha256'])
+                  if archive and telegram is not None else inspect_file(path))
+        if telegram is not None and not (archive and stamp[2] > MAX_FILE):
             inspected_hash = result.get('sha256') or sha256(path)
             if inspected_hash != telegram['sha256'] or fingerprint(path) != stamp:
                 raise LibraryError('Telegram file bytes changed since submission')
-        except OSError as exc:
-            if archive and archive_source_wait(origin):
-                raise TelegramSourceUnavailable('Telegram archive source unavailable') from exc
-            raise
+    except OSError as exc:
+        if archive and exc.errno in SOURCE_UNAVAILABLE_ERRNOS:
+            raise TelegramSourceUnavailable('Telegram archive source unavailable') from exc
+        raise
     if result.get('reason'):
         from booksys_core.diagnostics import emit, diagnostic_fields
         emit(service='library', stage='local', code='failed' if result['status'] == 'rejected' else 'waiting',

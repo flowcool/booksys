@@ -108,14 +108,10 @@ def submit_origin(catalog: Catalog, oid: str, origin: dict[str, Any], *, at: dat
                                  obligations=[obligation], now=at)
     except (ResultInputsChanged, CommitUnknown):
         # Check the exact transaction effects together before accepting an ambiguous commit.
-        backend = catalog.backend()
-        with backend._database.connection() as db:
-            recorded = db.execute("SELECT o.payload, w.item FROM origins o LEFT JOIN work_items w "
-                                  "ON w.stage='intake' AND w.item=%s WHERE o.id=%s",
-                                  (obligation.entity, oid)).fetchone()
-        if recorded is None or recorded[1] is None:
+        recorded = catalog.backend().registered_intake_origin(oid)
+        if recorded is None:
             raise
-        repeat(backend.restore(recorded[0], media=False), origin)
+        repeat(recorded, origin)
         return 'already-submitted'
     return 'submitted'
 

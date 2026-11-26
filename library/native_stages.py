@@ -89,7 +89,7 @@ class NativeStages:
             from library.origins import archive_source_wait, is_archive_origin
             origin = self.catalog.get('origins', task.entity.removeprefix('external-'))
             if origin is not None and is_archive_origin(origin) and archive_source_wait(origin):
-                return 'nas_unavailable'
+                return 'recovery_wait'
             return ''
         if self.snapshots is None and task.stage != 'routing':
             return 'queue_snapshot_unavailable'
@@ -142,7 +142,7 @@ class NativeStages:
             try:
                 return StepResult('done', prepared=receive_external(self.catalog, task.entity.removeprefix('external-')))
             except TelegramSourceUnavailable:
-                return StepResult('defer', diagnostic={'reason': 'nas_unavailable'})
+                return StepResult('defer', diagnostic={'reason': 'recovery_wait'})
         source, entry, monitor = self.binding(task)
         if task.stage == 'intake':
             if self.snapshots is None:

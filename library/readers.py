@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from library.primitives import LibraryError
+from library.reader_inputs import SOURCE_UNAVAILABLE_ERRNOS
 
 MAX_FILE = 1024 ** 3
 READER_POLICY = 'single-comic-3'
@@ -55,5 +56,8 @@ def inspect_file(path: Path, *, stable_seconds: float = 2, expected_sha256: str 
             raise LibraryError('Reception changed during validation')
         return {**outcome, 'sha256': asset_hash, 'size': first[2]}
     except (LibraryError, OSError, ValueError) as exc:
+        if (expected_sha256 is not None and isinstance(exc, OSError)
+                and exc.errno in SOURCE_UNAVAILABLE_ERRNOS):
+            raise
         return {'status': 'rejected', 'reason': str(exc),
                 'reader_policy': None if str(exc) == 'Reader policy differs from controller' else READER_POLICY}

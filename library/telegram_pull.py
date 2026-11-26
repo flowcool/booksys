@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,7 +19,7 @@ from library.primitives import digest, telegram_origin_id, valid_telegram_index_
 from library.reception import reception_path
 from library.telegram_intake import submit_origin
 from library.telegram_paths import ARCHIVE_PREFIX, SCOPES, archive_relative, telegram_filename
-from library.work_identity import normalized
+from library.webtoons import series_key
 
 FEED_ROOT = Path("/data/booksys/telegram-receipts")
 MAX_ROWS = 32
@@ -30,12 +29,10 @@ MAX_PAGE = 99_999_999
 STREAM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 POLL_SECONDS = 30
 
-# path SHA-256, size and asset SHA-256 from retained trial readback.
+# Canonical digests of the retained path, size and SHA-256 for the two trials.
 TRIALS = {
-    (1235693416, 5321): ("07e73903d499f8476fa7dad0581aae41d831819246c9937c8b4b6a338fc7085d",
-                        291363437, "00dbf778e2886ca8dc4c9d9a891cbb749f6a6460395c470f47834ab7730c29e3"),
-    (1219883119, 166816): ("b7bb4aac94fae1502421c6269b12f12a9e1dd9a75be405498f30bb90a55a2178",
-                          64488045, "67741e3ff4c5d3cf68e3df18040539f695c31e5f9fbab77ed97bd97b04dd4542"),
+    (1235693416, 5321): "a92b9273c533e133d55b6b05b01676dc6670d4c167d5dd74f028fad623525226",
+    (1219883119, 166816): "3c7feccc393f6c3c74cfc57f756eb5e92ec5377551b520df0a644898aa578563",
 }
 
 
@@ -46,18 +43,25 @@ class BadPage(LibraryError):
 def open_feed(root: Path, scope: str, name: str) -> BinaryIO:
     path = reception_path(root, scope, name)
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-    stream = os.fdopen(os.open(path, flags), "rb")
-    if not S_ISREG(os.fstat(stream.fileno()).st_mode):
-        stream.close()
-        raise LibraryError("Telegram feed input is not a regular file")
-    return stream
+    fd = os.open(path, flags)
+    try:
+        if not S_ISREG(os.fstat(fd).st_mode):
+            raise LibraryError("Telegram feed input is not a regular file")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def json_object(data: bytes) -> dict[str, Any]:
-    value = json.loads(data.decode("utf-8"), object_pairs_hook=unique_fields)
+    value = json.loads(data.decode("utf-8"), object_pairs_hook=unique_fields, parse_constant=invalid_constant)
     if not isinstance(value, dict) or type(value.get("schema")) is not int or value["schema"] != 1:
         raise LibraryError("Invalid Telegram feed schema")
     return value
+
+
+def invalid_constant(value: str) -> None:
+    raise LibraryError(f"Invalid Telegram feed JSON constant {value}")
 
 
 def unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -79,8 +83,7 @@ def webtoon_index(row: dict[str, Any]) -> dict[str, Any]:
                 or not isinstance(ref.get("title"), str)):
             raise LibraryError("Invalid Webtoon index reference")
     evidence: dict[str, Any] = {"origins": references, "reposts": reposts}
-    titles = {normalized(ref["title"], "series") for ref in references
-              if valid_telegram_index_title(ref["title"])}
+    titles = {series_key(ref["title"]) for ref in references if valid_telegram_index_title(ref["title"])}
     review = row.get("index_review")
     if review not in (None, "missing-valid-index-evidence", "conflicting-index-titles"):
         raise LibraryError("Invalid Webtoon index review reason")
@@ -90,7 +93,7 @@ def webtoon_index(row: dict[str, Any]) -> dict[str, Any]:
         title = row["index_title"]
         if not valid_telegram_index_title(title):
             raise LibraryError("Invalid Telegram index title")
-        if (not references or review is not None or titles != {normalized(title, "series")} or "" in titles
+        if (not references or review is not None or titles != {series_key(title)} or "" in titles
                 or any(not valid_telegram_index_title(ref["title"]) for ref in references)):
             evidence["index_review"] = "missing-valid-index-evidence"
         else:
@@ -224,10 +227,15 @@ class TelegramPull:
         entries: list[tuple[str, dict[str, Any]]] = []
         try:
             with open_feed(self.root, scope, f"{page:08d}.jsonl") as stream:
-                while line := stream.readline(MAX_ROW_BYTES + 1):
-                    if len(entries) == MAX_ROWS or len(line) > MAX_ROW_BYTES or not line.endswith(b"\n"):
-                        raise LibraryError("Telegram page exceeds its row or byte limit or has an incomplete line")
+                for _ in range(MAX_ROWS):
+                    line = stream.readline(MAX_ROW_BYTES + 1)
+                    if not line:
+                        break
+                    if len(line) > MAX_ROW_BYTES or not line.endswith(b"\n"):
+                        raise LibraryError("Telegram receipt exceeds its byte limit or has an incomplete line")
                     entries.append(receipt_origin(json_object(line), scope))
+                if stream.read(1):
+                    raise LibraryError("Telegram page exceeds its row limit")
             if not entries:
                 raise LibraryError("Empty Telegram page")
         except (LibraryError, ValueError, RecursionError) as exc:
@@ -260,17 +268,12 @@ class TelegramPull:
         if proof is None:
             return None
         prefix = f"external:telegram/{channel}_{message}"
-        backend = self.catalog.backend()
-        with backend._database.connection() as db:
-            # Under C collation this is the exact range of the historical message folder.
-            rows = db.execute("SELECT id,payload FROM origins WHERE source_ref >= %s AND source_ref < %s "
-                              "ORDER BY source_ref,id LIMIT 2", (prefix + "/", prefix + "0")).fetchall()
+        rows = self.catalog.backend().external_folder_origins(prefix + "/")
         if not rows:
             return None
-        legacy_id, payload = rows[0]
-        legacy = backend.restore(payload, media=False)
+        legacy_id, legacy = rows[0]
         path = legacy["path"]
-        if (len(rows) != 1 or proof != (hashlib.sha256(path.encode()).hexdigest(), size, checksum)
+        if (len(rows) != 1 or proof != digest({"path": path, "size": size, "sha256": checksum})
                 or legacy.get("telegram") is not None or legacy.get("size") != size or legacy.get("sha256") != checksum
                 or legacy_id != digest({"external": path, "size": size, "mtime_ns": legacy.get("mtime_ns")})):
             raise BadPage(f"Historical Telegram trial conflicts for message {message}")

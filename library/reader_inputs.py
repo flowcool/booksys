@@ -1,11 +1,14 @@
 """Physical input identity and dependency errors shared by reader transports."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat
 from pathlib import Path
 from library.primitives import LibraryError
+
+SOURCE_UNAVAILABLE_ERRNOS = frozenset((errno.ENOENT, errno.EACCES, errno.ESTALE, errno.ENOTDIR, errno.EIO))
 
 
 def sha256(path: Path) -> str:

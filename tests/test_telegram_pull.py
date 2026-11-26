@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+import errno
 import hashlib
 import json
 import os
@@ -104,7 +105,7 @@ class TelegramPullTests(unittest.TestCase):
         self.assertIsNone(TelegramPull.configured(runtime.catalog))
         actor = runtime.actor("intake")
         self.addCleanup(actor.work.close)
-        self.assertEqual(actor.step(now=self.now), "nas_unavailable")
+        self.assertEqual(actor.step(now=self.now), "recovery_wait")
         self.assertFalse(self.catalog.read()["assets"])
         self.assertFalse(archive.exists())
         self.assertEqual(substitute.read_bytes(), data)
@@ -117,10 +118,13 @@ class TelegramPullTests(unittest.TestCase):
         stamp = self.now + timedelta(seconds=35)
         unreadable = archive / row["path"]
         unreadable.chmod(0)
-        self.assertEqual(actor.step(now=stamp), "nas_unavailable")
-        self.assertEqual(actor.step(now=stamp), "done")
+        self.assertEqual(actor.step(now=stamp), "recovery_wait")
+        with patch("library.readers.sha256", side_effect=PermissionError(errno.EACCES, "Fixture access loss")):
+            self.assertEqual(actor.step(now=stamp), "defer")
+        self.assertFalse(self.catalog.read()["assets"])
         unreadable.chmod(0o600)
         stamp += timedelta(seconds=35)
+        self.assertEqual(actor.step(now=stamp), "done")
         self.assertEqual(actor.step(now=stamp), "done")
         state = self.catalog.read()
         key, = state["assets"]
@@ -275,6 +279,7 @@ class TelegramPullTests(unittest.TestCase):
         state = CollectorState(self.catalog.directory, database=self.catalog.backend()._database)
         invalid_rows = (
             {"extra": "X" * 65536},
+            {"extra": float("nan")},
             {"topic": 96714},
             {"path": "BD_X18/../9100_Album.cbz"},
             {"size": 2**63},
@@ -289,6 +294,21 @@ class TelegramPullTests(unittest.TestCase):
                 self.assertEqual(state.telegram_checkpoint("BD_X18")["page"], 0)
                 self.assertIn("blocked", state.telegram_checkpoint("BD_X18"))
         self.assertFalse(self.catalog.read()["origins"])
+
+    def test_nonregular_page_blocks_only_its_scope(self):
+        from library.operational_state import CollectorState
+        from library.telegram_pull import TelegramPull
+
+        self.head("BD_X18")
+        (self.feed / "BD_X18" / "00000001.jsonl").mkdir()
+        self.head("bd_fr")
+        self.page("bd_fr", 1, self.row("bd_fr"))
+        pull = TelegramPull(self.catalog, ("BD_X18", "bd_fr"), root=self.feed)
+        pull.poll(now=self.now)
+        pull.poll(now=self.now)
+        state = CollectorState(self.catalog.directory, database=self.catalog.backend()._database)
+        self.assertIn("regular file", state.telegram_checkpoint("BD_X18")["blocked"])
+        self.assertEqual(state.telegram_checkpoint("bd_fr")["page"], 1)
 
     def test_oversize_archive_is_retained_and_refused_by_intake(self):
         from library.stage_runtime import StageRuntime
@@ -359,7 +379,7 @@ class TelegramPullTests(unittest.TestCase):
         name = "Historical trial.cbz"
         path = f"telegram/1235693416_{message}/{name}"
         size, checksum = 678, "a" * 64
-        proof = (hashlib.sha256(path.encode()).hexdigest(), size, checksum)
+        proof = digest({"path": path, "size": size, "sha256": checksum})
         oid = digest({"external": path, "size": size, "mtime_ns": 1234})
         record = {"source": "external:" + path, "path": path, "size": size, "mtime_ns": 1234,
                   "pid": None, "fid": None, "sha256": checksum, "availability": "validated"}
