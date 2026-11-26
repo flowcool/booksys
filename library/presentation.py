@@ -81,6 +81,20 @@ def terminal_transfer(status: Any) -> tuple[str, str] | None:
             8: ('blocked', 'Failed mirror link')}.get(status)
 
 
+def reader_publication(asset: dict[str, Any]) -> tuple[str, str]:
+    admission = asset.get('admission', {})
+    selection = asset.get('reader_selection', {})
+    publication = {'periodical': 'Périodiques', 'classified': 'classified', 'webtoon': 'webtoon',
+                   'holding': 'À identifier'}.get(admission.get('status'), 'pending')
+    if selection.get('duplicate_of'):
+        return 'duplicate', 'Pages identiques. Copie de référence : ' + selection['duplicate_of']
+    review = {'work_unconfirmed': 'Identité commune à confirmer.',
+              'distinct_edition': 'Édition à conserver séparément.',
+              'pages_unavailable': 'Comparaison des pages indisponible.',
+              'pages_differ': 'Pages différentes.',
+              'copy_unverified': 'Copie existante à vérifier.'}.get(selection.get('review'), '')
+    return publication, 'À vérifier : ' + review if review else ''
+
 
 
 def public_value(value: Any, *, key: str = '') -> Any:

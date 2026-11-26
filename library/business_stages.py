@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from library.admission import AdmissionPublisher, eligible, projection
+from library.reader_selection import copies_signature
 from library.automatic import evidence_version, WEEK, METHOD
 from library.catalog import Catalog
 from library.mangaupdates import read_references
@@ -104,7 +105,7 @@ class BusinessStages:
         if webtoon and metadata_due:
             return result
         desired = projection(state, key, references=references)
-        if asset.get('admission', {}).get('signature') != desired['signature']:
+        if copies_signature(asset) != desired['signature']:
             result.append(Obligation('copies', key, desired['signature'], METHODS['copies']))
         return result
 
@@ -185,5 +186,5 @@ class BusinessStages:
         asset = self.catalog.get('assets', asset_id)
         if asset is None:
             return 'absent', 'asset-absent:' + task.input_revision
-        complete = asset.get('admission', {}).get('signature') == task.input_revision
+        complete = copies_signature(asset) == task.input_revision
         return ('done' if complete else 'absent'), 'local-outcome:' + digest(asset)

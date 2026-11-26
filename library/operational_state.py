@@ -472,6 +472,13 @@ class CopyOperations:
             result: dict[str,Any] | None=decode(row[0]) if row else None
             return result
 
+    def pending_classified(self) -> bool:
+        with self._database.connection() as db:
+            return db.execute("""
+                SELECT 1 FROM copy_operations WHERE namespace=%s AND status='classified'
+                    AND phase IN ('prepared','verified','published') LIMIT 1
+                """, (self.namespace,)).fetchone() is not None
+
     def records(self) -> list[dict[str,Any]]:
         def load(db: DeadlineConnection) -> Any:
             return [row[-1] for row in operational_records(db,'copy_operations','WHERE namespace=%s ORDER BY id',(self.namespace,))]

@@ -47,9 +47,9 @@ def parser() -> argparse.ArgumentParser:
     enrich_cmd = commands.add_parser('enrich')
     enrich_cmd.add_argument('--asset', required=True)
     enrich_cmd.add_argument('--source', action='append', default=[], help='provider:reference')
-    for name in ('admit', 'reconcile', 'preflight', 'activate'):
+    for name in ('admit', 'reconcile', 'preflight', 'activate', 'reader-selection'):
         command = commands.add_parser(name)
-        command.add_argument('--reception', type=Path, required=True)
+        command.add_argument('--reception', type=Path, required=name != 'reader-selection')
         command.add_argument('--library', type=Path, required=True)
         mode = command.add_mutually_exclusive_group()
         mode.add_argument('--isolated', action='store_true')
@@ -59,10 +59,31 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument('--pyload', default='http://127.0.0.1:8000')
         if name == 'admit':
             command.add_argument('--asset', required=True)
+        if name == 'reader-selection':
+            choice = command.add_mutually_exclusive_group()
+            choice.add_argument('--select', nargs=2, metavar=('KEEP_ASSET', 'RETAIN_ASSET'))
+            choice.add_argument('--restore', metavar='JOURNAL_ID')
+            command.add_argument('--apply', action='store_true', help='Move the explicit selection after readback')
     return result
 
 
+def reader_selection(args: argparse.Namespace, store: Catalog) -> dict[str, Any]:
+    from library.existing_reader_copies import ExistingReaderCopies
+    selection = ExistingReaderCopies(store, args.library)
+    if args.select:
+        return selection.pair(*args.select, apply=args.apply)
+    if args.restore:
+        return selection.restore(args.restore, apply=args.apply)
+    return selection.groups()
+
+
 def run(args: argparse.Namespace) -> Any:
+    if args.command == 'reader-selection' and not args.apply:
+        if args.isolated:
+            isolated_paths(args.state, args.library)
+        return reader_selection(args, Catalog(args.state))
+    if args.command == 'reader-selection' and (not args.reception or not (args.select or args.restore)):
+        raise LibraryError('Applying reader selection requires --reception and --select or --restore')
     from library.launcher import verify_startup
     verify_startup(args.state)
     store = Catalog(args.state)
@@ -130,6 +151,9 @@ def run(args: argparse.Namespace) -> Any:
             # Require an already established paused window. Never pause it here.
             return not (status.get('pause') is True and status.get('active') == 0)
         capacity = Capacity(external_active=external_active)
+    if args.command == 'reader-selection':
+        capacity.check(args.library, 0)
+        return reader_selection(args, store)
     if args.command == 'admit':
         from library.admission import AdmissionPublisher
         return AdmissionPublisher(store, args.reception, args.library,
@@ -145,7 +169,7 @@ def run(args: argparse.Namespace) -> Any:
 def main() -> int:
     args = parser().parse_args()
     try:
-        if args.command in ('status', 'preflight'):
+        if args.command in ('status', 'preflight') or (args.command == 'reader-selection' and not args.apply):
             output = run(args)
         else:
             # A local mutation is a manual cycle, serialized with the service.
