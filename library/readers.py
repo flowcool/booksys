@@ -17,7 +17,7 @@ COMIC_SUFFIXES = frozenset(('.pdf', '.cbz', '.cbr', *GENERIC_ARCHIVE_SUFFIXES))
 from library.reader_inputs import sha256 as sha256, fingerprint as fingerprint
 
 
-def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
+def inspect_file(path: Path, *, stable_seconds: float = 2, expected_sha256: str | None = None) -> dict[str, Any]:
     try:
         path = path.absolute()
         if any(p.is_symlink() for p in (path, *path.parents)):
@@ -35,6 +35,8 @@ def inspect_file(path: Path, *, stable_seconds: float = 2) -> dict[str, Any]:
         if fingerprint(path) != first:
             raise LibraryError('Reception bytes are not stable')
         asset_hash = sha256(path) if not generic_archive else None
+        if expected_sha256 is not None and asset_hash != expected_sha256:
+            raise LibraryError('Telegram file SHA-256 differs from the receipt')
         from library.decode import run
         outcome = run('validate_generic' if generic_archive else 'validate', path)
         if outcome.get('status') == 'pending':

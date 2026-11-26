@@ -3,12 +3,61 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import os
 import re
+from stat import S_ISREG
 
 from library.catalog import Catalog
 from library.relocation import matches_retained
 from library.primitives import LibraryError, digest
 from library.readers import fingerprint, sha256
+from library.reception import reception_path
+from library.telegram_paths import ARCHIVE_PREFIX, ARCHIVE_ROOT, archive_relative
+
+
+class TelegramSourceUnavailable(OSError):
+    """The archive source is temporarily unavailable."""
+
+
+def is_archive_origin(origin: dict[str, Any]) -> bool:
+    return "telegram" in origin and origin["path"].startswith(ARCHIVE_PREFIX)
+
+
+def external_source_path(origin: dict[str, Any]) -> Path:
+    from library.intake import EXTERNAL_ROOT
+
+    if is_archive_origin(origin):
+        telegram = origin["telegram"]
+        relative = archive_relative(origin["path"], telegram["channel"], telegram["topic"],
+                                    telegram["message"], telegram["original_name"])
+        root = ARCHIVE_ROOT
+    else:
+        relative = origin["path"]
+        root = EXTERNAL_ROOT
+    path = Path(relative)
+    return reception_path(root, str(path.parent), path.name)
+
+
+def archive_source_wait(origin: dict[str, Any]) -> bool:
+    try:
+        path = external_source_path(origin)
+        mode = path.lstat().st_mode
+        if not S_ISREG(mode):
+            raise LibraryError("Telegram archive source is not a regular file")
+        return not mode & 0o444 or not os.access(path, os.R_OK)
+    except OSError:
+        return True
+
+
+def archive_source_stamp(origin: dict[str, Any]) -> tuple[Path, tuple[int, int, int, int, int]]:
+    try:
+        path = external_source_path(origin)
+        stamp = fingerprint(path)
+        if stamp[2] != origin["size"]:
+            raise LibraryError("Telegram archive file size differs from the receipt")
+    except OSError as exc:
+        raise TelegramSourceUnavailable("Telegram archive source unavailable") from exc
+    return path, stamp
 
 
 def verify_source_parts(reception: Path, parent: dict[str, Any], manifest: dict[str, Any]) -> None:
@@ -17,7 +66,6 @@ def verify_source_parts(reception: Path, parent: dict[str, Any], manifest: dict[
         if manifest.get('source_parts'):
             raise LibraryError('Multipart canonical provenance is missing')
         return
-    from library.intake import reception_path
     expected = [{'name': Path(p['path']).name, 'sha256': p['sha256'], 'size': p['fingerprint'][2]} for p in parts]
     names = [re.fullmatch(r'(.+)\.part([0-9]{1,3})\.rar', p['name'], re.I) for p in expected]
     if (not 2 <= len(parts) <= 64 or any(m is None for m in names)
@@ -37,7 +85,6 @@ def verify_source_parts(reception: Path, parent: dict[str, Any], manifest: dict[
 
 
 def resolve_asset_origin(store: Catalog, reception: Path, state: dict[str, Any], asset_id: str) -> tuple[str, Path]:
-    from library.intake import reception_path
     from library.bundles import verify_directory
     errors = []
     for oid in state['assets'][asset_id]['origins']:
@@ -67,11 +114,16 @@ def resolve_asset_origin(store: Catalog, reception: Path, state: dict[str, Any],
                         or origin['path'] != str(Path('bundle-inputs') / origin['parent_sha256'] / member['file'])):
                     raise LibraryError('Derived bundle provenance changed')
                 path = directory / str(member['file'])
+            elif is_archive_origin(origin):
+                path, stamp = archive_source_stamp(origin)
+                if sha256(path) != asset_id or fingerprint(path) != stamp:
+                    raise LibraryError('Telegram archive file SHA-256 differs from the receipt or the file changed')
+                return oid, path
+            elif origin['source'].startswith('external:'):
+                path = external_source_path(origin)
             else:
                 relative = Path(origin['path'])
-                from library.intake import EXTERNAL_ROOT
-                root = EXTERNAL_ROOT if origin['source'].startswith('external:') else reception
-                path = reception_path(root, str(relative.parent), relative.name)
+                path = reception_path(reception, str(relative.parent), relative.name)
             if sha256(path) != asset_id:
                 raise LibraryError('Origin bytes changed')
             return oid, path

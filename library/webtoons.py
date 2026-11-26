@@ -53,7 +53,9 @@ def webtoon_result(state: dict[str, Any], asset_id: str) -> dict[str, Any] | Non
                                    'source': source, 'field': field, 'value': value})
     keys = {series_key(title) for title in titles}
     work: dict[str, str] = {}
-    if '' in keys:
+    if any(doc.get('index_review') == 'conflicting-index-titles' for doc in origins.values()):
+        code, reason = 'conflicting_series', 'WEBTOONSVF index references disagree on the title'
+    elif '' in keys:
         code, reason = 'missing_index_title', 'WEBTOONSVF origin has no WEBTOONS_LISTS index title'
     elif len(keys) != 1:
         code, reason = 'conflicting_series', 'WEBTOONSVF origins disagree on the index title'

@@ -83,7 +83,13 @@ class NativeStages:
         return source, dict(entries[source]), monitor
 
     def ready(self, task: Task, *, now: datetime) -> str:
-        if task.stage == 'collection' or (task.stage == 'intake' and task.entity.startswith('external-')):
+        if task.stage == 'collection':
+            return ''
+        if task.stage == 'intake' and task.entity.startswith('external-'):
+            from library.origins import archive_source_wait, is_archive_origin
+            origin = self.catalog.get('origins', task.entity.removeprefix('external-'))
+            if origin is not None and is_archive_origin(origin) and archive_source_wait(origin):
+                return 'nas_unavailable'
             return ''
         if self.snapshots is None and task.stage != 'routing':
             return 'queue_snapshot_unavailable'
@@ -132,7 +138,11 @@ class NativeStages:
         value: Any
         if task.stage == 'intake' and task.entity.startswith('external-'):
             from library.intake import receive_external
-            return StepResult('done', prepared=receive_external(self.catalog, task.entity.removeprefix('external-')))
+            from library.origins import TelegramSourceUnavailable
+            try:
+                return StepResult('done', prepared=receive_external(self.catalog, task.entity.removeprefix('external-')))
+            except TelegramSourceUnavailable:
+                return StepResult('defer', diagnostic={'reason': 'nas_unavailable'})
         source, entry, monitor = self.binding(task)
         if task.stage == 'intake':
             if self.snapshots is None:

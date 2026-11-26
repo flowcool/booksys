@@ -17,6 +17,9 @@ from booksys_core.values import digest as digest
 from booksys_core.errors import LibraryError as LibraryError, LibraryLockBusy as LibraryLockBusy
 
 
+from library.telegram_paths import ARCHIVE_PREFIX, archive_relative
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -162,8 +165,12 @@ def validate(state: Any) -> None:
                     or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum)
                     or origin['sha256'] not in (None, checksum)):
                 raise LibraryError('Invalid Telegram origin provenance')
-            external = (external_path and key == telegram_origin_id(channel, message)
-                        and Path(origin['path']).parent == telegram_origin_folder(channel, message))
+            if origin['path'].startswith(ARCHIVE_PREFIX):
+                archive_relative(origin['path'], channel, topic, message, telegram['original_name'])
+                allowed_path = True
+            else:
+                allowed_path = Path(origin['path']).parent == telegram_origin_folder(channel, message)
+            external = external_path and key == telegram_origin_id(channel, message) and allowed_path
             if not external or origin['pid'] is not None or origin['fid'] is not None:
                 raise LibraryError('Invalid Telegram origin ID or path')
         if (not all(isinstance(origin[k], str) for k in ('source', 'path')) or
