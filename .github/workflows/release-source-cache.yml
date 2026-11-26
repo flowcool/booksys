@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   sources:
-    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fix/release-source-fetch-errors')
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -23,11 +23,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Restore and retain downloads keyed by the reviewed source lock
-        if: github.ref == 'refs/heads/main'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/source-cache
           key: release-sources-v1-${{ hashFiles('release/sources.lock.json') }}
       - name: Download or reverify every source without building or publishing images
         run: |
-          python3 ops/release_sources.py download release/sources.lock.json "$RUNNER_TEMP/verified-sources" --cache "$RUNNER_TEMP/source-cache" --workers 4 > /dev/null
+          python3 ops/release_sources.py download release/sources.lock.json "$RUNNER_TEMP/verified-sources" --cache "$RUNNER_TEMP/source-cache" --workers 4
