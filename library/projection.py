@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
-from library.presentation import bounded, operator_reason
+from library.presentation import bounded, operator_reason, reader_publication
 from booksys_core.diagnostics import safe_text
 import hashlib
 import json
@@ -58,9 +58,9 @@ def operator_row(oid: str, origin: dict[str, Any], asset: dict[str, Any],
     from library.printed_model import printed_isbns
     codes = sorted(printed_isbns(asset.get('printed', {}))[0])
     isbn = ', '.join(codes) or bounded(work.get('isbn') or asset.get('embedded', {}).get('ISBN'))
-    admission = asset.get('admission', {})
-    publication = {'periodical': 'Périodiques', 'classified': 'classified', 'webtoon': 'webtoon',
-                   'holding': 'À identifier'}.get(admission.get('status'), 'pending')
+    publication, reader_reason = reader_publication(asset)
+    if reader_reason and origin.get('availability') == 'validated' and not origin.get('transfer_error'):
+        reason = reader_reason
     collection = collection_identity(work_result)
     series = (work_result['work']['series'] if collection in ('periodical', 'webtoon') else
               overrides.get('series') or work.get('series') or asset.get('embedded', {}).get('Series'))
