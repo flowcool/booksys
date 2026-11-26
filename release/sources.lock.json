@@ -11726,7 +11726,7 @@
     "debian_base-files_13.8_deb13u7": {
       "package": "base-files",
       "version": "13.8+deb13u7",
-      "url": "https://deb.debian.org/debian/pool/main/b/base-files/base-files_13.8+deb13u7.dsc",
+      "url": "https://snapshot.debian.org/archive/debian/20260907T023910Z/pool/main/b/base-files/base-files_13.8+deb13u7.dsc",
       "sha256": "6240b5a02fc32bd6d925bb7776e00c467e80d930f8cf3c4a20c299ce692dc7e4"
     },
     "debian_base-passwd_3.6.7": {
