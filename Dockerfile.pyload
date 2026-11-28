@@ -1,4 +1,4 @@
-FROM lscr.io/linuxserver/pyload-ng@sha256:35e6bb2eadf5aea1872ef88324ba9dffb26eccbe119832d5849c46a593c8935e
+FROM lscr.io/linuxserver/pyload-ng@sha256:f522d752f20b7a530c9d6c1ca1b1d19b3142ecff130abb4db02d80e57586ca28
 ARG BOOKSYS_REVISION
 LABEL org.opencontainers.image.revision=$BOOKSYS_REVISION
 COPY ops/pyload_python /opt/booksys-python
